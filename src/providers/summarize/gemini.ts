@@ -82,6 +82,23 @@ type FailureClass = 'quota' | 'unavailable' | 'other'
  * 순서를 이렇게 두면 구글이 문구를 바꿔도 최악의 경우 "놓칠" 뿐, 상태 코드가
  * 이미 확정한 답을 문자열이 뒤집는 일은 없다.
  */
+/**
+ * 외부 응답 문자열에서 API 키를 지운다. 키는 쿼리스트링(`?key=...`)으로 나가므로
+ * 오류 본문이 요청 URL 을 되비추면 키가 그대로 딸려 온다. 이 문자열은
+ * `NewsCandidate.summaryError` 로 **DB 에 저장되고 화면의 title 속성에도 실린다** —
+ * 로그만 조심해서는 막을 수 없는 경로다.
+ *
+ * URL 인코딩된 형태도 함께 지운다. 빈 키는 무시한다 — `replaceAll('', ...)` 은
+ * 모든 문자 사이에 치환문을 끼워 넣어 문자열을 망가뜨린다.
+ */
+export function redactKey(text: string, key: string): string {
+  if (!key) return text
+  const encoded = encodeURIComponent(key)
+  let out = text.replaceAll(key, '<redacted>')
+  if (encoded !== key) out = out.replaceAll(encoded, '<redacted>')
+  return out
+}
+
 function classifyFailure(status: number, detail: string): FailureClass {
   if (status === 429) return 'quota'
   if (status === 503 || status === 500) return 'unavailable'
@@ -186,7 +203,10 @@ export async function summarize(title: string, body: string): Promise<SummarySet
     })
 
     if (!res.ok) {
-      const detail = await res.text()
+      // 오류 본문에는 요청 URL 이 되비쳐 오는 경우가 있고, 그 URL 에는 `?key=` 가 붙어
+      // 있다. 이 문자열은 summaryError 로 DB 에 저장되고 검수 화면의 title 속성에까지
+      // 실리므로, 자르기 전에 키를 지운다. 자른 뒤에 지우면 잘린 조각이 남을 수 있다.
+      const detail = redactKey(await res.text(), key)
       const failure = classifyFailure(res.status, detail)
       if (failure === 'quota') {
         // 오늘치가 끝났다 — 영구 기록해서 이후 호출은 이 모델을 건너뛴다.

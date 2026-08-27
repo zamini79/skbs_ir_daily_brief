@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { extractJsonText, enforceLimit, summarize, MODEL_CHAIN, exhaustedModels } from './gemini'
+import { extractJsonText, enforceLimit, summarize, MODEL_CHAIN, exhaustedModels, redactKey } from './gemini'
 
 beforeEach(() => {
   process.env.GEMINI_API_KEY = 'test-key'
@@ -42,6 +42,30 @@ describe('extractJsonText', () => {
       candidates: [{ content: { parts: [{ text: '생각중...', thought: true }] } }],
     }
     expect(() => extractJsonText(payload)).toThrow(/thought/)
+  })
+})
+
+describe('redactKey', () => {
+  it('오류 본문에 되비친 요청 URL 의 키를 지운다', () => {
+    const key = 'AIzaSyTESTKEY123'
+    const body = `{"error":{"message":"API key not valid","url":"https://x/v1/models?key=${key}"}}`
+    const out = redactKey(body, key)
+    expect(out).not.toContain(key)
+    expect(out).toContain('<redacted>')
+  })
+
+  it('URL 인코딩된 형태도 지운다', () => {
+    const key = 'abc+def/ghi='
+    const out = redactKey(`?key=${encodeURIComponent(key)}`, key)
+    expect(out).not.toContain(encodeURIComponent(key))
+  })
+
+  it('키가 빈 문자열이면 본문을 건드리지 않는다 — replaceAll("") 은 문자열을 망가뜨린다', () => {
+    expect(redactKey('quota exceeded', '')).toBe('quota exceeded')
+  })
+
+  it('키가 없는 본문은 그대로 둔다', () => {
+    expect(redactKey('RESOURCE_EXHAUSTED', 'AIzaKEY')).toBe('RESOURCE_EXHAUSTED')
   })
 })
 
