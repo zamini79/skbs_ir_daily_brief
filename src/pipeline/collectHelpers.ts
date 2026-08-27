@@ -171,6 +171,20 @@ export function needsPendingRevert(selection: {
   )
 }
 
+/** 접두사/포함 비교용으로 공백만 접는다. 자카드 같은 유사도는 과하다 — 네이버
+ * 스니펫이 본문 선두와 다른 경우는 거의 항상 엔티티 처리 차이나 공백 하나뿐이다. */
+function normalizeForDedup(s: string): string {
+  return s.replace(/\s+/g, ' ').trim()
+}
+
+/** 한쪽이 다른 쪽을 포함하면(접두사인 경우도 포함) 사실상 같은 슬라이스로 본다. */
+function isNearDuplicate(a: string, b: string): boolean {
+  const na = normalizeForDedup(a)
+  const nb = normalizeForDedup(b)
+  if (!na || !nb) return false
+  return na.includes(nb) || nb.includes(na)
+}
+
 /**
  * 요약이 실패했을 때 화면 칸을 비워두지 않기 위한 기계적 발췌 3안을 만든다.
  * 모델이 만든 게 아니므로(isFallback 마커는 호출자가 붙인다) 본문/스니펫에서
@@ -206,13 +220,15 @@ export function buildFallbackSummaries(body: string, snippet: string): string[] 
     slices.push(cap(trimmedSnippet))
   }
 
-  // 본문이 짧아 스니펫과 겹치는 등, 중복이 생기면 하나로 줄인다 — 복제본으로
-  // 채우지 않는다.
-  const seen = new Set<string>()
+  // 본문이 짧아 스니펫과 겹치는 등, 중복(정확히 같거나 한쪽이 다른 쪽을 포함)이
+  // 생기면 하나로 줄인다 — 복제본으로 채우지 않는다. 네이버 스니펫은 대개 기사
+  // 도입부라서 본문 선두와 "거의 같지만 미세하게 다른"(엔티티 처리, 말줄임표,
+  // 공백 하나) 경우가 흔하다 — 정확히 같은 문자열만 보면 이런 사실상-중복을
+  // 놓친다.
   const out: string[] = []
   for (const s of slices) {
-    if (!s || seen.has(s)) continue
-    seen.add(s)
+    if (!s) continue
+    if (out.some(existing => isNearDuplicate(existing, s))) continue
     out.push(s)
   }
   return out.slice(0, 3)

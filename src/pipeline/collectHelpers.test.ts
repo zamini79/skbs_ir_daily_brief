@@ -332,4 +332,30 @@ describe('buildFallbackSummaries', () => {
   it('본문과 스니펫이 둘 다 비어 있으면 빈 배열을 준다', () => {
     expect(buildFallbackSummaries('', '')).toEqual([])
   })
+
+  // Fix round 4: 네이버 스니펫은 대개 기사 도입부라서 본문 선두와 "거의 같지만
+  // 미세하게 다른" 경우가 흔하다 — 정확히 같은 문자열만 걸러내면 담당자에게
+  // 사실상 같은 선택지가 두 개 간다.
+  it('스니펫이 본문 선두의 접두사면 사실상 중복으로 보고 버린다', () => {
+    const prefixSnippet = LONG_SENTENCE_BODY.slice(0, 20)
+    const r = buildFallbackSummaries(LONG_SENTENCE_BODY, prefixSnippet)
+    // 스니펫이 본문 선두 슬라이스에 포함되므로 버려진다 — 본문에서 나온 두 구간만 남는다.
+    expect(r).toHaveLength(2)
+    for (const s of r) expect(s).not.toBe(prefixSnippet)
+  })
+
+  it('공백 하나만 다른 경우도 중복으로 보고 버린다', () => {
+    const body = '짧은 본문 문장입니다'
+    const snippetWithExtraSpace = '짧은  본문   문장입니다' // 공백만 더 들어간, 사실상 같은 문장
+    const r = buildFallbackSummaries(body, snippetWithExtraSpace)
+    expect(r).toHaveLength(1)
+  })
+
+  it('정말로 다른 스니펫은 살아남는다 (과잉 제거 방지)', () => {
+    const body = '가나다라마바사아자차카타파하 문장입니다'
+    const distinctSnippet = '이것은 본문과 전혀 겹치지 않는 완전히 다른 스니펫 문장입니다'
+    const r = buildFallbackSummaries(body, distinctSnippet)
+    expect(r).toContain(distinctSnippet)
+    expect(r.length).toBeGreaterThanOrEqual(2)
+  })
 })
