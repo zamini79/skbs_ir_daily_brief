@@ -242,6 +242,17 @@ describe('computeRunStatus', () => {
     expect(computeRunStatus(0)).toBe('READY')
     expect(computeRunStatus(2)).toBe('PARTIAL')
   })
+
+  it('뉴스 검색 실패도 PARTIAL로 본다', () => {
+    // 실패한 행은 화면에서 "당일·D-1 기사 없음"이라는 단정으로 보였다 — 모르는 것을
+    // 아는 것처럼 표시한 것이다. 운영자가 실행 단위로도 알 수 있어야 한다.
+    expect(computeRunStatus(0, 0, 1)).toBe('PARTIAL')
+    expect(computeRunStatus(0, 0, 8)).toBe('PARTIAL')
+  })
+
+  it('셋 다 없어야 READY이다', () => {
+    expect(computeRunStatus(0, 0, 0)).toBe('READY')
+  })
 })
 
 describe('isolate', () => {

@@ -109,3 +109,63 @@ describe('searchNaverNews', () => {
     }
   })
 })
+
+// ── 429 재시도. 동시성 1 로 낮춰도 직전 호출로 예산이 깎여 있으면 429 가 난다(실측). ──
+describe('searchNaverNews — 429 재시도', () => {
+  /** 테스트에서 2초를 실제로 기다리지 않도록 주입한다. 대기 인자도 함께 검사한다. */
+  function fakeSleep() {
+    const calls: number[] = []
+    return { fn: async (ms: number) => { calls.push(ms) }, calls }
+  }
+  const ok = (items: unknown[] = []) => new Response(JSON.stringify({ items }), { status: 200 })
+  const tooMany = () => new Response('', { status: 429 })
+
+  it('429 면 2초 뒤 정확히 한 번 재시도하고, 성공하면 결과를 준다', async () => {
+    const sleep = fakeSleep()
+    const spy = vi.fn().mockResolvedValueOnce(tooMany()).mockResolvedValueOnce(ok([]))
+    vi.stubGlobal('fetch', spy)
+
+    const r = await searchNaverNews('코스피', new Date('2026-08-27T09:00:00+09:00'), { sleep: sleep.fn })
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(sleep.calls).toEqual([2000])
+    expect(r).toEqual([])
+  })
+
+  it('재시도도 429 면 던진다 — 무한 재시도 금지', async () => {
+    const sleep = fakeSleep()
+    const spy = vi.fn(async () => tooMany())
+    vi.stubGlobal('fetch', spy)
+
+    await expect(
+      searchNaverNews('코스피', new Date('2026-08-27T09:00:00+09:00'), { sleep: sleep.fn }),
+    ).rejects.toThrow('naver news HTTP 429')
+    expect(spy).toHaveBeenCalledTimes(2) // 최초 1회 + 재시도 1회. 그 이상 없다.
+    expect(sleep.calls).toHaveLength(1)
+  })
+
+  it('429 가 아닌 오류는 재시도하지 않는다', async () => {
+    const sleep = fakeSleep()
+    const spy = vi.fn(async () => new Response('', { status: 500 }))
+    vi.stubGlobal('fetch', spy)
+
+    await expect(
+      searchNaverNews('코스피', new Date('2026-08-27T09:00:00+09:00'), { sleep: sleep.fn }),
+    ).rejects.toThrow('naver news HTTP 500')
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(sleep.calls).toEqual([])
+  })
+
+  it('처음부터 성공하면 기다리지 않는다', async () => {
+    const sleep = fakeSleep()
+    vi.stubGlobal('fetch', vi.fn(async () => ok([])))
+    await searchNaverNews('코스피', new Date('2026-08-27T09:00:00+09:00'), { sleep: sleep.fn })
+    expect(sleep.calls).toEqual([])
+  })
+
+  it('에러 메시지에 자격증명이 들어가지 않는다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })))
+    await expect(
+      searchNaverNews('코스피', new Date('2026-08-27T09:00:00+09:00'), { sleep: async () => {} }),
+    ).rejects.toThrow(/^naver news HTTP 403$/)
+  })
+})

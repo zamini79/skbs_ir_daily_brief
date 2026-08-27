@@ -142,9 +142,17 @@ export async function attemptSummary(
  * 연초 기준가 실패도 같은 규칙으로 PARTIAL 로 본다. 근거는 요약 실패와 동일하다:
  * 연초대비 칸이 비었을 때 "기준가를 못 구했다"와 "정상인데 값이 0이다"를 구분할 수
  * 있어야 한다. 특히 이 실패는 API 분당 한도 경합이라 어느 종목이 빌지가 매일 달라진다 —
- * 상태에 남기지 않으면 재현되지 않는 공란이 되어 아무도 눈치채지 못한다. */
-export function computeRunStatus(summariesFailed: number, ytdBaseFailed = 0): 'READY' | 'PARTIAL' {
-  return summariesFailed > 0 || ytdBaseFailed > 0 ? 'PARTIAL' : 'READY'
+ * 상태에 남기지 않으면 재현되지 않는 공란이 되어 아무도 눈치채지 못한다.
+ *
+ * 뉴스 검색 실패도 같은 규칙이다. 이쪽은 오히려 더 나빴다 — 실패한 행이 화면에서
+ * "당일·D-1 기사 없음"이라는 **단정**으로 보였기 때문이다(모르는 것을 아는 것처럼 표시).
+ * 이제 NewsFetch 에 사실이 남고, 상태에도 반영해 운영자가 실행 단위로 알 수 있다. */
+export function computeRunStatus(
+  summariesFailed: number,
+  ytdBaseFailed = 0,
+  newsFailed = 0,
+): 'READY' | 'PARTIAL' {
+  return summariesFailed > 0 || ytdBaseFailed > 0 || newsFailed > 0 ? 'PARTIAL' : 'READY'
 }
 
 /**

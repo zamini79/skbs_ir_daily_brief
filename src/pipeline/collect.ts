@@ -31,8 +31,47 @@ const QUOTA_EXHAUSTED_REASON = '할당량 소진 이후 요약을 건너뜀'
 
 /** Gemini 무료 티어 한도에 맞춘 동시 호출 수. 늘리면 429가 난다. */
 const SUMMARY_CONCURRENCY = 4
-const NEWS_CONCURRENCY = 5
+
+/**
+ * 네이버 검색 API 는 순간 속도 제한이 있다(일일 한도와 별개 — 하루 총 호출은 100회 남짓인데도
+ * 429 가 난다). 23종목 실측(2026-08-27):
+ *
+ *     동시성 5 : 성공 10  429 13   0.5초   <- 실패가 뒤쪽(9, 12~23번)에 몰린다
+ *     동시성 2 : 성공 23  429  0   5.7초
+ *     동시성 1 : 성공 23  429  0   3.4초   <- 콜드 상태
+ *     동시성 1 : 성공 19  429  4   2.0초   <- 직전 호출로 예산이 깎인 상태
+ *
+ * 종목은 displayOrder 순으로 처리되므로 동시성을 올리면 **매일 같은 뒤쪽 행**이 빈다
+ * (해외사 후반부와 지수 4행). 3.4초는 07:40~08:00 수집 창에서 무의미한 비용이다.
+ * 성능을 이유로 이 값을 올리지 마라 — 위 표가 그 대가다.
+ *
+ * 마지막 줄이 보여주듯 1이어도 429 가 완전히 사라지지는 않는다. searchNaverNews 의
+ * 1회 재시도가 나머지를 덮는다.
+ */
+const NEWS_CONCURRENCY = 1
 const TOP_N = 3
+
+/**
+ * 종목별 뉴스 검색 결과를 남긴다. 이 기록 자체가 실패해도 수집을 멈추지 않는다 —
+ * 기록이 없으면 화면이 그 행을 "기사 없음"으로 보게 되지만, 여기서 예외를 던져
+ * 뉴스 단계 전체를 무너뜨리는 것보다는 낫다.
+ */
+async function recordNewsFetch(
+  runId: string,
+  instrumentId: string,
+  status: 'OK' | 'FAILED',
+  error: string | null,
+): Promise<void> {
+  try {
+    await prisma.newsFetch.upsert({
+      where: { runId_instrumentId: { runId, instrumentId } },
+      update: { status, error },
+      create: { runId, instrumentId, status, error },
+    })
+  } catch {
+    // 위 주석 참조. 조용히 넘어가되 수집은 계속한다.
+  }
+}
 
 export async function runCollection(now: Date): Promise<{
   runId: string
@@ -43,6 +82,7 @@ export async function runCollection(now: Date): Promise<{
   summariesSkippedEmptyBody: number
   summariesFailed: number
   ytdBaseFailed: number
+  newsFailed: number
 }> {
   const runDate = kstDateString(now)
   const year = Number(runDate.slice(0, 4))
@@ -61,6 +101,7 @@ export async function runCollection(now: Date): Promise<{
   // 일은 없다. 다만 decision 은 그 자체로는 되돌아가지 않으므로 아래에서 명시적으로 되돌린다.
   await prisma.newsCandidate.deleteMany({ where: { runId: run.id } })
   await prisma.quoteSnapshot.deleteMany({ where: { runId: run.id } })
+  await prisma.newsFetch.deleteMany({ where: { runId: run.id } })
 
   // 재실행으로 참조가 null이 됐는데 decision이 여전히 SELECTED면, 존재하지 않는 후보를
   // 가리키는 "완료된 선택"처럼 보인다 — 검수자가 알아채길 기대하지 않고 PENDING으로
@@ -164,7 +205,10 @@ export async function runCollection(now: Date): Promise<{
     if (!wrote) failed++
   }
 
-  // 5) 뉴스 수집 + 별칭 필터 + 클러스터링
+  // 5) 뉴스 수집 + 별칭 필터 + 클러스터링.
+  // 검색 성공 여부를 NewsFetch 에 남긴다 — 이게 없으면 "후보 0건"이 "오늘 기사가 없다"와
+  // "검색을 못 했다" 두 가지를 동시에 뜻하게 되고, 화면은 그 둘을 구분할 수 없다.
+  let newsFailed = 0
   const newsLimit = pLimit(NEWS_CONCURRENCY)
   const perInstrument = await Promise.all(
     instruments.map(inst =>
@@ -172,8 +216,14 @@ export async function runCollection(now: Date): Promise<{
         try {
           const items = await searchNaverNews(inst.newsQuery, now)
           const filtered = filterByTitleMention(items, resolveAliases(inst))
+          await recordNewsFetch(run.id, inst.id, 'OK', null)
           return { inst, clusters: topClusters(filtered, TOP_N) }
-        } catch {
+        } catch (e) {
+          // 사유는 그대로 남긴다. 지어내지 않는다 — 담당자가 이 문구를 근거로 판단한다.
+          const reason = e instanceof Error ? e.message : String(e)
+          newsFailed++
+          console.error(`[news] ${inst.name}: ${reason}`)
+          await recordNewsFetch(run.id, inst.id, 'FAILED', reason)
           return { inst, clusters: [] }
         }
       }),
@@ -285,10 +335,11 @@ export async function runCollection(now: Date): Promise<{
     })
   }
 
-  const status = computeRunStatus(summariesFailed, ytdBaseFailed)
+  const status = computeRunStatus(summariesFailed, ytdBaseFailed, newsFailed)
   const detailParts: string[] = []
   if (summariesFailed > 0) detailParts.push(`요약 ${summariesFailed}건 실패(후보 ${candidatesCreated}건 중)`)
   if (ytdBaseFailed > 0) detailParts.push(`연초 기준가 ${ytdBaseFailed}종목 조회 실패`)
+  if (newsFailed > 0) detailParts.push(`뉴스 검색 ${newsFailed}종목 실패`)
   await prisma.briefRun.update({
     where: { id: run.id },
     data: {
@@ -298,5 +349,5 @@ export async function runCollection(now: Date): Promise<{
     },
   })
 
-  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, ytdBaseFailed }
+  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, ytdBaseFailed, newsFailed }
 }

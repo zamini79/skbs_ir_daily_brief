@@ -74,19 +74,46 @@ function credentials(): { id: string; secret: string } {
 }
 
 /**
+ * 429 를 만났을 때 기다리는 시간. 실측으로 정했다(2026-08-27, 23종목 버스트 직후 재시도):
+ *
+ *     200ms -> HTTP 429   500ms -> HTTP 429
+ *    1000ms -> HTTP 200  2000ms -> HTTP 200
+ *
+ * 1초가 하한이라 여유를 둬 2초로 잡았다. 재시도는 1회뿐이고 검색은 직렬로 도므로
+ * (NEWS_CONCURRENCY=1) 최악의 경우에도 수집 시간에 몇 초를 더할 뿐이다.
+ */
+const RATE_LIMIT_RETRY_DELAY_MS = 2000
+
+const realSleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
+
+/**
  * 당일·D-1(KST) 기사만 반환한다. 그 밖의 기사는 버린다.
  * 정렬은 date 로 받되 '빈도'는 여기서 계산하지 않는다(클러스터링 담당).
+ *
+ * 429 는 1회만 재시도한다. 동시성을 1로 낮춰도 네이버가 순간적으로 거절하는 일이
+ * 남는다 — 직전 호출들로 예산이 이미 깎여 있으면 직렬이어도 429 가 난다(실측).
+ * 무한 재시도는 하지 않는다. 두 번째도 실패하면 던지고, 호출부가 그 사실을
+ * "기사 없음"과 구분해 기록한다.
  */
-export async function searchNaverNews(query: string, now: Date): Promise<NewsItem[]> {
+export async function searchNaverNews(
+  query: string,
+  now: Date,
+  opts: { sleep?: (ms: number) => Promise<void> } = {},
+): Promise<NewsItem[]> {
   const { id, secret } = credentials()
+  const sleep = opts.sleep ?? realSleep
 
   const url =
     `https://openapi.naver.com/v1/search/news.json` +
     `?query=${encodeURIComponent(query)}&display=100&sort=date`
+  const headers = { 'X-Naver-Client-Id': id, 'X-Naver-Client-Secret': secret }
 
-  const res = await fetch(url, {
-    headers: { 'X-Naver-Client-Id': id, 'X-Naver-Client-Secret': secret },
-  })
+  let res = await fetch(url, { headers })
+  if (res.status === 429) {
+    await sleep(RATE_LIMIT_RETRY_DELAY_MS)
+    res = await fetch(url, { headers })
+  }
+  // 자격증명은 헤더에만 있고 URL 에는 없다. 그래도 에러 메시지에는 상태 코드만 싣는다.
   if (!res.ok) throw new Error(`naver news HTTP ${res.status}`)
   const json = (await res.json()) as { items?: NaverNewsRaw[] }
 

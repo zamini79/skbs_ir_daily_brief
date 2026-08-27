@@ -25,10 +25,11 @@ model Instrument {
   /// 런던 펜스 호가 보정. GSK=100, 그 외=1.
   priceDivisorForMarketCap Int  @default(1)
 
-  quotes     QuoteSnapshot[]
-  candidates NewsCandidate[]
-  selections Selection[]
-  ytdBases   YtdBasePrice[]
+  quotes      QuoteSnapshot[]
+  candidates  NewsCandidate[]
+  selections  Selection[]
+  ytdBases    YtdBasePrice[]
+  newsFetches NewsFetch[]
 
   @@unique([displayOrder])
 }
@@ -56,9 +57,10 @@ model BriefRun {
   startedAt  DateTime @default(now())
   finishedAt DateTime?
 
-  quotes     QuoteSnapshot[]
-  candidates NewsCandidate[]
-  selections Selection[]
+  quotes      QuoteSnapshot[]
+  candidates  NewsCandidate[]
+  selections  Selection[]
+  newsFetches NewsFetch[]
 
   @@unique([runDate])
 }
@@ -77,6 +79,28 @@ model QuoteSnapshot {
   asOf         String?
   sourceName   String
   errorMessage String?  @db.Text
+  fetchedAt    DateTime @default(now())
+
+  run        BriefRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  instrument Instrument @relation(fields: [instrumentId], references: [id])
+
+  @@unique([runId, instrumentId])
+}
+
+/// 종목별 뉴스 검색이 성공했는지 자체를 남긴다.
+/// 이게 없으면 "후보 0건"이 "오늘 기사가 없다"와 "검색을 못 했다" 두 가지 서로 다른
+/// 사실을 동시에 가리키게 되고, 화면은 그 둘을 구분할 방법이 원천적으로 없다.
+model NewsFetch {
+  id           String   @id @default(cuid())
+  runId        String
+  instrumentId String
+  /// OK | FAILED. enum 대신 문자열 + 앱 레벨 검증(MariaDB 이관 제약).
+  /// OK  = 검색에 성공했다. 후보가 0건이면 그건 진짜로 기사가 없는 것이다.
+  /// FAILED = 검색 자체를 못 했다. 후보 0건은 "모른다"는 뜻이다.
+  status       String
+  /// 실패 사유(예: naver news HTTP 429). 성공이면 null.
+  /// 자격증명을 절대 담지 않는다 — 사유 문자열은 호출부에서 직접 구성한다.
+  error        String?  @db.Text
   fetchedAt    DateTime @default(now())
 
   run        BriefRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
