@@ -54,9 +54,15 @@ describe('enforceLimit', () => {
     const s = '가'.repeat(150)
     expect([...enforceLimit(s)].length).toBeLessThanOrEqual(100)
   })
-  it('문장 경계가 있으면 거기서 자른다', () => {
+  it('문장 경계가 예산의 절반 이상을 채우면 거기서 자른다', () => {
+    const s = '가'.repeat(60) + '.' + '나'.repeat(200)
+    expect(enforceLimit(s)).toBe('가'.repeat(60) + '.')
+  })
+  it('문장 경계가 너무 앞쪽이면 경계를 버리고 100자를 채운다', () => {
+    // 예전에는 여기서 6자짜리 "첫 문장임." 만 남았다. 그 6자는 화면에서 정상적으로
+    // 짧은 요약과 구분되지 않아, 내용이 통째로 사라진 것을 아무도 알 수 없었다.
     const s = '첫 문장임.' + '가'.repeat(200)
-    expect(enforceLimit(s)).toBe('첫 문장임.')
+    expect([...enforceLimit(s)].length).toBe(100)
   })
 })
 

@@ -20,8 +20,24 @@ describe('truncateAtSentence', () => {
     expect(truncateAtSentence('짧은 문장임', 100)).toBe('짧은 문장임')
   })
   it('한도를 넘으면 마지막 문장 경계에서 자른다', () => {
-    const t = '첫 문장임. 두 번째 문장임. 세 번째 문장임.'
-    expect(truncateAtSentence(t, 14)).toBe('첫 문장임.')
+    // 경계가 예산의 절반 이상을 채우는 경우 — 경계 절삭이 그대로 유지된다.
+    // (절반에 못 미치면 아래 "너무 앞쪽" 규칙이 우선한다.)
+    const t = '첫 번째 문장임. 두 번째 문장임. 세 번째 문장임.'
+    expect(truncateAtSentence(t, 14)).toBe('첫 번째 문장임.')
+  })
+  it('문장 경계가 너무 앞쪽이면 경계를 버리고 max 에서 자른다', () => {
+    // "SK바이오." 뒤로 90자 넘는 내용이 있는데 경계만 보고 자르면 7자만 남는다.
+    // 그 7자는 화면에서 **정상적으로 짧은 요약과 구분되지 않는다** — 담당자는
+    // 내용이 사라진 줄 모른 채 그대로 메일에 싣게 된다.
+    const t = 'SK바이오. ' + '가'.repeat(120)
+    const result = truncateAtSentence(t, 100)
+    expect(charLength(result)).toBe(100)
+    expect(result).not.toBe('SK바이오.')
+  })
+  it('경계가 예산의 절반을 정확히 채우면 경계를 지킨다', () => {
+    // 경계 절삭이 원칙이고 하드 컷은 예외다 — 경계가 이 이상이면 손대지 않는다.
+    const t = '가나다라마바자차.' + '나'.repeat(50)
+    expect(truncateAtSentence(t, 18)).toBe('가나다라마바자차.')
   })
   it('문장 경계가 없으면 한도에서 자른다', () => {
     expect(truncateAtSentence('가나다라마바사', 3)).toBe('가나다')
