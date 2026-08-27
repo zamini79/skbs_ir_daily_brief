@@ -3,7 +3,9 @@ export type InstrumentSeed = {
   displayOrder: number
   name: string
   currency: string
-  quoteSource: 'naver-stock' | 'naver-index' | 'krx-index' | 'twelvedata' | 'marketstack' | 'manual'
+  quoteSource:
+    | 'naver-stock' | 'naver-world-stock' | 'naver-index' | 'krx-index'
+    | 'lse' | 'six' | 'twelvedata' | 'marketstack' | 'manual'
   quoteSymbol: string
   newsQuery: string
   /** 관련성 필터용 콤마 구분 별칭 목록. 비우면 파이프라인이 name 하나로 폴백한다. */
@@ -41,11 +43,28 @@ export const INSTRUMENTS: InstrumentSeed[] = [
   { category: '해외사', displayOrder: 14, name: 'Vaxcyte',  currency: 'USD', quoteSource: 'twelvedata', quoteSymbol: 'PCVX', newsQuery: 'Vaxcyte', newsAliases: 'Vaxcyte', sharesOutstanding: BigInt(148_610_000) },
   { category: '해외사', displayOrder: 15, name: 'Moderna',  currency: 'USD', quoteSource: 'twelvedata', quoteSymbol: 'MRNA', newsQuery: '모더나', newsAliases: '모더나,Moderna', sharesOutstanding: BigInt(398_840_000) },
 
-  // 해외사 — 비미국 4종목은 marketstack. 거래소 약칭 접미사를 쓴다(MIC 접미사는 ADR 값이 온다).
-  { category: '해외사', displayOrder: 16, name: 'GSK',    currency: 'GBP', quoteSource: 'marketstack', quoteSymbol: 'GSK.L',   newsQuery: 'GSK', newsAliases: 'GSK,지에스케이', priceDivisorForMarketCap: 100, sharesOutstanding: BigInt(4_046_530_000) },
-  { category: '해외사', displayOrder: 17, name: 'Sanofi', currency: 'EUR', quoteSource: 'marketstack', quoteSymbol: 'SAN.PA',  newsQuery: '사노피', newsAliases: '사노피,Sanofi', sharesOutstanding: BigInt(1_191_860_000) },
-  { category: '해외사', displayOrder: 18, name: 'Lonza',  currency: 'CHF', quoteSource: 'marketstack', quoteSymbol: 'LONN.SW', newsQuery: '론자', newsAliases: '론자,Lonza', sharesOutstanding: BigInt(70_340_000) },
-  { category: '해외사', displayOrder: 19, name: 'Wuxi',   currency: 'HKD', quoteSource: 'marketstack', quoteSymbol: '2269.HK', newsQuery: '우시바이오로직스', newsAliases: '우시바이오로직스,우시바이오,WuXi', sharesOutstanding: BigInt(4_140_750_000) },
+  // 해외사 — 비미국 4종목. **소스가 넷으로 쪼개져 있다. 되돌리지 마라.**
+  //
+  // 전부 marketstack 이었다. marketstack 무료 플랜은 호출 수가 아니라 **심볼 수**로
+  // 세기 때문에(4심볼을 한 요청에 묶어도 4회) 4종목 × 22거래일 = 월 88회였고 한도가
+  // 100이다. 마진이 사흘치뿐이라 2026-08-27 에 실제로 소진됐다(운영.md §2.6).
+  // 그래서 **매일 도는 시세만** 각 거래소의 무료 엔드포인트로 옮겼다(Task 31).
+  // 연 1회짜리 연초 기준가는 네 종목 모두 여전히 marketstack 이다
+  // (src/providers/quote/ytdBase.ts 의 MARKETSTACK_YTD_SUFFIX 가 심볼을 되돌려 준다).
+  //
+  // 사노피만 남긴 이유: 유로넥스트의 ajax 응답이 암호화된 블롭(`ct:`)이라 쓸 수 없고,
+  // FT HTML 스크래핑은 동작하지만 파싱이 깨지기 쉽다. 한도 문제가 이미 해결되는데
+  // 취약한 의존을 하나 더 만들 이유가 없다. **사노피용 새 소스를 만들지 마라.**
+  //
+  // **quoteSymbol 표기가 소스마다 다르다.** marketstack 은 거래소 약칭 접미사를 쓰지만
+  // (MIC 접미사 `GSK.XLON` 은 뉴욕 ADR 값이 온다) LSE 는 티커 그대로(`GSK`), SIX 는
+  // ValorSymbol(`LONN`) 이다. 네이버 홍콩은 marketstack 과 같은 `2269.HK` 다.
+  { category: '해외사', displayOrder: 16, name: 'GSK',    currency: 'GBP', quoteSource: 'lse',               quoteSymbol: 'GSK',     newsQuery: 'GSK', newsAliases: 'GSK,지에스케이', priceDivisorForMarketCap: 100, sharesOutstanding: BigInt(4_046_530_000) },
+  { category: '해외사', displayOrder: 17, name: 'Sanofi', currency: 'EUR', quoteSource: 'marketstack',       quoteSymbol: 'SAN.PA',  newsQuery: '사노피', newsAliases: '사노피,Sanofi', sharesOutstanding: BigInt(1_191_860_000) },
+  { category: '해외사', displayOrder: 18, name: 'Lonza',  currency: 'CHF', quoteSource: 'six',               quoteSymbol: 'LONN',    newsQuery: '론자', newsAliases: '론자,Lonza', sharesOutstanding: BigInt(70_340_000) },
+  // 네이버 홍콩은 `2269.HK` 다. 접미사 없는 `GSK`·`SAN` 은 미국 ADR 이라 값이 다르고,
+  // `GSK.L`·`SAN.PA`·`LONN.SW` 는 네이버에 아예 없다(실측: HTTP 409 Not Exist Master).
+  { category: '해외사', displayOrder: 19, name: 'Wuxi',   currency: 'HKD', quoteSource: 'naver-world-stock', quoteSymbol: '2269.HK', newsQuery: '우시바이오로직스', newsAliases: '우시바이오로직스,우시바이오,WuXi', sharesOutstanding: BigInt(4_140_750_000) },
 
   // Index
   // S&P500: newsQuery('뉴욕증시')가 일부러 newsAliases에 없다 — 좁은 검색어로는 기사가

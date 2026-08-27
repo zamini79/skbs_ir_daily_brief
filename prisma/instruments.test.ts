@@ -44,10 +44,49 @@ describe('INSTRUMENTS', () => {
     expect(INSTRUMENTS.filter(i => i.quoteSource === 'manual')).toEqual([])
   })
 
-  it('비미국 4종목은 MIC 접미사를 쓰지 않는다', () => {
-    for (const i of INSTRUMENTS.filter(i => i.quoteSource === 'marketstack')) {
+  it('marketstack 에 남은 종목은 MIC 접미사를 쓰지 않는다', () => {
+    // MIC 접미사(GSK.XLON)는 뉴욕 ADR 값이 온다. 거래소 약칭(SAN.PA)을 쓴다.
+    const ms = INSTRUMENTS.filter(i => i.quoteSource === 'marketstack')
+    expect(ms.map(i => i.name)).toEqual(['Sanofi']) // 나머지 셋은 Task 31 로 옮겼다
+    for (const i of ms) {
       expect(i.quoteSymbol).not.toMatch(/\.X[A-Z]{3}$/)
     }
+  })
+
+  // ── Task 31: 비미국 4종목의 시세 소스가 넷으로 쪼개졌다 ──
+  //
+  // marketstack 무료 플랜이 호출 수가 아니라 **심볼 수**로 세는 탓에 월 88회가 나와
+  // 한도 100 에 닿았다(2026-08-27 실제 소진). 매일 도는 시세만 옮겼고 연초 기준가는
+  // 네 종목 모두 여전히 marketstack 이다. 「왜 이렇게 복잡하지」 하고 한 소스로
+  // 되돌리면 한도가 곧바로 돌아온다 — 그래서 구성을 여기서 고정한다.
+
+  it('비미국 4종목의 소스와 심볼이 소스별 표기와 맞는다', () => {
+    const by = (name: string) => INSTRUMENTS.find(i => i.name === name)!
+    expect([by('GSK').quoteSource, by('GSK').quoteSymbol]).toEqual(['lse', 'GSK'])
+    expect([by('Lonza').quoteSource, by('Lonza').quoteSymbol]).toEqual(['six', 'LONN'])
+    expect([by('Wuxi').quoteSource, by('Wuxi').quoteSymbol]).toEqual(['naver-world-stock', '2269.HK'])
+    expect([by('Sanofi').quoteSource, by('Sanofi').quoteSymbol]).toEqual(['marketstack', 'SAN.PA'])
+  })
+
+  it('옮긴 세 종목은 marketstack 표기(접미사)를 그대로 쓰지 않는다', () => {
+    // GSK.L / LONN.SW 를 LSE·SIX 에 그대로 넘기면 종목을 못 찾는다(HTTP 404 / totalRows 0).
+    expect(INSTRUMENTS.find(i => i.name === 'GSK')!.quoteSymbol).not.toBe('GSK.L')
+    expect(INSTRUMENTS.find(i => i.name === 'Lonza')!.quoteSymbol).not.toBe('LONN.SW')
+  })
+
+  it('사노피는 옮기지 않았다 — 유로넥스트에 쓸 만한 무료 소스가 없다', () => {
+    // ajax 응답이 암호화된 블롭(`ct:`)이고 FT HTML 스크래핑은 깨지기 쉽다.
+    // 한도 문제는 세 종목을 옮기는 것으로 이미 해결된다.
+    expect(INSTRUMENTS.find(i => i.name === 'Sanofi')!.quoteSource).toBe('marketstack')
+  })
+
+  it('GSK 는 소스가 바뀌어도 펜스 보정(100)을 유지한다', () => {
+    // LSE 는 통화를 GBX 로 알려 주지만 가격 단위는 marketstack 때와 같은 펜스다.
+    // 이 값이 사라지면 시가총액이 100배가 된다(스펙 §3.2 주의 1, §13 리스크 3).
+    const gsk = INSTRUMENTS.find(i => i.name === 'GSK')!
+    expect(gsk.quoteSource).toBe('lse')
+    expect(gsk.priceDivisorForMarketCap).toBe(100)
+    expect(gsk.currency).toBe('GBP')
   })
 
   it('MARKET_WRAP_ROWS 는 실재하는 지수 행만 가리킨다', () => {

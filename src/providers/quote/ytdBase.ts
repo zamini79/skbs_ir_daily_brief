@@ -30,6 +30,41 @@ const NAVER_INDEX_HEADERS = {
 const realSleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 
 /**
+ * **매일 도는 시세는 옮겼지만 연초 기준가는 여전히 marketstack 이 준다.**
+ *
+ * Task 31 에서 GSK·Lonza·Wuxi 의 일별 시세를 무료 거래소 엔드포인트(lse·six·네이버)로
+ * 옮겼다. marketstack 무료 플랜이 호출 수가 아니라 **심볼 수**로 세는 탓에 월 88회가
+ * 나와 한도 100 에 닿았기 때문이다. 기준가는 연 1회 조회 후 `YtdBasePrice` 에
+ * 캐시하므로 소비가 연 3~4회뿐이고, 옮길 이유가 없다(그 거래소 엔드포인트들은
+ * 전년 종가를 주지도 않는다).
+ *
+ * 문제는 **심볼 표기가 소스마다 다르다**는 것이다. 새 소스에 맞춰 `quoteSymbol` 을
+ * `GSK.L`→`GSK`, `LONN.SW`→`LONN` 으로 바꿨으므로, 그 값을 그대로 marketstack 에
+ * 넘기면 오류가 아니라 **빈 응답**이 온다 — 기준가만 조용히 사라지고 연초대비 칸이
+ * 빈다. 여기서 거래소 약칭 접미사를 되붙여 원래 표기로 돌려놓는다.
+ * (`2269.HK` 는 네이버와 marketstack 표기가 같아서 붙일 것이 없다.)
+ *
+ * 이 표에 없고 `quoteSource` 도 `'marketstack'` 이 아니면 marketstack 경로로 가지
+ * 않는다. 새 소스를 추가할 때 기준가를 어디서 받을지 함께 정하지 않으면 아래
+ * `known` 목록에서 걸려 **실패로 남는다** — 조용한 공란이 되지 않는다.
+ */
+const MARKETSTACK_YTD_SUFFIX: Record<string, string> = {
+  lse: '.L',
+  six: '.SW',
+  'naver-world-stock': '',
+}
+
+/**
+ * 이 종목의 연초 기준가를 marketstack 에서 받아야 하면 marketstack 표기 심볼을,
+ * 아니면 null 을 준다.
+ */
+function marketstackYtdSymbol(t: QuoteTarget): string | null {
+  if (t.quoteSource === 'marketstack') return t.quoteSymbol
+  const suffix = MARKETSTACK_YTD_SUFFIX[t.quoteSource]
+  return suffix === undefined ? null : `${t.quoteSymbol}${suffix}`
+}
+
+/**
  * 네이버 siseJson 은 헤더 행에 홑따옴표를 써서 유효한 JSON 이 아니다.
  * 데이터 행만 정규식으로 뽑는다.
  */
@@ -234,7 +269,11 @@ export async function fetchYtdBase(
   const prices = new Map<string, number>()
   const failures: YtdBaseFailure[] = []
 
-  const ms = targets.filter(t => t.quoteSource === 'marketstack')
+  // 일별 시세를 옮긴 3종목도 **기준가는 marketstack** 이다(MARKETSTACK_YTD_SUFFIX 참고).
+  // 심볼이 소스마다 다르므로 marketstack 표기를 함께 들고 다닌다.
+  const ms = targets
+    .map(t => ({ t, symbol: marketstackYtdSymbol(t) }))
+    .filter((x): x is { t: QuoteTarget; symbol: string } => x.symbol !== null)
   const td = targets.filter(t => t.quoteSource === 'twelvedata')
   const naver = targets.filter(t => t.quoteSource === 'naver-stock' || t.quoteSource === 'naver-index')
   const krx = targets.filter(t => t.quoteSource === 'krx-index')
@@ -242,7 +281,11 @@ export async function fetchYtdBase(
   // manual 은 의도적으로 건너뛴다(수기 입력 대상). 그 외 모르는 소스는 설정 오류이므로
   // 조용히 사라지지 않도록 실패로 남긴다.
   for (const t of targets) {
-    const known = ['marketstack', 'twelvedata', 'naver-stock', 'naver-index', 'krx-index', 'manual']
+    const known = [
+      'marketstack', 'twelvedata', 'naver-stock', 'naver-index', 'krx-index', 'manual',
+      // 시세만 옮긴 소스들. 기준가는 marketstack 경로로 간다.
+      ...Object.keys(MARKETSTACK_YTD_SUFFIX),
+    ]
     if (!known.includes(t.quoteSource)) {
       failures.push({ id: t.id, symbol: t.quoteSymbol, reason: `알 수 없는 quoteSource: ${t.quoteSource}` })
     }
@@ -252,15 +295,18 @@ export async function fetchYtdBase(
     (async () => {
       if (ms.length === 0) return
       try {
-        const m = await fetchMarketstackYtdBase(ms.map(t => t.quoteSymbol), year)
-        for (const t of ms) {
-          const v = m.get(t.quoteSymbol)
+        const m = await fetchMarketstackYtdBase(ms.map(x => x.symbol), year)
+        for (const { t, symbol } of ms) {
+          const v = m.get(symbol)
           if (v !== undefined) prices.set(t.id, v)
-          else failures.push({ id: t.id, symbol: t.quoteSymbol, reason: 'marketstack 응답에 데이터 없음' })
+          // 사유에 **marketstack 에 실제로 물어본 심볼**을 적는다. 시세 소스를 옮긴
+          // 종목은 quoteSymbol 과 다르므로, 이게 없으면 "왜 GSK 를 못 찾지"에서
+          // 조사가 멈춘다.
+          else failures.push({ id: t.id, symbol: t.quoteSymbol, reason: `marketstack(${symbol}) 응답에 데이터 없음` })
         }
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e)
-        for (const t of ms) failures.push({ id: t.id, symbol: t.quoteSymbol, reason })
+        for (const { t } of ms) failures.push({ id: t.id, symbol: t.quoteSymbol, reason })
       }
     })(),
 

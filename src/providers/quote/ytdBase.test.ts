@@ -419,6 +419,102 @@ describe('fetchYtdBase — KRX 지수', () => {
   })
 })
 
+// ── Task 31: 시세는 옮겼지만 **연초 기준가는 여전히 marketstack** 이다 ──
+//
+// 여기가 이 이관에서 가장 조용히 깨지기 쉬운 지점이다. quoteSource 를 바꿨으므로
+// `quoteSource === 'marketstack'` 으로만 가르던 라우팅에서 세 종목이 빠지고,
+// 그러면 연초대비 칸이 원인 표시 없이 빈다.
+describe('fetchYtdBase — 시세 소스를 옮긴 종목의 기준가 라우팅', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  const lse = { id: 'gsk', quoteSource: 'lse', quoteSymbol: 'GSK' }
+  const six = { id: 'lonn', quoteSource: 'six', quoteSymbol: 'LONN' }
+  const naverWorld = { id: 'wuxi', quoteSource: 'naver-world-stock', quoteSymbol: '2269.HK' }
+  const ms = { id: 'san', quoteSource: 'marketstack', quoteSymbol: 'SAN.PA' }
+
+  /** marketstack /eod 응답. 심볼별 12월 종가 몇 개를 준다. */
+  function stubMarketstack(bySymbol: Record<string, Array<{ date: string; close: number }>>) {
+    vi.stubEnv('MARKETSTACK_API_KEY', 'TEST-MS-KEY')
+    const urls: string[] = []
+    const spy = vi.fn(async (url: string) => {
+      urls.push(url)
+      const asked = (new URL(url).searchParams.get('symbols') ?? '').split(',')
+      const data = asked.flatMap(sym =>
+        (bySymbol[sym] ?? []).map(r => ({ symbol: sym, close: r.close, open: 0, date: r.date })),
+      )
+      return new Response(JSON.stringify({ data }), { status: 200 })
+    })
+    vi.stubGlobal('fetch', spy)
+    return urls
+  }
+
+  const DEC = [
+    { date: '2025-12-29T00:00:00+0000', close: 111 },
+    { date: '2025-12-31T00:00:00+0000', close: 222 },
+  ]
+
+  it('lse·six·naver-world-stock 도 marketstack 경로로 가고, 거래소 접미사를 되붙인다', async () => {
+    // 새 소스의 quoteSymbol(GSK/LONN)을 그대로 넘기면 marketstack 은 오류가 아니라
+    // **빈 응답**을 준다 — 기준가만 조용히 사라진다.
+    const urls = stubMarketstack({ 'GSK.L': DEC, 'LONN.SW': DEC, '2269.HK': DEC, 'SAN.PA': DEC })
+    const r = await fetchYtdBase([lse, six, naverWorld, ms], 2026)
+
+    expect(r.failures).toEqual([])
+    expect(r.prices.get('gsk')).toBe(222)
+    expect(r.prices.get('lonn')).toBe(222)
+    expect(r.prices.get('wuxi')).toBe(222)
+    expect(r.prices.get('san')).toBe(222)
+
+    // 네 종목이 한 요청으로 묶여 나간다(marketstack 은 심볼 수로 세므로 요청 수는
+    // 무관하지만, 묶는 편이 재시도가 단순하다).
+    expect(urls).toHaveLength(1)
+    const symbols = new URL(urls[0]).searchParams.get('symbols')!.split(',')
+    expect(symbols.sort()).toEqual(['2269.HK', 'GSK.L', 'LONN.SW', 'SAN.PA'])
+  })
+
+  it('네이버 홍콩 심볼은 접미사를 붙이지 않는다 — 이미 marketstack 표기와 같다', async () => {
+    const urls = stubMarketstack({ '2269.HK': DEC })
+    const r = await fetchYtdBase([naverWorld], 2026)
+    expect(r.prices.get('wuxi')).toBe(222)
+    expect(new URL(urls[0]).searchParams.get('symbols')).toBe('2269.HK')
+  })
+
+  it('옮긴 소스가 "알 수 없는 quoteSource" 로 취급되지 않는다', async () => {
+    // 라우팅에서 빠지면 여기가 먼저 터진다 — 값이 아니라 사유가 남는지로 구분된다.
+    stubMarketstack({ 'GSK.L': DEC, 'LONN.SW': DEC, '2269.HK': DEC })
+    const r = await fetchYtdBase([lse, six, naverWorld], 2026)
+    expect(r.failures.map(f => f.reason).join(' ')).not.toContain('알 수 없는 quoteSource')
+  })
+
+  it('기준가를 못 받으면 사유에 marketstack 에 물어본 심볼을 적는다', async () => {
+    // quoteSymbol(GSK)과 조회 심볼(GSK.L)이 다르므로, 사유에 조회 심볼이 없으면
+    // "왜 GSK 를 못 찾지"에서 조사가 멈춘다.
+    stubMarketstack({})
+    const r = await fetchYtdBase([lse], 2026)
+    expect(r.prices.has('gsk')).toBe(false)
+    expect(r.failures).toHaveLength(1)
+    expect(r.failures[0].symbol).toBe('GSK')
+    expect(r.failures[0].reason).toContain('GSK.L')
+  })
+
+  it('marketstack 월 한도 소진이면 네 종목의 기준가만 실패하고 사유가 그대로 남는다', async () => {
+    vi.stubEnv('MARKETSTACK_API_KEY', 'TEST-MS-KEY')
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(
+        JSON.stringify({ error: { code: 'usage_limit_reached', message: 'Your monthly usage limit has been reached.' } }),
+        { status: 429 },
+      ),
+    ))
+    const r = await fetchYtdBase([lse, six, naverWorld, ms], 2026)
+    expect(r.prices.size).toBe(0)
+    expect(r.failures.map(f => f.id).sort()).toEqual(['gsk', 'lonn', 'san', 'wuxi'])
+    for (const f of r.failures) expect(f.reason).toContain('usage_limit_reached')
+  })
+})
+
 describe('fetchYtdBase — 라우팅과 실패 정책', () => {
   afterEach(() => vi.unstubAllGlobals())
 

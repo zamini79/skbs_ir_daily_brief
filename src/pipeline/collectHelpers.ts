@@ -85,9 +85,9 @@ export function resolveFxRate(currency: string, fx: Record<string, number>): num
  *
  * **단위 차이는 통화 차이가 아니다.** 런던은 펜스(GBX/GBp)로 호가하지만 통화는
  * GBP 이고, 그 100배 차이는 `priceDivisorForMarketCap` 이 이미 처리한다
- * (스펙 §3.2 주의 1). marketstack 은 실측상 `GSK.L` 에 `GBP` 를 주는데, 언젠가
- * 표기를 `GBX` 로 고치더라도 그건 표기 개선이지 다른 상장으로 갈아탄 것이
- * 아니므로 멀쩡한 행을 버리면 안 된다.
+ * (스펙 §3.2 주의 1). **두 표기를 실제로 둘 다 봤다**: marketstack 은 `GSK.L` 에
+ * `GBP` 를 줬고, 지금 쓰는 LSE 엔드포인트는 같은 가격에 `GBX` 를 준다(실측).
+ * 같은 상장의 같은 가격이므로 표기가 어느 쪽이든 멀쩡한 행을 버리면 안 된다.
  */
 function canonicalCurrency(c: string): string {
   const u = c.trim().toUpperCase()

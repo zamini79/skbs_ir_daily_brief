@@ -1,8 +1,15 @@
 import type { RawQuote } from '@/domain/types'
-import { fetchNaverStock, fetchNaverDomesticIndex, fetchNaverWorldIndex } from './naver'
+import {
+  fetchNaverStock,
+  fetchNaverDomesticIndex,
+  fetchNaverWorldIndex,
+  fetchNaverWorldStock,
+} from './naver'
 import { fetchTwelveDataQuotes } from './twelvedata'
 import { fetchMarketstackQuotes } from './marketstack'
 import { fetchKrxIndexQuote } from './krx'
+import { fetchLseQuote } from './lse'
+import { fetchSixQuote } from './six'
 import { withQuoteRetry } from './retry'
 
 export type QuoteTarget = { id: string; quoteSource: string; quoteSymbol: string }
@@ -26,8 +33,12 @@ export async function fetchAllQuotes(
     withQuoteRetry(label, fn, opts.sleep)
   const out = new Map<string, RawQuote | Error>()
 
+  // lse·six·naver-world-stock 은 marketstack 에서 옮겨 온 세 종목이다(Task 31).
+  // 전부 키가 없고 심볼당 한 번 부르므로 배치로 묶을 이유가 없다 — 개별 호출 쪽에 든다.
   const perItem = instruments.filter(i =>
-    ['naver-stock', 'naver-index', 'krx-index'].includes(i.quoteSource),
+    ['naver-stock', 'naver-index', 'naver-world-stock', 'krx-index', 'lse', 'six'].includes(
+      i.quoteSource,
+    ),
   )
   const td = instruments.filter(i => i.quoteSource === 'twelvedata')
   const ms = instruments.filter(i => i.quoteSource === 'marketstack')
@@ -37,7 +48,10 @@ export async function fetchAllQuotes(
   //
   // manual 은 지금 쓰는 종목이 없다(코스피200 헬스케어가 krx-index 로 옮겨갔다).
   // 그래도 경로는 남겨 둔다 — 다른 종목이 나중에 쓸 수 있고, 지우면 되돌리기가 번거롭다.
-  const known = ['naver-stock', 'naver-index', 'krx-index', 'twelvedata', 'marketstack', 'manual']
+  const known = [
+    'naver-stock', 'naver-index', 'naver-world-stock', 'krx-index',
+    'lse', 'six', 'twelvedata', 'marketstack', 'manual',
+  ]
   for (const i of instruments) {
     if (!known.includes(i.quoteSource)) {
       out.set(i.id, new Error(`알 수 없는 quoteSource: ${i.quoteSource}`))
@@ -50,7 +64,11 @@ export async function fetchAllQuotes(
       try {
         const q = await retry(i.quoteSymbol, () => {
           if (i.quoteSource === 'krx-index') return fetchKrxIndexQuote(i.quoteSymbol)
+          if (i.quoteSource === 'lse') return fetchLseQuote(i.quoteSymbol)
+          if (i.quoteSource === 'six') return fetchSixQuote(i.quoteSymbol)
+          if (i.quoteSource === 'naver-world-stock') return fetchNaverWorldStock(i.quoteSymbol)
           if (i.quoteSource === 'naver-stock') return fetchNaverStock(i.quoteSymbol)
+          // 여기까지 오면 naver-index 다. 해외 지수만 심볼이 . 로 시작한다.
           if (i.quoteSymbol.startsWith('.')) return fetchNaverWorldIndex(i.quoteSymbol)
           return fetchNaverDomesticIndex(i.quoteSymbol)
         })

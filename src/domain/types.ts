@@ -1,8 +1,14 @@
 export type Category = '국내사' | '해외사' | 'Index'
 export type QuoteSource =
   | 'naver-stock'
+  /** 해외 개별주(홍콩 2269.HK). 국내주와 응답 계열이 같아 naver.ts 가 함께 다룬다. */
+  | 'naver-world-stock'
   | 'naver-index'
   | 'krx-index'
+  /** 런던증권거래소 공식 엔드포인트. 키 없음. 연초 기준가는 여전히 marketstack. */
+  | 'lse'
+  /** SIX Swiss Exchange 공식 엔드포인트. 키 없음. 연초 기준가는 여전히 marketstack. */
+  | 'six'
   | 'twelvedata'
   | 'marketstack'
   /** 지금 쓰는 종목은 없다. 검수 화면의 수기 입력 경로를 위해 남겨 둔다. */

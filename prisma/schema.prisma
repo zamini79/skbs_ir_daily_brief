@@ -13,7 +13,7 @@ model Instrument {
   displayOrder  Int
   name          String
   currency      String
-  quoteSource   String  // naver-stock | naver-index | twelvedata | marketstack | manual
+  quoteSource   String  // naver-stock | naver-world-stock | naver-index | krx-index | lse | six | twelvedata | marketstack | manual
   quoteSymbol   String
   newsQuery     String
   /// 관련성 필터용 콤마 구분 별칭 목록. 비어 있으면 파이프라인이 name 하나로 폴백한다.

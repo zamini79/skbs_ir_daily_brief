@@ -4,6 +4,13 @@ vi.mock('./naver', () => ({
   fetchNaverStock: vi.fn(async (c: string) => ({ close: 100, prevClose: 90, currency: 'KRW', asOf: '2026-08-26' })),
   fetchNaverDomesticIndex: vi.fn(async () => ({ close: 6800, prevClose: 6700, currency: 'KRW', asOf: '2026-08-26' })),
   fetchNaverWorldIndex: vi.fn(async () => ({ close: 7675, prevClose: 7677, currency: 'USD', asOf: '2026-08-26' })),
+  fetchNaverWorldStock: vi.fn(async () => ({ close: 50.5, prevClose: 50.75, currency: 'HKD', asOf: '2026-08-27' })),
+}))
+vi.mock('./lse', () => ({
+  fetchLseQuote: vi.fn(async () => ({ close: 1852, prevClose: 1899.5, currency: 'GBX', asOf: '2026-08-27' })),
+}))
+vi.mock('./six', () => ({
+  fetchSixQuote: vi.fn(async () => ({ close: 588.4, prevClose: 587.8, currency: 'CHF', asOf: '2026-08-27' })),
 }))
 vi.mock('./twelvedata', () => ({
   fetchTwelveDataQuotes: vi.fn(async () => ({
@@ -20,10 +27,17 @@ vi.mock('./marketstack', () => ({
 }))
 
 import { fetchAllQuotes } from './index'
-import { fetchNaverStock, fetchNaverDomesticIndex, fetchNaverWorldIndex } from './naver'
+import {
+  fetchNaverStock,
+  fetchNaverDomesticIndex,
+  fetchNaverWorldIndex,
+  fetchNaverWorldStock,
+} from './naver'
 import { fetchTwelveDataQuotes } from './twelvedata'
 import { fetchMarketstackQuotes } from './marketstack'
 import { fetchKrxIndexQuote } from './krx'
+import { fetchLseQuote } from './lse'
+import { fetchSixQuote } from './six'
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -58,6 +72,81 @@ describe('fetchAllQuotes', () => {
     expect(r.get('h')).toBeInstanceOf(Error)
     expect((r.get('h') as Error).message).toContain('거래일을 찾지 못함')
     expect((r.get('a') as any).close).toBe(100)
+  })
+
+  // ── Task 31: GSK·Lonza·Wuxi 를 marketstack 에서 무료 거래소 엔드포인트로 옮겼다 ──
+
+  it('lse·six·naver-world-stock 은 각자의 fetcher 로 가고 marketstack 을 부르지 않는다', async () => {
+    // 이 셋이 marketstack 으로 새면 옮긴 의미가 없다(월 88회로 되돌아간다).
+    const r = await fetchAllQuotes([
+      { id: 'gsk', quoteSource: 'lse', quoteSymbol: 'GSK' },
+      { id: 'lonn', quoteSource: 'six', quoteSymbol: 'LONN' },
+      { id: 'wuxi', quoteSource: 'naver-world-stock', quoteSymbol: '2269.HK' },
+    ])
+    expect((r.get('gsk') as any).close).toBe(1852)
+    expect((r.get('lonn') as any).close).toBeCloseTo(588.4, 4)
+    expect((r.get('wuxi') as any).close).toBeCloseTo(50.5, 4)
+    expect(fetchLseQuote).toHaveBeenCalledWith('GSK')
+    expect(fetchSixQuote).toHaveBeenCalledWith('LONN')
+    expect(fetchNaverWorldStock).toHaveBeenCalledWith('2269.HK')
+    expect(fetchMarketstackQuotes).not.toHaveBeenCalled()
+  })
+
+  it('naver-world-stock 은 국내주·지수 fetcher 로 새지 않는다', async () => {
+    // 같은 파일(naver.ts)에 있고 심볼이 . 을 포함하므로(2269.HK) 분기가 헷갈리기 쉽다.
+    await fetchAllQuotes([{ id: 'wuxi', quoteSource: 'naver-world-stock', quoteSymbol: '2269.HK' }])
+    expect(fetchNaverStock).not.toHaveBeenCalled()
+    expect(fetchNaverDomesticIndex).not.toHaveBeenCalled()
+    expect(fetchNaverWorldIndex).not.toHaveBeenCalled()
+  })
+
+  it('사노피는 여전히 marketstack 이고, 옮긴 세 종목이 실패해도 서로 영향이 없다', async () => {
+    // 소스를 넷으로 쪼갠 이유가 이것이다 — 한 소스의 한도 소진이 네 행을 통째로
+    // 비우지 않는다. marketstack 소진 시 사노피만 실패하는 것이 정상이다.
+    vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(
+      new Error('marketstack HTTP 429 (usage_limit_reached: Your monthly usage limit has been reached.)'),
+    )
+    const r = await fetchAllQuotes(
+      [
+        { id: 'gsk', quoteSource: 'lse', quoteSymbol: 'GSK' },
+        { id: 'san', quoteSource: 'marketstack', quoteSymbol: 'SAN.PA' },
+        { id: 'lonn', quoteSource: 'six', quoteSymbol: 'LONN' },
+        { id: 'wuxi', quoteSource: 'naver-world-stock', quoteSymbol: '2269.HK' },
+      ],
+      { sleep: async () => {} },
+    )
+    expect(r.get('san')).toBeInstanceOf(Error)
+    expect((r.get('san') as Error).message).toContain('usage_limit_reached')
+    expect((r.get('gsk') as any).close).toBe(1852)
+    expect((r.get('lonn') as any).close).toBeCloseTo(588.4, 4)
+    expect((r.get('wuxi') as any).close).toBeCloseTo(50.5, 4)
+    // 한도 소진은 기다려도 안 풀린다 — 재시도하지 않는다.
+    expect(fetchMarketstackQuotes).toHaveBeenCalledTimes(1)
+  })
+
+  it('새 소스도 일시적 실패면 한 번 더 부른다', async () => {
+    vi.mocked(fetchSixQuote).mockRejectedValueOnce(new Error('[LONN] SIX HTTP 502'))
+    const r = await fetchAllQuotes(
+      [{ id: 'lonn', quoteSource: 'six', quoteSymbol: 'LONN' }],
+      { sleep: async () => {} },
+    )
+    expect((r.get('lonn') as any).close).toBeCloseTo(588.4, 4)
+    expect(fetchSixQuote).toHaveBeenCalledTimes(2)
+  })
+
+  it('새 소스가 끝내 실패하면 그 행만 사유와 함께 남는다', async () => {
+    vi.mocked(fetchLseQuote).mockRejectedValueOnce(new Error('[GSK] LSE HTTP 404 (Not found instrument with tidm: GSK)'))
+    const r = await fetchAllQuotes(
+      [
+        { id: 'gsk', quoteSource: 'lse', quoteSymbol: 'GSK' },
+        { id: 'lonn', quoteSource: 'six', quoteSymbol: 'LONN' },
+      ],
+      { sleep: async () => {} },
+    )
+    expect(r.get('gsk')).toBeInstanceOf(Error)
+    expect((r.get('gsk') as Error).message).toContain('HTTP 404')
+    expect((r.get('lonn') as any).close).toBeCloseTo(588.4, 4)
+    expect(fetchLseQuote).toHaveBeenCalledTimes(1) // 404 는 재시도하지 않는다
   })
 
   it('manual 소스는 결과에 넣지 않는다', async () => {
