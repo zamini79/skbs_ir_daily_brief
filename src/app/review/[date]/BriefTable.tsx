@@ -84,11 +84,9 @@ export function BriefTable({ runDate, rows }: { runDate: string; rows: ClientRow
                         <div className="text-[10px] text-gray-400">기준 {row.quote.asOf}</div>
                       )}
                     </td>
-                    <td className="px-2 py-1.5">
-                      {row.display.close !== null && row.display.prevClose !== null
-                        ? formatPrevDiff(row.display.close, row.display.prevClose)
-                        : '-'}
-                    </td>
+                    {/* formatPrevDiff가 close/prevClose null 여부와 보합(0)을 각각 다른
+                       문자열로 처리하므로 여기서 다시 분기하지 않는다. */}
+                    <td className="px-2 py-1.5">{formatPrevDiff(row.display.close, row.display.prevClose)}</td>
                     <td className="px-2 py-1.5">{pct(row.display.changePct)}</td>
                     <td className="px-2 py-1.5">{pct(row.quote?.ytdPct ?? null)}</td>
                     <td className="px-2 py-1.5">

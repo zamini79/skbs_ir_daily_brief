@@ -4,6 +4,7 @@ import {
   rowStateLabel,
   runStatusLabel,
   sameEventBadgeLabel,
+  summaryErrorShortLabel,
   groupByCategory,
   resolveDisplayQuote,
 } from './repo'
@@ -58,6 +59,33 @@ describe('rowStateLabel', () => {
     expect(rowStateLabel('PENDING')).toBe('미검토')
     expect(rowStateLabel('SELECTED')).toBe('선택 완료')
     expect(rowStateLabel('STALE_SELECTION')).toBe('선택 무효화됨 (재수집으로 초기화 — 다시 검토 필요)')
+  })
+})
+
+describe('summaryErrorShortLabel', () => {
+  it('실제 발생한 할당량 소진 메시지를 짧게 줄인다', () => {
+    // 2026-08-27 실행에서 실제로 화면에 뜬 원문 (녹십자 등)
+    const raw =
+      'gemini: 모든 모델이 실패했다 (쿼터 소진: gemini-3.5-flash-lite, gemini-flash-lite-latest, gemini-3.5-flash, gemini-3.1-flash-lite)'
+    expect(summaryErrorShortLabel(raw)).toBe('모델 요약 실패 — 할당량 소진')
+  })
+  it('gemini.ts의 다른 소진 문구("쿼터가 소진")도 잡아낸다', () => {
+    expect(summaryErrorShortLabel('gemini: 모든 모델의 쿼터가 소진됐다 (시도: gemini-3.5-flash)')).toBe(
+      '모델 요약 실패 — 할당량 소진',
+    )
+  })
+  it('영문 429/RESOURCE_EXHAUSTED 도 소진으로 인식한다', () => {
+    expect(summaryErrorShortLabel('gemini HTTP 429: RESOURCE_EXHAUSTED')).toBe('모델 요약 실패 — 할당량 소진')
+  })
+  it('원인을 모르는 gemini 실패는 사유를 지어내지 않고 일반화만 한다', () => {
+    expect(summaryErrorShortLabel('gemini: 응답이 차단됐다 (blockReason=SAFETY)')).toBe('모델 요약 실패')
+    expect(summaryErrorShortLabel('gemini: candidates 가 비어있다')).toBe('모델 요약 실패')
+  })
+  it('collect.ts가 이미 담당자용으로 쓴 짧은 한국어 문장은 그대로 둔다', () => {
+    // "모델 요약 실패"로 뭉뚱그리면 "본문이 짧아 시도조차 안 한 것"을
+    // "모델이 시도했다가 실패한 것"으로 잘못 말하게 된다.
+    expect(summaryErrorShortLabel('본문이 너무 짧아 요약을 생략함')).toBe('본문이 너무 짧아 요약을 생략함')
+    expect(summaryErrorShortLabel('할당량 소진 이후 요약을 건너뜀')).toBe('할당량 소진 이후 요약을 건너뜀')
   })
 })
 

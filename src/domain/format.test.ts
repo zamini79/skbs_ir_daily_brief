@@ -23,8 +23,19 @@ describe('formatPrevDiff', () => {
   it('하락은 ▼ 를 붙이고 절대값을 쓴다', () => {
     expect(formatPrevDiff(37550, 38300)).toBe('▼ 750')
   })
-  it('보합은 - 를 준다', () => {
-    expect(formatPrevDiff(100, 100)).toBe('-')
+  it('보합(diff===0)은 0을 준다 — 값 없음(-)과 겹치면 안 된다', () => {
+    expect(formatPrevDiff(100, 100)).toBe('0')
+  })
+  it('상승(diff>0)은 여전히 ▲ 를 준다', () => {
+    expect(formatPrevDiff(101, 100)).toBe('▲ 1')
+  })
+  it('하락(diff<0)은 여전히 ▼ 를 준다', () => {
+    expect(formatPrevDiff(99, 100)).toBe('▼ 1')
+  })
+  it('close 나 prevClose 가 없으면(시세를 못 구했으면) - 를 준다 — 보합(0)과 다른 문자열이어야 한다', () => {
+    expect(formatPrevDiff(null, 100)).toBe('-')
+    expect(formatPrevDiff(100, null)).toBe('-')
+    expect(formatPrevDiff(null, null)).toBe('-')
   })
   it('소수 차이를 유지한다', () => {
     expect(formatPrevDiff(28.57, 27.97)).toBe('▲ 0.6')

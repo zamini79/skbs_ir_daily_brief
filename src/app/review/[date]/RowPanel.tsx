@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { charLength } from '@/domain/text'
-import { sameEventBadgeLabel, type ClientRow } from '@/db/repo'
+import { sameEventBadgeLabel, summaryErrorShortLabel, type ClientRow } from '@/db/repo'
 import { selectNews, omitNews, editSummary, saveManualQuote } from './actions'
 
 const SUMMARY_LABEL: Record<number, string> = {
@@ -134,8 +134,11 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
                   {c.publisher} · {new Date(c.publishedAt).toLocaleString('ko-KR')} · {c.clusterSize}개 매체
                 </div>
                 {c.summaryError && (
-                  <p className="mt-1 text-xs text-red-600">
-                    요약 실패: {c.summaryError}
+                  // title에 원문을 그대로 남긴다 — 담당자에게는 모델명 나열이 의미
+                  // 없지만(비개발자, 08:00 마감 전 급하게 훑는 화면), 운영자는 원문이
+                  // 필요할 수 있으므로 지우지 않는다.
+                  <p className="mt-1 text-xs text-red-600" title={c.summaryError}>
+                    {summaryErrorShortLabel(c.summaryError)}
                     {c.summaries.some(s => s.isFallback) && ' — 아래는 본문 발췌로 대체됨'}
                   </p>
                 )}
@@ -180,8 +183,8 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
            * 짐작해서 이름 붙이지 않는다.
            */}
           {chosenCandidate.summaryError && (
-            <p className="text-sm text-red-600">
-              모델 요약 실패: {chosenCandidate.summaryError}
+            <p className="text-sm text-red-600" title={chosenCandidate.summaryError}>
+              {summaryErrorShortLabel(chosenCandidate.summaryError)}
               {chosenCandidate.summaries.length > 0
                 ? ' — 아래는 모델이 아니라 본문에서 기계적으로 뽑아낸 발췌입니다. 그대로 싣지 말고 반드시 손보세요.'
                 : ' 제목만 보고 판단하세요.'}

@@ -65,6 +65,28 @@ export function sameEventBadgeLabel(rank: number): string {
   return `${rank}위와 같은 사건`
 }
 
+/**
+ * summaryError 원문을 담당자용 짧은 문구로 줄인다. 원문 자체는 지우지 않는다 —
+ * 호출자가 title 등으로 운영자에게 그대로 보여줄 수 있게 남겨 둔다.
+ *
+ * providers/summarize/gemini.ts 가 던지는 예외 메시지는 항상 "gemini:" 또는
+ * "gemini HTTP"로 시작하고, 실패한 모델 식별자를 나열한다(예: "gemini: 모든 모델이
+ * 실패했다 (쿼터 소진: gemini-3.5-flash-lite, ...)") — 담당자에게는 의미 없고 아침에
+ * 급하게 훑는 화면만 어지럽힌다. 반대로 collect.ts 의 EMPTY_BODY_REASON/
+ * QUOTA_EXHAUSTED_REASON 처럼 이미 사람이 읽으라고 쓴 짧은 한국어 문장은 그대로
+ * 보여준다 — 전부 "모델 요약 실패"로 뭉뚱그리면 "본문이 짧아 애초에 시도하지 않은
+ * 것"을 "모델이 시도했다가 실패한 것"이라고 잘못 말하게 된다.
+ *
+ * "gemini:"류 원문 안에서도 원인을 알아볼 수 있으면(할당량 소진) 그렇게 말하고,
+ * 못 알아보면(세이프티 차단, JSON 파싱 실패 등) 원인을 지어내지 않고
+ * "모델 요약 실패"까지만 말한다.
+ */
+export function summaryErrorShortLabel(raw: string): string {
+  if (!/^gemini(:| HTTP)/i.test(raw)) return raw
+  if (/소진|RESOURCE_EXHAUSTED|\b429\b/i.test(raw)) return '모델 요약 실패 — 할당량 소진'
+  return '모델 요약 실패'
+}
+
 export type CategoryGroup<T> = { category: string; rows: T[] }
 
 /**
