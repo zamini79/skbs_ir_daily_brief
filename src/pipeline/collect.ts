@@ -85,6 +85,7 @@ export async function runCollection(now: Date): Promise<{
   summariesGenerated: number
   summariesSkippedEmptyBody: number
   summariesFailed: number
+  bodyCrawlFailed: number
   ytdBaseFailed: number
   newsFailed: number
   fxFailed: number
@@ -307,6 +308,20 @@ export async function runCollection(now: Date): Promise<{
   let summariesGenerated = 0
   let summariesSkippedEmptyBody = 0
   let summariesFailed = 0
+  /**
+   * 기사 **본문을 받으려다 실패해** 검색 스니펫으로 요약한 후보 수.
+   *
+   * 네이버 링크가 아예 없어 스니펫을 쓴 경우는 세지 않는다 — 그건 그 기사에 대한
+   * 사실이고 매일 대다수 후보에서 일어난다. 그것까지 세면 이 숫자가 상수가 되어
+   * 셀렉터가 깨진 날(모든 후보가 갑자기 추출 0자)을 알아볼 수 없다.
+   *
+   * 배너(status/statusDetail)에는 넣지 않는다. 요약은 정상적으로 만들어졌고 칸도
+   * 비지 않았다 — 나빠진 것은 입력의 폭이지 결과의 유무가 아니다. 기사 한 건의
+   * 크롤링 실패로 실행 전체가 매일 「부분 완료」가 되면 배너가 뜻을 잃는다.
+   * 대신 사유를 로그에 남기고 크론 응답 JSON 으로 돌려준다
+   * (summariesSkippedEmptyBody 와 같은 급의 관측값이다).
+   */
+  let bodyCrawlFailed = 0
 
   // 이번 실행 전체가 공유하는 할당량 가드. 첫 429/RESOURCE_EXHAUSTED 이후로는
   // 죽은 할당량에 나머지 후보를 계속 쏘지 않고 곧바로 실패로 기록한다.
@@ -341,7 +356,16 @@ export async function runCollection(now: Date): Promise<{
             candidatesCreated++
 
             const body = await fetchArticleBody(c.representative)
-            const attempt = await attemptSummary({ title: c.representative.title, body }, quotaGuard, summarize)
+            if (body.crawlFailure !== null) {
+              bodyCrawlFailed++
+              // 제목만 남긴다. 기사 URL 은 싣지 않는다(로그 규칙 — providers 전반).
+              console.error(`[article] ${c.representative.title}: ${body.crawlFailure}`)
+            }
+            const attempt = await attemptSummary(
+              { title: c.representative.title, body: body.text },
+              quotaGuard,
+              summarize,
+            )
 
             if (attempt.outcome === 'skipped-empty-body') {
               // 뽑아낼 본문 자체가 없으니 발췌 대체 요약도 만들 수 없다 — 그래도 사유는
@@ -377,7 +401,7 @@ export async function runCollection(now: Date): Promise<{
               where: { id: candidate.id },
               data: { summaryError: errorMessage },
             })
-            const fallbacks = buildFallbackSummaries(body, c.representative.description)
+            const fallbacks = buildFallbackSummaries(body.text, c.representative.description)
             if (fallbacks.length > 0) {
               await prisma.newsSummary.createMany({
                 data: fallbacks.map((text, i) => ({
@@ -423,5 +447,5 @@ export async function runCollection(now: Date): Promise<{
     data: { status, statusDetail, finishedAt: new Date() },
   })
 
-  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, ytdBaseFailed, newsFailed, fxFailed, quoteFailed }
+  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, bodyCrawlFailed, ytdBaseFailed, newsFailed, fxFailed, quoteFailed }
 }

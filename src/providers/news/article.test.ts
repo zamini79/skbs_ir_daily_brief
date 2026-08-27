@@ -49,10 +49,15 @@ describe('extractNaverArticleBody', () => {
 })
 
 describe('fetchArticleBody', () => {
-  it('네이버 링크가 없으면 바로 description 을 쓴다', async () => {
+  it('네이버 링크가 없으면 바로 description 을 쓰고, 그것을 실패로 세지 않는다', async () => {
     const spy = vi.fn()
     vi.stubGlobal('fetch', spy)
-    expect(await fetchArticleBody(base())).toBe('폴백 스니펫')
+    const r = await fetchArticleBody(base())
+    expect(r.text).toBe('폴백 스니펫')
+    expect(r.source).toBe('snippet')
+    // 시도할 대상이 없었으므로 장애가 아니다. 여기에 사유를 채우면 매일 대다수
+    // 후보가 "크롤링 실패"로 잡혀 진짜 실패(셀렉터 깨짐)를 알아볼 수 없다.
+    expect(r.crawlFailure).toBeNull()
     expect(spy).not.toHaveBeenCalled()
   })
 
@@ -63,19 +68,43 @@ describe('fetchArticleBody', () => {
     vi.stubGlobal('fetch', vi.fn(async () =>
       new Response(`<div id="dic_area">${realBody}</div>`, { status: 200 })))
     const r = await fetchArticleBody(base({ naverUrl: 'https://n.news.naver.com/1' }))
-    expect(r).toBe(realBody)
+    expect(r.text).toBe(realBody)
+    expect(r.source).toBe('body')
+    expect(r.crawlFailure).toBeNull()
   })
 
-  it('크롤링이 실패해도 던지지 않고 description 으로 넘어간다', async () => {
+  it('크롤링이 실패해도 던지지 않고 description 으로 넘어가되 사유를 남긴다', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down') }))
     const r = await fetchArticleBody(base({ naverUrl: 'https://n.news.naver.com/1' }))
-    expect(r).toBe('폴백 스니펫')
+    expect(r.text).toBe('폴백 스니펫')
+    expect(r.source).toBe('snippet')
+    expect(r.crawlFailure).toContain('network down')
   })
 
-  it('본문이 너무 짧으면 description 을 쓴다', async () => {
+  it('HTTP 오류는 상태 코드를 사유에 남긴다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 403 })))
+    const r = await fetchArticleBody(base({ naverUrl: 'https://n.news.naver.com/1' }))
+    expect(r.text).toBe('폴백 스니펫')
+    expect(r.crawlFailure).toContain('403')
+  })
+
+  it('본문이 너무 짧으면 description 을 쓰고 추출 길이를 사유에 남긴다', async () => {
+    // 네이버가 dic_area 를 바꾸면 추출이 0자가 되고 **모든** 기사가 이 경로로 온다.
+    // 사유에 길이가 있어야 "기사가 짧았다"와 "셀렉터가 깨졌다"를 로그로 가른다.
     vi.stubGlobal('fetch', vi.fn(async () =>
       new Response('<div id="dic_area">짧음</div>', { status: 200 })))
     const r = await fetchArticleBody(base({ naverUrl: 'https://n.news.naver.com/1' }))
-    expect(r).toBe('폴백 스니펫')
+    expect(r.text).toBe('폴백 스니펫')
+    expect(r.crawlFailure).toContain('2자')
+  })
+
+  it('스니펫 폴백 네 경로 중 시도한 셋만 실패로 구분된다', async () => {
+    // 같은 폴백이라도 "시도하지 않음"과 "시도했다 실패"가 같은 값으로 수렴하면
+    // 안 된다 — 실패율이 상수에 파묻힌다.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('boom') }))
+    const attempted = await fetchArticleBody(base({ naverUrl: 'https://n.news.naver.com/1' }))
+    const notAttempted = await fetchArticleBody(base())
+    expect(attempted.source).toBe(notAttempted.source)
+    expect(attempted.crawlFailure).not.toBe(notAttempted.crawlFailure)
   })
 })
