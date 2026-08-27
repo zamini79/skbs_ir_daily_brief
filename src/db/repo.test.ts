@@ -188,6 +188,26 @@ describe('newsColumnContent', () => {
     })
   })
 
+  it('editedText 가 빈 문자열이면 편집분으로 치지 않고 선택한 요약을 보여준다', () => {
+    // 담당자가 텍스트를 지우고 blur 하면 ''가 저장될 수 있다(옛 데이터).
+    // `?? ` 만 쓰면 ''가 값으로 취급돼 고른 요약이 영구히 가려지는데, 행은 여전히
+    // 「선택 완료」라서 화면만 보고는 왜 비었는지 알 수 없다.
+    const cand = candidate({
+      id: 'c1',
+      summaries: [{ id: 's1', variant: 1, text: '원본 요약', isFallback: false }],
+    })
+    for (const empty of ['', '   ']) {
+      const result = newsColumnContent({
+        state: 'SELECTED',
+        candidates: [cand],
+        chosenCandidateId: 'c1',
+        chosenSummaryId: 's1',
+        editedText: empty,
+      })
+      expect(result).toMatchObject({ kind: 'article', summary: '원본 요약' })
+    }
+  })
+
   it('SELECTED인데 editedText가 없으면 선택된 요약 원문을 쓴다', () => {
     const cand = candidate({
       id: 'c1',

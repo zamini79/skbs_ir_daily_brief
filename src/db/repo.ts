@@ -150,7 +150,12 @@ export function newsColumnContent(row: {
       if (!cand) return { kind: 'label', text: rowStateLabel('STALE_SELECTION') }
       const chosenSummary = cand.summaries.find(s => s.id === row.chosenSummaryId)
       // editedText가 있으면 그것이 최종 산출물이다 — 요약 원문이 남아 있어도 우선한다.
-      const summary = row.editedText ?? chosenSummary?.text ?? null
+      // 빈 문자열은 편집분으로 치지 않는다. `?? ` 만 쓰면 ''(담당자가 텍스트를 지우고
+      // blur 한 경우)가 값으로 취급돼 고른 요약이 영구히 가려진다 — 행은 여전히
+      // 「선택 완료」라서 화면만 보고는 왜 비었는지 알 수 없다. 쓰기 쪽에서도
+      // null 로 정규화하지만(actions.ts), 이미 ''로 저장된 행이 있으므로 여기서도 막는다.
+      const edited = row.editedText !== null && row.editedText.trim() !== '' ? row.editedText : null
+      const summary = edited ?? chosenSummary?.text ?? null
       // isFallback은 editedText 유무와 무관하게 chosenSummary 레코드 자체의 값이다.
       // editedText는 담당자가 손을 댔다는 뜻이지 발췌 출신이라는 사실을 지우지
       // 않는다 — draft가 원문 발췌를 그대로 두고 blur만 한 것일 수도 있으므로,
