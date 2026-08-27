@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeTitle, jaccard, topClusters, filterByTitleMention } from './cluster'
+import { normalizeTitle, jaccard, topClusters, filterByTitleMention, newsPenalty, NEWS_PENALTY } from './cluster'
 import type { NewsItem } from '@/providers/news/types'
 
 function item(title: string, opts: Partial<NewsItem> = {}): NewsItem {
@@ -12,6 +12,11 @@ function item(title: string, opts: Partial<NewsItem> = {}): NewsItem {
     description: '',
   }
 }
+
+/** 국내사·해외사 행. 시황·수급 감점이 적용된다. */
+const NOT_INDEX = { isIndex: false }
+/** 지수(Index) 행. 시황·수급은 이 행에서 정답이므로 감점하지 않는다. */
+const IS_INDEX = { isIndex: true }
 
 describe('normalizeTitle', () => {
   it('대괄호 말머리를 없앤다', () => {
@@ -48,18 +53,18 @@ describe('topClusters', () => {
       item('셀트리온 글로벌 톱3 굳힌다고 밝혀'),
       item('셀트리온 신규 공장 착공'),
     ]
-    const r = topClusters(items, 3)
+    const r = topClusters(items, 3, NOT_INDEX)
     expect(r[0].size).toBe(3)
     expect(r[1].size).toBe(1)
   })
 
   it('최대 topN 개만 준다', () => {
     const items = ['가나다 사건', '라마바 사건', '사아자 사건', '차카타 사건'].map(t => item(t))
-    expect(topClusters(items, 3)).toHaveLength(3)
+    expect(topClusters(items, 3, NOT_INDEX)).toHaveLength(3)
   })
 
   it('기사가 없으면 빈 배열을 준다', () => {
-    expect(topClusters([], 3)).toEqual([])
+    expect(topClusters([], 3, NOT_INDEX)).toEqual([])
   })
 
   it('대표 기사는 네이버뉴스 링크가 있는 쪽을 고른다', () => {
@@ -67,7 +72,7 @@ describe('topClusters', () => {
       item('셀트리온 글로벌 톱3 굳힌다'),
       item('셀트리온 글로벌 톱3 굳힌다 확정', { naverUrl: 'https://n.news.naver.com/1' }),
     ]
-    const r = topClusters(items, 3)
+    const r = topClusters(items, 3, NOT_INDEX)
     expect(r[0].representative.naverUrl).toContain('n.news.naver.com')
   })
 })
@@ -228,21 +233,21 @@ describe('topClusters — 전이적 유사도 (모든 멤버와 비교)', () => 
 
   it('A, B, C 순서로 들어와도 하나의 묶음이 된다', () => {
     const items = [item(A), item(B), item(C)]
-    const r = topClusters(items, 3)
+    const r = topClusters(items, 3, NOT_INDEX)
     expect(r).toHaveLength(1)
     expect(r[0].size).toBe(3)
   })
 
   it('C, B, A 역순으로 들어와도 하나의 묶음이 된다 (순서에 무관하다)', () => {
     const items = [item(C), item(B), item(A)]
-    const r = topClusters(items, 3)
+    const r = topClusters(items, 3, NOT_INDEX)
     expect(r).toHaveLength(1)
     expect(r[0].size).toBe(3)
   })
 
   it('서로 무관한 두 제목은 여전히 별개의 묶음이 된다', () => {
     const items = [item('ff gg hh'), item('ii jj kk')]
-    const r = topClusters(items, 3)
+    const r = topClusters(items, 3, NOT_INDEX)
     expect(r).toHaveLength(2)
     expect(r[0].size).toBe(1)
     expect(r[1].size).toBe(1)
@@ -250,7 +255,160 @@ describe('topClusters — 전이적 유사도 (모든 멤버와 비교)', () => 
 
   it('병합 후 묶음 크기는 실제 멤버 수와 같다 (검토자에게 보이는 숫자)', () => {
     const items = [item(A), item(B), item(C)]
-    const r = topClusters(items, 3)
+    const r = topClusters(items, 3, NOT_INDEX)
     expect(r[0].size).toBe(3)
+  })
+})
+
+describe('newsPenalty — 감점 대상 (전부 2026-08-27 라이브 실측 제목)', () => {
+  // 아래 제목은 하나도 지어내지 않았다. 그날 실제로 각 행의 상위를 차지해서
+  // 이 작업이 시작된 원인이 된 제목들이다.
+
+  describe('자동생성 주가 기사 — 지수 행에서도 감점이다', () => {
+    const TITLES = [
+      '에이비엘바이오 주가, 8월 27일 장중 76,500원 2.55% 상승',
+      '한미약품 주가, 8월 27일 504,000원 4.91% 하락 마감',
+      '에이비엘바이오, 장초반 1%대 상승…최근 교차 흐름 속 7만5000원대',
+      '리가켐바이오 주가, 8월 27일 장중 99,900원 1.63% 상승',
+      '삼천당제약 장중 17만원대 강세…최근 급락 뒤 방향성 탐색',
+    ]
+    for (const t of TITLES) {
+      it(`감점한다: ${t}`, () => {
+        expect(newsPenalty(t, NOT_INDEX)).toBe(NEWS_PENALTY.AUTO_QUOTE)
+      })
+      it(`지수 행에서도 감점한다: ${t}`, () => {
+        // 지수의 자동생성 기사에도 값이 없다. 여기만 예외로 두면 지수 행이
+        // 자동생성 기사로 채워진다.
+        expect(newsPenalty(t, IS_INDEX)).toBe(NEWS_PENALTY.AUTO_QUOTE)
+      })
+    }
+  })
+
+  describe('IR 뉴스가 아닌 장르 — 모든 행에서 감점이다', () => {
+    const CASES: Array<[string, string]> = [
+      ['브랜드평판·순위', '생물공학 상장기업 브랜드평판 8월 빅데이터 분석결과…1위 알테오젠'],
+      ['광고·회고 칼럼', "[광고로 읽는 시대]한국화이자 '모리민'"],
+      ['종목추천', '[헬로스톡] 8/27 주목할 종목 : 인바디·SK바이오팜·SK이노베이션'],
+      ['사진 기사', '[포토] 코스피, 삼성전자·SK하이닉스 상승에 6900선 회복'],
+    ]
+    for (const [genre, t] of CASES) {
+      it(`${genre}: ${t}`, () => {
+        expect(newsPenalty(t, NOT_INDEX)).toBe(NEWS_PENALTY.NON_NEWS)
+        expect(newsPenalty(t, IS_INDEX)).toBe(NEWS_PENALTY.NON_NEWS)
+      })
+    }
+  })
+
+  describe('시황·수급 — 카테고리에 따라 판정이 뒤집힌다', () => {
+    // 여기가 이 작업에서 제일 깨지기 쉬운 곳이다. 지수 3행이 지금 잘 뽑고 있는
+    // 1순위가 바로 이 기사들이다.
+    const 시황: string[] = [
+      "미국증시 다우 '연일 상승'..머크·엔비디아·GS '뛰고', 나이키 '뚝'",
+      '[美증시] 암 백신 모더나 14% 또 폭등…머크·화이자도 동반 상승',
+    ]
+    for (const t of 시황) {
+      it(`국내사·해외사 행에서는 감점한다: ${t}`, () => {
+        expect(newsPenalty(t, NOT_INDEX)).toBe(NEWS_PENALTY.MARKET_WRAP)
+      })
+      it(`지수 행에서는 감점하지 않는다: ${t}`, () => {
+        expect(newsPenalty(t, IS_INDEX)).toBe(NEWS_PENALTY.NONE)
+      })
+    }
+
+    const 수급 = '[코스닥 외국인] 대한광통신 에코프로 알테오젠 집중 매수'
+    it(`국내사 행에서는 감점한다: ${수급}`, () => {
+      expect(newsPenalty(수급, NOT_INDEX)).toBe(NEWS_PENALTY.NON_NEWS)
+    })
+    it('지수 행에서는 수급도 그 지수의 뉴스다 — 감점하지 않는다', () => {
+      expect(newsPenalty(수급, IS_INDEX)).toBe(NEWS_PENALTY.NONE)
+    })
+  })
+
+  describe('감점하면 안 되는 진짜 IR 뉴스 (라이브 실측)', () => {
+    // 이 블록이 없으면 "전부 감점" 구현도 위의 모든 테스트를 통과한다.
+    const CLEAN = [
+      "리가켐바이오 파트너사 소티오 'SOT106' 美 FDA 패스트트랙 지정",
+      "SK바이오팜, 뇌전증 신약 후보 '오파칼림' 도입…두번째 신약 美 직판 기반 마련",
+      '유바이오로직스, 유팝라이프사이언스에 1000만달러 출자…지분 80% 확보',
+      '신윤철 GC녹십자 팀장 "WHO PQ, 결승선 아닌 출발선"',
+      "B형간염 '평생 복약' 공식 깨지나…한국 환자 참여 GSK 신약 日 승인 의미",
+      "K-바이오 1~8월 기술수출 17조…알테오젠 'ALT-B4' 1100억 돌파",
+      '한미약품 3.5조 잭팟에 제약株 불붙었다…오름·앱클론도 급등',
+    ]
+    for (const t of CLEAN) {
+      it(`무감점: ${t}`, () => {
+        expect(newsPenalty(t, NOT_INDEX)).toBe(NEWS_PENALTY.NONE)
+        expect(newsPenalty(t, IS_INDEX)).toBe(NEWS_PENALTY.NONE)
+      })
+    }
+  })
+})
+
+describe('topClusters — 감점 순위', () => {
+  // 알테오젠 2026-08-27 실사례 그대로. 브랜드평판 집계가 3개 매체에 동시 배포되어
+  // 1개 매체뿐인 진짜 기술수출 뉴스를 밀어냈다.
+  const 브랜드평판 = [
+    '생물공학 상장기업 브랜드평판 8월 빅데이터 분석결과…1위 알테오젠',
+    '생물공학 상장기업 브랜드평판 8월 빅데이터 분석결과 1위 알테오젠 2위 셀트리온',
+    '브랜드평판 8월 빅데이터 분석결과 1위 알테오젠 2위 셀트리온 3위 삼성바이오',
+  ]
+  const 기술수출 = "K-바이오 1~8월 기술수출 17조…알테오젠 'ALT-B4' 1100억 돌파"
+
+  it('3개 매체 브랜드평판보다 1개 매체 기술수출 뉴스가 앞선다', () => {
+    const r = topClusters([...브랜드평판, 기술수출].map(t => item(t)), 3, NOT_INDEX)
+    expect(r[0].representative.title).toBe(기술수출)
+    expect(r[0].size).toBe(1)
+    expect(r[0].penalty).toBe(NEWS_PENALTY.NONE)
+    expect(r[1].size).toBe(3)
+    expect(r[1].penalty).toBe(NEWS_PENALTY.NON_NEWS)
+  })
+
+  it('감점 순위는 후보를 버리지 않는다 — 전부 감점 대상이어도 그대로 나온다', () => {
+    // 에이비엘바이오가 2026-08-27에 정확히 이 상태였다: 통과한 기사 2건이 전부
+    // 자동생성 주가 기사였다. 하드 필터였다면 이 행이 「당일·D-1 기사 없음」으로
+    // 단정됐을 것이다 — 실제로는 기사가 있었는데도.
+    const items = [
+      '에이비엘바이오 주가, 8월 27일 장중 76,500원 2.55% 상승',
+      '에이비엘바이오, 장초반 1%대 상승…최근 교차 흐름 속 7만5000원대',
+    ].map(t => item(t))
+    const r = topClusters(items, 3, NOT_INDEX)
+    expect(r).toHaveLength(2)
+    expect(r.every(c => c.penalty === NEWS_PENALTY.AUTO_QUOTE)).toBe(true)
+  })
+
+  it('후보 3건이 전부 감점 대상이어도 3건 그대로 나온다', () => {
+    const items = [
+      '생물공학 상장기업 브랜드평판 8월 빅데이터 분석결과…1위 알테오젠',
+      "[광고로 읽는 시대]한국화이자 '모리민'",
+      '[헬로스톡] 8/27 주목할 종목 : 인바디·SK바이오팜·SK이노베이션',
+    ].map(t => item(t))
+    expect(topClusters(items, 3, NOT_INDEX)).toHaveLength(3)
+  })
+
+  describe('같은 입력, 카테고리만 다를 때 1순위가 뒤집힌다', () => {
+    // 시황 3개 매체 vs 개별 기업 뉴스 1개 매체.
+    const 시황 = [
+      '코스피 반도체 강세에 2600선 회복',
+      '코스피 반도체 강세에 2600선 회복 마감',
+      '코스피 반도체 강세에 2600선 회복…환율 하락',
+    ]
+    const 기업뉴스 = '셀트리온 짐펜트라 미국 처방 확대'
+    const items = () => [...시황, 기업뉴스].map(t => item(t))
+
+    it('지수 행: 시황이 그대로 1순위다 (지금 잘 되는 것을 지킨다)', () => {
+      const r = topClusters(items(), 3, IS_INDEX)
+      expect(r[0].representative.title).toBe(시황[0])
+      expect(r[0].size).toBe(3)
+      expect(r[0].penalty).toBe(NEWS_PENALTY.NONE)
+    })
+
+    it('국내사 행: 같은 입력인데 개별 기업 뉴스가 1순위가 된다', () => {
+      const r = topClusters(items(), 3, NOT_INDEX)
+      expect(r[0].representative.title).toBe(기업뉴스)
+      expect(r[0].penalty).toBe(NEWS_PENALTY.NONE)
+      expect(r[1].penalty).toBe(NEWS_PENALTY.MARKET_WRAP)
+      // 어느 쪽에서도 사라지는 후보는 없다
+      expect(r).toHaveLength(2)
+    })
   })
 })

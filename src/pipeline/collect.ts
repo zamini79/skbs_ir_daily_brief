@@ -303,7 +303,9 @@ export async function runCollection(now: Date): Promise<{
           const items = await searchNaverNews(inst.newsQuery, now)
           const filtered = filterByTitleMention(items, resolveAliases(inst))
           if (!(await recordNewsFetch(run.id, inst.id, 'OK', null))) newsRecordFailed++
-          return { inst, clusters: topClusters(filtered, TOP_N) }
+          // isIndex 를 넘기지 않으면 시황·수급 기사가 지수 3행에서도 감점되어
+          // 지금 잘 뽑히는 1순위가 전부 바뀐다(cluster.ts 의 newsPenalty 참고).
+          return { inst, clusters: topClusters(filtered, TOP_N, { isIndex: inst.isIndex }) }
         } catch (e) {
           // 사유는 그대로 남긴다. 지어내지 않는다 — 담당자가 이 문구를 근거로 판단한다.
           const reason = e instanceof Error ? e.message : String(e)
