@@ -10,7 +10,7 @@ vi.mock('./twelvedata', () => ({
 }))
 vi.mock('./marketstack', () => ({
   fetchMarketstackQuotes: vi.fn(async () => new Map([['GSK.L', { close: 1890.5, prevClose: 1875, currency: 'GBP', asOf: '2026-08-25' }]])),
-  fetchMarketstackYearOpen: vi.fn(async () => new Map()),
+  fetchMarketstackYtdBase: vi.fn(async () => new Map()),
 }))
 
 import { fetchAllQuotes } from './index'

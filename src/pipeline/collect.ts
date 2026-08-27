@@ -3,7 +3,7 @@ import { kstDateString } from '@/domain/date'
 import { changePct, ytdPct } from '@/domain/calc'
 import { fetchFxToKrw } from '@/providers/fx/frankfurter'
 import { fetchAllQuotes, type QuoteTarget } from '@/providers/quote'
-import { fetchYearOpen } from '@/providers/quote/yearOpen'
+import { fetchYtdBase } from '@/providers/quote/ytdBase'
 import { searchNaverNews } from '@/providers/news/naver'
 import { fetchArticleBody } from '@/providers/news/article'
 import { topClusters, filterByTitleMention } from './cluster'
@@ -87,22 +87,22 @@ export async function runCollection(now: Date): Promise<{
   // 2) 시세
   const quotes = await fetchAllQuotes(targets)
 
-  // 3) 연초 기준가 — 캐시에 없는 종목만 조회
-  const cached = await prisma.yearOpenPrice.findMany({ where: { year } })
+  // 3) 연초대비 기준가(전년 마지막 거래일 종가) — 캐시에 없는 종목만 조회
+  const cached = await prisma.ytdBasePrice.findMany({ where: { year } })
   const cachedIds = new Set(cached.map(c => c.instrumentId))
   const missing = targets.filter(t => !cachedIds.has(t.id))
   if (missing.length > 0) {
-    const fetched = await fetchYearOpen(missing, year)
+    const fetched = await fetchYtdBase(missing, year)
     for (const [instrumentId, price] of fetched) {
-      await prisma.yearOpenPrice.upsert({
+      await prisma.ytdBasePrice.upsert({
         where: { instrumentId_year: { instrumentId, year } },
         update: { price },
         create: { instrumentId, year, price },
       })
     }
   }
-  const yearOpens = new Map(
-    (await prisma.yearOpenPrice.findMany({ where: { year } })).map(c => [c.instrumentId, Number(c.price)]),
+  const ytdBases = new Map(
+    (await prisma.ytdBasePrice.findMany({ where: { year } })).map(c => [c.instrumentId, Number(c.price)]),
   )
 
   // 4) 시세 저장. 종목 하나의 DB 쓰기가 실패해도(일시적 접속 장애 등) 나머지 22종목은
@@ -124,7 +124,7 @@ export async function runCollection(now: Date): Promise<{
         return
       }
       const rate = resolveFxRate(inst.currency, fx)
-      const yearOpen = yearOpens.get(inst.id)
+      const ytdBase = ytdBases.get(inst.id)
       const cap = resolveMarketCap({
         isIndex: inst.isIndex,
         quoteMarketCap: q.marketCapKrwTrillion,
@@ -141,7 +141,7 @@ export async function runCollection(now: Date): Promise<{
           close: q.close,
           prevClose: q.prevClose,
           changePct: changePct(q.close, q.prevClose),
-          ytdPct: yearOpen ? ytdPct(q.close, yearOpen) : null,
+          ytdPct: ytdBase ? ytdPct(q.close, ytdBase) : null,
           marketCapKrwTrillion: cap,
           fxRate: rate,
           asOf: q.asOf,

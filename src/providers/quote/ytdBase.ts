@@ -1,5 +1,5 @@
 import type { QuoteTarget } from './index'
-import { fetchMarketstackYearOpen } from './marketstack'
+import { fetchMarketstackYtdBase } from './marketstack'
 
 /**
  * 네이버 siseJson 은 헤더 행에 홑따옴표를 써서 유효한 JSON 이 아니다.
@@ -15,10 +15,11 @@ export function parseNaverSiseJson(raw: string): Array<{ date: string; open: num
   return out
 }
 
-async function naverYearOpen(symbol: string, year: number): Promise<number | null> {
+async function naverYtdBase(symbol: string, year: number): Promise<number | null> {
+  const prev = year - 1
   const url =
     `https://api.finance.naver.com/siseJson.naver?symbol=${symbol}` +
-    `&requestType=1&startTime=${year}0101&endTime=${year}0120&timeframe=day`
+    `&requestType=1&startTime=${prev}1201&endTime=${prev}1231&timeframe=day`
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://finance.naver.com/' },
   })
@@ -26,26 +27,31 @@ async function naverYearOpen(symbol: string, year: number): Promise<number | nul
   const rows = parseNaverSiseJson(await res.text())
   if (rows.length === 0) return null
   rows.sort((a, b) => a.date.localeCompare(b.date))
-  return rows[0].open // 첫 거래일 '시가'. 종가가 아니다.
+  return rows[rows.length - 1].close // 전년 마지막 거래일 종가 (스펙 §3.5)
 }
 
-async function twelveDataYearOpen(symbol: string, year: number): Promise<number | null> {
+async function twelveDataYtdBase(symbol: string, year: number): Promise<number | null> {
   const key = process.env.TWELVEDATA_API_KEY
   if (!key) return null
+  const prev = year - 1
   const url =
     `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1day` +
-    `&start_date=${year}-01-01&end_date=${year}-01-20&apikey=${key}`
+    `&start_date=${prev}-12-01&end_date=${prev}-12-31&apikey=${key}`
   const res = await fetch(url)
   if (!res.ok) return null
-  const json = (await res.json()) as { values?: Array<{ datetime: string; open: string }> }
+  const json = (await res.json()) as { values?: Array<{ datetime: string; close: string }> }
   const values = json.values ?? []
   if (values.length === 0) return null
+  // Twelve Data 는 기본이 최신순(desc)이다. 정렬 없이 [0]을 쓰면 12월 초 종가를 집는다.
   values.sort((a, b) => a.datetime.localeCompare(b.datetime))
-  return Number(values[0].open)
+  return Number(values[values.length - 1].close) // 전년 마지막 거래일 종가 (스펙 §3.5)
 }
 
-/** 연 1회만 부르고 DB(YearOpenPrice)에 캐시한다. 키는 instrument.id. */
-export async function fetchYearOpen(
+/**
+ * 연초대비(YTD) 기준가 = 전년도 마지막 거래일의 종가 (스펙 §3.5).
+ * 연 1회만 부르고 DB(YtdBasePrice)에 캐시한다. 키는 instrument.id.
+ */
+export async function fetchYtdBase(
   targets: QuoteTarget[],
   year: number,
 ): Promise<Map<string, number>> {
@@ -58,21 +64,21 @@ export async function fetchYearOpen(
     (async () => {
       if (ms.length === 0) return
       try {
-        const m = await fetchMarketstackYearOpen(ms.map(t => t.quoteSymbol), year)
+        const m = await fetchMarketstackYtdBase(ms.map(t => t.quoteSymbol), year)
         for (const t of ms) {
           const v = m.get(t.quoteSymbol)
           if (v !== undefined) out.set(t.id, v)
         }
       } catch {
-        // 연초가는 없어도 나머지 열은 채워야 한다. 조용히 건너뛴다.
+        // 연초 기준가는 없어도 나머지 열은 채워야 한다. 조용히 건너뛴다.
       }
     })(),
     ...others.map(async t => {
       try {
         const v =
           t.quoteSource === 'twelvedata'
-            ? await twelveDataYearOpen(t.quoteSymbol, year)
-            : await naverYearOpen(t.quoteSymbol, year)
+            ? await twelveDataYtdBase(t.quoteSymbol, year)
+            : await naverYtdBase(t.quoteSymbol, year)
         if (v !== null && Number.isFinite(v)) out.set(t.id, v)
       } catch {
         // 위와 같다

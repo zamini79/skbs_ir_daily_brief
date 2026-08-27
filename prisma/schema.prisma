@@ -28,12 +28,13 @@ model Instrument {
   quotes     QuoteSnapshot[]
   candidates NewsCandidate[]
   selections Selection[]
-  yearOpens  YearOpenPrice[]
+  ytdBases   YtdBasePrice[]
 
   @@unique([displayOrder])
 }
 
-model YearOpenPrice {
+/// 연초대비(YTD) 기준가 캐시 = 전년도 마지막 거래일의 종가 (스펙 §3.5).
+model YtdBasePrice {
   id           String     @id @default(cuid())
   instrumentId String
   year         Int

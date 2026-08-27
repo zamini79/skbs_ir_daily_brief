@@ -49,17 +49,22 @@ export async function fetchMarketstackQuotes(symbols: string[]): Promise<Map<str
   return out
 }
 
-/** 연초 기준가. 연 1회만 호출하고 DB에 캐시한다. */
-export async function fetchMarketstackYearOpen(
+/**
+ * 연초대비(YTD) 기준가 = 전년도 마지막 거래일의 종가 (스펙 §3.5).
+ * 연 1회만 호출하고 DB에 캐시한다.
+ */
+export async function fetchMarketstackYtdBase(
   symbols: string[],
   year: number,
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>()
   if (symbols.length === 0) return out
 
+  const prev = year - 1
+  // limit은 심볼 전체에 걸친 전역 캡이다. 12월 창은 31일이므로 심볼당 31행을 잡는다.
   const url =
     `${BASE}/eod?access_key=${key()}&symbols=${symbols.join(',')}` +
-    `&date_from=${year}-01-01&date_to=${year}-01-15&limit=${symbols.length * 15}`
+    `&date_from=${prev}-12-01&date_to=${prev}-12-31&limit=${symbols.length * 31}`
   const res = await fetch(url)
   if (!res.ok) throw new Error(`marketstack HTTP ${res.status}`)
   const json = await res.json()
@@ -71,7 +76,7 @@ export async function fetchMarketstackYearOpen(
       .filter(r => r.symbol === symbol)
       .sort((a, b) => a.date.localeCompare(b.date))
     if (mine.length === 0) continue
-    out.set(symbol, mine[0].open) // 그 해 첫 거래일 시가 (종가 아님 — YTD 기준가는 시가)
+    out.set(symbol, mine[mine.length - 1].close) // 전년 마지막 거래일 종가 (스펙 §3.5)
   }
   return out
 }
