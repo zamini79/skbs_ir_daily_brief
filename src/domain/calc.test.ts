@@ -6,8 +6,12 @@ describe('changePct', () => {
     // 37,550 / 전일 38,300 => -0.0196
     expect(changePct(37550, 38300)).toBeCloseTo(-0.0196, 4)
   })
-  it('전일가가 0이면 0을 준다', () => {
-    expect(changePct(100, 0)).toBe(0)
+  it('전일가가 0이면 null 이다 — 0 을 주면 화면에서 진짜 보합과 구분되지 않는다', () => {
+    // format.ts 가 보합(0)과 값 없음(-)을 갈라 둔 원칙과 같다.
+    expect(changePct(100, 0)).toBeNull()
+  })
+  it('진짜 보합은 여전히 0 이다 — null 과 섞이지 않는다', () => {
+    expect(changePct(100, 100)).toBe(0)
   })
 })
 
@@ -15,8 +19,11 @@ describe('ytdPct', () => {
   it('연초 대비 상승을 계산한다', () => {
     expect(ytdPct(110, 100)).toBeCloseTo(0.1, 6)
   })
-  it('연초가가 0이면 0을 준다', () => {
-    expect(ytdPct(110, 0)).toBe(0)
+  it('연초가가 0이면 null 이다', () => {
+    expect(ytdPct(110, 0)).toBeNull()
+  })
+  it('연초가와 같으면 0 이다', () => {
+    expect(ytdPct(100, 100)).toBe(0)
   })
 })
 
