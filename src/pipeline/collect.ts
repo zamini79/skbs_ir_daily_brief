@@ -14,6 +14,7 @@ import {
   resolveAliases,
   missingFxCurrencies,
   resolveFxRate,
+  currencyMismatchReason,
   resolveMarketCap,
   computeSameEventAsRank,
   createQuotaGuard,
@@ -218,6 +219,27 @@ export async function runCollection(now: Date): Promise<{
         if (q instanceof Error) quoteFailed++
         return
       }
+
+      // 값을 받았어도 그 값이 **우리가 기대한 통화의 값**이 아니면 쓰지 않는다.
+      // 아래 resolveFxRate 는 시드의 통화로 환율을 고르므로, 응답이 다른 통화면
+      // 시총이 환율 배수만큼 조용히 틀리고 가격은 틀린 통화 라벨을 달고 나온다.
+      // 시총만 비우는 것으로는 부족하다 — 가격 칸이 여전히 그럴듯한 숫자를
+      // 보여주고, close 가 있으면 quoteFailureReason(repo.ts)이 사유를 화면에
+      // 올리지 않아 아무 데도 남지 않는다. 그래서 위 실패 분기와 **같은 방식으로**
+      // 숫자 없이 사유만 남긴다: 행은 「시세 실패」로 뜨고 배너 카운터에도 잡힌다.
+      const mismatch = currencyMismatchReason(inst.currency, q.currency)
+      if (mismatch) {
+        await prisma.quoteSnapshot.create({
+          data: {
+            runId: run.id, instrumentId: inst.id, sourceName: inst.quoteSource,
+            errorMessage: mismatch,
+          },
+        })
+        failed++
+        quoteFailed++
+        return
+      }
+
       const rate = resolveFxRate(inst.currency, fx)
       const ytdBase = ytdBases.get(inst.id)
       const cap = resolveMarketCap({

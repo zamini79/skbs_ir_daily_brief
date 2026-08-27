@@ -52,6 +52,42 @@ export function resolveFxRate(currency: string, fx: Record<string, number>): num
 }
 
 /**
+ * 통화 이름을 비교 가능한 형태로 접는다.
+ *
+ * **단위 차이는 통화 차이가 아니다.** 런던은 펜스(GBX/GBp)로 호가하지만 통화는
+ * GBP 이고, 그 100배 차이는 `priceDivisorForMarketCap` 이 이미 처리한다
+ * (스펙 §3.2 주의 1). marketstack 은 실측상 `GSK.L` 에 `GBP` 를 주는데, 언젠가
+ * 표기를 `GBX` 로 고치더라도 그건 표기 개선이지 다른 상장으로 갈아탄 것이
+ * 아니므로 멀쩡한 행을 버리면 안 된다.
+ */
+function canonicalCurrency(c: string): string {
+  const u = c.trim().toUpperCase()
+  return u === 'GBX' ? 'GBP' : u
+}
+
+/**
+ * provider 가 돌려준 통화가 시드에 등록된 통화와 **다른 통화**면 그 사유를 준다.
+ * 같거나 판단할 수 없으면 null 이다.
+ *
+ * 왜 필요한가: `resolveFxRate(inst.currency, fx)` 는 **시드의 통화**로 환율을
+ * 고르는데 `q.close` 는 **provider 가 돌려준 통화**의 가격이다. 둘이 어긋나면
+ * 시가총액이 환율 배수만큼 조용히 틀리고, 화면의 가격은 틀린 통화 라벨을 달고
+ * 나온다. 스펙 §3.2 가 실측으로 경고한 사고 형태다 — marketstack 이 심볼 해석을
+ * 바꿔 `GSK.L` 에 뉴욕 ADR(USD) 값을 주면 그 USD 가격에 GBP 환율을 곱하고 100으로
+ * 나눈다. 그럴듯한 숫자라서 아무도 눈치채지 못한다.
+ *
+ * 소스가 통화를 알려주지 않으면(marketstack 의 `price_currency ?? ''`) 판단하지
+ * 않는다 — 모르는 것을 아는 것처럼 단정하지 않는다는 이 코드베이스의 규칙 그대로다.
+ */
+export function currencyMismatchReason(expected: string, actual: string): string | null {
+  const e = canonicalCurrency(expected)
+  const a = canonicalCurrency(actual)
+  if (!e || !a) return null
+  if (e === a) return null
+  return `통화 불일치: 기대 ${expected}, 응답 ${actual} — 다른 통화의 가격이므로 이 행의 시세를 버렸습니다`
+}
+
+/**
  * 시가총액(조원)을 계산한다.
  * - 지수는 시가총액 개념이 없다 → null.
  * - 소스(네이버 국내주식)가 시총을 직접 준 경우 환율과 무관하게 그 값을 쓴다.

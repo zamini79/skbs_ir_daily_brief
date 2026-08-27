@@ -4,6 +4,7 @@ import {
   resolveAliases,
   missingFxCurrencies,
   resolveFxRate,
+  currencyMismatchReason,
   resolveMarketCap,
   computeSameEventAsRank,
   isQuotaExhaustedMessage,
@@ -102,6 +103,39 @@ describe('resolveFxRate', () => {
 
   it('환율 조회가 통째로 실패해 빈 객체가 와도 null을 준다', () => {
     expect(resolveFxRate('USD', {})).toBeNull()
+  })
+})
+
+describe('currencyMismatchReason', () => {
+  it('같은 통화면 null 이다', () => {
+    expect(currencyMismatchReason('USD', 'USD')).toBeNull()
+    expect(currencyMismatchReason('KRW', 'KRW')).toBeNull()
+  })
+
+  it('대소문자 차이는 불일치가 아니다', () => {
+    expect(currencyMismatchReason('USD', 'usd')).toBeNull()
+  })
+
+  it('펜스 표기(GBX/GBp)는 GBP 와 같은 통화로 본다', () => {
+    // 단위 차이는 priceDivisorForMarketCap 이 처리한다(스펙 §3.2 주의 1).
+    // 여기서 불일치로 보면 지금 정상인 GSK 행을 표기 변경만으로 버리게 된다.
+    expect(currencyMismatchReason('GBP', 'GBX')).toBeNull()
+    expect(currencyMismatchReason('GBP', 'GBp')).toBeNull()
+  })
+
+  it('ADR 전환처럼 통화 자체가 다르면 두 통화를 모두 담은 사유를 준다', () => {
+    // 스펙 §3.2 가 경고한 사고: GSK.L 에 뉴욕 ADR(USD) 값이 오는 경우.
+    const r = currencyMismatchReason('GBP', 'USD')
+    expect(r).not.toBeNull()
+    expect(r).toContain('GBP')
+    expect(r).toContain('USD')
+  })
+
+  it('소스가 통화를 알려주지 않으면 단정하지 않는다', () => {
+    // marketstack 의 `price_currency ?? ''` 경로. 모르는 것을 불일치라고 말하면
+    // 멀쩡한 행이 매일 실패로 뜬다.
+    expect(currencyMismatchReason('EUR', '')).toBeNull()
+    expect(currencyMismatchReason('EUR', '   ')).toBeNull()
   })
 })
 
