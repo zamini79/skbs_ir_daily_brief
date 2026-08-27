@@ -13,6 +13,7 @@ import {
   isolate,
   needsPendingRevert,
   buildFallbackSummaries,
+  briefRunStartData,
 } from './collectHelpers'
 
 const LONG_BODY = 'x'.repeat(30)
@@ -55,9 +56,10 @@ describe('missingFxCurrencies', () => {
     expect(missingFxCurrencies(REQUESTED, fx)).toEqual([])
   })
 
-  it('전체 실패(빈 객체)면 요청한 통화가 전부 담긴다', () => {
-    // fetchFxToKrw 가 던져서 호출부가 {} 를 들고 있는 경우다.
-    expect(missingFxCurrencies(REQUESTED, {})).toEqual(REQUESTED)
+  it('전체 실패(빈 객체)면 KRW를 뺀 나머지 통화가 전부 담긴다', () => {
+    // fetchFxToKrw 가 던져서 호출부가 {} 를 들고 있는 경우다. KRW는 애초에 국내 종목의
+    // 시가총액 계산에 쓰이지 않으므로(네이버가 직접 준다) 여기 담기면 안 된다.
+    expect(missingFxCurrencies(REQUESTED, {})).toEqual(['USD', 'GBP', 'EUR', 'CHF', 'HKD'])
   })
 
   it('부분 결손이면 빠진 통화만 담긴다 — 나머지는 멀쩡하다', () => {
@@ -71,10 +73,20 @@ describe('missingFxCurrencies', () => {
     expect(missingFxCurrencies(['USD', 'USD', 'USD'], {})).toEqual(['USD'])
   })
 
-  it('KRW 만 쓰는 구성이면 환율이 비어도 결손이 없다고 보지 않는다', () => {
-    // KRW 는 fetchFxToKrw 가 항상 1로 채운다. 그게 없다는 건 조회가 통째로 실패했다는 뜻이다.
-    expect(missingFxCurrencies(['KRW'], {})).toEqual(['KRW'])
+  it('KRW는 fx에 없어도, 심지어 요청 목록에 여러 번 들어 있어도 결코 담기지 않는다', () => {
+    // 국내 종목은 fx['KRW']를 들여다보지 않는다(resolveMarketCap이 네이버 시총을
+    // fxRate 검사보다 먼저 반환한다) — 그래서 환율 조회가 통째로 실패해도 국내 행은
+    // 전혀 영향받지 않는다. KRW를 이 목록에 실으면 있지도 않은 문제를 보고하는 셈이다.
+    expect(missingFxCurrencies(['KRW'], {})).toEqual([])
+    expect(missingFxCurrencies(['KRW', 'KRW'], {})).toEqual([])
     expect(missingFxCurrencies(['KRW'], { KRW: 1 })).toEqual([])
+  })
+
+  it('KRW만 요청한 전형적인 국내 전용 구성이면 환율이 통째로 없어도 결손이 0건이다', () => {
+    // fxFailed = missingFxCurrencies(...).length 로 계산된다(collect.ts). 전부 국내
+    // 종목인 실행에서는 fx 조회가 아예 실패해도 fxFailed가 0이어야 PARTIAL로 잘못
+    // 떨어지지 않는다.
+    expect(missingFxCurrencies(['KRW'], {}).length).toBe(0)
   })
 })
 
@@ -385,6 +397,22 @@ describe('needsPendingRevert', () => {
 
   it('OMITTED는 애초에 후보를 참조하지 않는 정상 상태다 — 되돌리지 않는다', () => {
     expect(needsPendingRevert({ decision: 'OMITTED', chosenCandidateId: null, chosenSummaryId: null })).toBe(false)
+  })
+})
+
+describe('briefRunStartData', () => {
+  it('재실행이면 status를 COLLECTING으로 되돌리고 statusDetail을 null로 비운다', () => {
+    // 비우지 않으면 재실행 도중(status=COLLECTING) 화면에 어제 실행의 실패 사유가
+    // 그대로 남아, 그 사이 화면을 연 검수자가 그것을 오늘 것으로 오인한다.
+    const { update } = briefRunStartData('2026-08-27')
+    expect(update.status).toBe('COLLECTING')
+    expect(update.statusDetail).toBeNull()
+    expect(update.finishedAt).toBeNull()
+  })
+
+  it('처음 생성하는 경우에도 COLLECTING으로 시작한다', () => {
+    const { create } = briefRunStartData('2026-08-27')
+    expect(create).toEqual({ runDate: '2026-08-27', tradeDate: '2026-08-27', status: 'COLLECTING' })
   })
 })
 

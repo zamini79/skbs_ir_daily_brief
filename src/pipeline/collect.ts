@@ -22,6 +22,7 @@ import {
   isolate,
   needsPendingRevert,
   buildFallbackSummaries,
+  briefRunStartData,
 } from './collectHelpers'
 
 /** 본문이 짧아 요약 자체를 시도하지 않은 경우의 사유 — 화면에 "사유 미기록"으로
@@ -91,10 +92,11 @@ export async function runCollection(now: Date): Promise<{
 
   const instruments = await prisma.instrument.findMany({ orderBy: { displayOrder: 'asc' } })
 
+  // briefRunStartData가 statusDetail도 함께 null로 비운다 — 그러지 않으면 재실행
+  // 도중 화면에 지난 실행의 실패 사유가 오늘 것처럼 남는다(collectHelpers.ts 참고).
   const run = await prisma.briefRun.upsert({
     where: { runDate },
-    update: { status: 'COLLECTING', startedAt: new Date(), finishedAt: null },
-    create: { runDate, tradeDate: runDate, status: 'COLLECTING' },
+    ...briefRunStartData(runDate),
   })
 
   // 이전 실행분을 지운다. Selection 은 남긴다(담당자 선택을 덮어쓰지 않는다).
@@ -144,6 +146,8 @@ export async function runCollection(now: Date): Promise<{
   }
   // 카운터는 종목이 아니라 **통화** 개수다. 환율은 종목별 사실이 아니라 실행별·통화별
   // 사실이라서, 종목 수로 세면 같은 통화를 쓰는 종목 수에 따라 숫자가 부풀려진다.
+  // missingFxCurrencies는 KRW를 절대 담지 않는다 — 국내 종목은 네이버가 시총을
+  // 직접 주므로 환율이 통째로 없어도 국내 행은 전혀 영향받지 않는다(collectHelpers.ts 참고).
   const missingCurrencies = missingFxCurrencies(currencies, fx)
   const fxFailed = missingCurrencies.length
   if (fxFailed > 0) {

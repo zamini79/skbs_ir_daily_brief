@@ -22,16 +22,24 @@ export function resolveAliases(inst: { newsQuery: string; newsAliases: string })
 }
 
 /**
- * 요청한 통화 중 환율을 얻지 못한 것들을 돌려준다.
+ * 요청한 통화 중 환율을 얻지 못한 것들을 돌려준다. KRW는 절대 여기 담기지 않는다 —
+ * 국내 종목의 시가총액은 네이버가 직접 주고(resolveMarketCap이 quoteMarketCap을
+ * fxRate 검사보다 먼저 반환한다), 국내 종목은 애초에 fx['KRW']를 들여다보지 않는다.
+ * 그래서 환율 조회가 통째로 실패해 fx가 빈 객체여도 국내 10개 행의 시가총액은
+ * 멀쩡하다. 여기서 KRW를 걸러내지 않으면 "환율 미확보: KRW, USD, ..." 라는 배너가
+ * 있지도 않은 문제(국내 종목 시총 공란)를 있는 것처럼 말하게 된다.
+ * (이 필터를 "빠뜨린 필드"로 보고 되돌리고 싶어질 수 있는데, 그러면 안 된다 — KRW는
+ * 원래도 이 목록에 실려서는 안 되는 값이다.)
  *
  * fetchFxToKrw 의 실패 형태 두 가지를 한 방식으로 잡는다:
- *  - 전체 실패: 함수가 던져서 호출부가 빈 객체를 들고 있다 → 전 통화가 여기 담긴다.
+ *  - 전체 실패: 함수가 던져서 호출부가 빈 객체를 들고 있다 → KRW를 제외한 전 통화가
+ *              여기 담긴다.
  *  - 부분 결손: 정상 반환했지만 특정 통화 키가 없다(frankfurter 의 `if (!usdToC) continue`)
  *              → 그 통화만 담긴다.
  * 둘을 갈라 보고 싶으면 호출부에서 "던졌는지"를 함께 보면 된다. 여기서는 결과만 센다.
  */
 export function missingFxCurrencies(requested: string[], fx: Record<string, number>): string[] {
-  return [...new Set(requested)].filter(c => fx[c] === undefined)
+  return [...new Set(requested)].filter(c => c !== 'KRW' && fx[c] === undefined)
 }
 
 /**
@@ -214,6 +222,26 @@ export function needsPendingRevert(selection: {
   chosenSummaryId: string | null
 }): boolean {
   return selection.decision === 'SELECTED' && selection.chosenCandidateId === null
+}
+
+/**
+ * runCollection이 시작할 때 BriefRun을 upsert할 데이터를 만든다.
+ *
+ * update 쪽에서 status를 COLLECTING으로 되돌리면서 statusDetail도 함께 null로
+ * 비운다. 비우지 않으면 재실행 도중(status=COLLECTING) 화면에는 지난 실행의
+ * statusDetail이 그대로 남는다 — 예를 들어 07:40 수집이 아직 진행 중인데 어제의
+ * "환율 미확보: ..." 문구가 여전히 붙어 있으면, 그 사이 화면을 연 검수자는 그것을
+ * 오늘 것으로 오인한다. 이번 실행의 진짜 사유는 실행이 끝난 뒤 별도로 다시 채워진다
+ * (collect.ts 끝부분의 status 갱신).
+ */
+export function briefRunStartData(runDate: string): {
+  update: { status: 'COLLECTING'; statusDetail: null; startedAt: Date; finishedAt: null }
+  create: { runDate: string; tradeDate: string; status: 'COLLECTING' }
+} {
+  return {
+    update: { status: 'COLLECTING', statusDetail: null, startedAt: new Date(), finishedAt: null },
+    create: { runDate, tradeDate: runDate, status: 'COLLECTING' },
+  }
 }
 
 /** 접두사/포함 비교용으로 공백만 접는다. 자카드 같은 유사도는 과하다 — 네이버
