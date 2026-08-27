@@ -184,7 +184,21 @@ export function BriefTable({ runDate, rows }: { runDate: string; rows: ClientRow
                     <td className="px-2 py-1.5">{formatPrevDiff(row.display.close, row.display.prevClose)}</td>
                     <td className="px-2 py-1.5">{pct(row.display.changePct)}</td>
                     <td className="px-2 py-1.5">{pct(row.quote?.ytdPct ?? null)}</td>
-                    <td className="px-2 py-1.5">{formatMarketCap(row.quote?.marketCapKrwTrillion ?? null)}</td>
+                    {/* 시총 공란의 이유를 아는 경우에만 표시한다. 환율 미확보는 해외사에만
+                        해당하고(국내는 네이버가 시총을 직접 준다), 지수와 "이유를 모르는
+                        공란"에는 아무 표시도 하지 않는다 — marketCapBlankReason 참조. */}
+                    <td className="px-2 py-1.5">
+                      {row.marketCapBlankReason === 'FX_UNAVAILABLE' ? (
+                        <span
+                          className="text-orange-700"
+                          title={`${row.instrument.currency} 환율을 받지 못해 시가총액을 계산하지 못했습니다`}
+                        >
+                          환율 미확보
+                        </span>
+                      ) : (
+                        formatMarketCap(row.quote?.marketCapKrwTrillion ?? null)
+                      )}
+                    </td>
                     <td className="px-2 py-1.5">
                       <NewsCell row={row} />
                     </td>

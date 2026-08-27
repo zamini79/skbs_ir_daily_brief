@@ -91,6 +91,14 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
         </div>
       )}
 
+      {/* 시총이 왜 비었는지 아는 경우에만 말한다. 이유를 모르면 아무 말도 하지 않는다. */}
+      {row.marketCapBlankReason === 'FX_UNAVAILABLE' && (
+        <p className="rounded border border-orange-200 bg-orange-50 p-2 text-xs text-orange-800">
+          {row.instrument.currency} 환율을 받지 못해 시가총액을 계산하지 못했습니다.
+          시세·전일대비·연초대비는 환율과 무관하므로 그대로 유효합니다.
+        </p>
+      )}
+
       <fieldset className="space-y-2">
         <legend className="mb-1 text-xs font-semibold text-gray-500">뉴스 후보</legend>
         {/*

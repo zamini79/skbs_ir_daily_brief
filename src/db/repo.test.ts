@@ -8,6 +8,7 @@ import {
   newsColumnContent,
   groupByCategory,
   resolveDisplayQuote,
+  marketCapBlankReason,
   type ClientCandidate,
   type RowState,
 } from './repo'
@@ -404,5 +405,41 @@ describe('resolveDisplayQuote', () => {
     })
     expect(result.isManual).toBe(true)
     expect(result.close).toBe(50)
+  })
+})
+
+describe('marketCapBlankReason', () => {
+  const foreign = { isIndex: false, marketCapKrwTrillion: null, fxRate: null, close: 28.3 }
+
+  it('해외사 시총이 비고 환율도 없으면 환율 미확보로 단정한다', () => {
+    expect(marketCapBlankReason(foreign)).toBe('FX_UNAVAILABLE')
+  })
+
+  // 국내 행까지 경고가 번지면 안 된다 — 이 작업의 명시적 요구사항이다.
+  it('국내 종목은 환율이 통째로 없어도 이유를 붙이지 않는다', () => {
+    // resolveMarketCap 이 네이버 시총을 fxRate 검사보다 먼저 반환하므로 값이 차 있다.
+    expect(marketCapBlankReason({
+      isIndex: false, marketCapKrwTrillion: 73.37, fxRate: null, close: 1_585_000,
+    })).toBeNull()
+  })
+
+  it('지수는 시총 개념이 없으므로 이유를 붙이지 않는다', () => {
+    expect(marketCapBlankReason({
+      isIndex: true, marketCapKrwTrillion: null, fxRate: null, close: 7675.7,
+    })).toBeNull()
+  })
+
+  it('시세 자체가 실패한 행은 환율 탓으로 돌리지 않는다', () => {
+    // close 가 없으면 수집이 그 종목에서 실패한 것이다. 원인을 환율로 단정할 수 없다.
+    expect(marketCapBlankReason({ ...foreign, close: null })).toBeNull()
+  })
+
+  it('환율은 있는데 시총이 없으면 원인을 지어내지 않는다', () => {
+    // 예: sharesOutstanding 미등록. 모르는 것을 안다고 말하지 않는다.
+    expect(marketCapBlankReason({ ...foreign, fxRate: 1383.49 })).toBeNull()
+  })
+
+  it('시총이 있으면 환율이 없어도 이유를 붙이지 않는다', () => {
+    expect(marketCapBlankReason({ ...foreign, marketCapKrwTrillion: 12.3 })).toBeNull()
   })
 })

@@ -219,6 +219,32 @@ export function resolveDisplayQuote(args: {
   return { close: null, prevClose: null, changePct: null, isManual: false }
 }
 
+/**
+ * 시가총액이 비어 있는 이유 중 **환율 미확보로 단정할 수 있는 경우만** 골라낸다.
+ * 알 수 없으면 null 을 주고, 화면은 아무 이유도 말하지 않는다 — 지어내지 않는다.
+ *
+ * 별도 저장이 필요 없다. QuoteSnapshot.fxRate 에 이미 종목별로 남아 있고
+ * (resolveFxRate 가 통화를 못 찾으면 null), 그 값 하나로 판정이 끝난다.
+ * 환율은 실행별·통화별 사실이지만 "이 행의 시총이 왜 비었나"는 행별 질문이라
+ * 행에 이미 있는 값으로 답하는 게 맞다.
+ *
+ * 국내 행으로 번지지 않는 이유: resolveMarketCap 은 quoteMarketCap(네이버가 직접 주는
+ * 시총)을 fxRate 검사보다 **먼저** 반환한다. 그래서 환율이 통째로 실패해 KRW 조차
+ * 없을 때도 국내 행은 시총이 채워지고 2번 조건에서 걸러진다.
+ */
+export function marketCapBlankReason(row: {
+  isIndex: boolean
+  marketCapKrwTrillion: number | null
+  fxRate: number | null
+  close: number | null
+}): 'FX_UNAVAILABLE' | null {
+  if (row.isIndex) return null // 지수는 시가총액 개념이 없다. 공란이 정상이다.
+  if (row.marketCapKrwTrillion !== null) return null // 값이 있으니 설명할 게 없다.
+  if (row.close === null) return null // 시세 자체가 실패한 행이다. 환율 탓이라 말할 수 없다.
+  if (row.fxRate === null) return 'FX_UNAVAILABLE'
+  return null // 환율은 있는데 시총이 없다(주식수 미등록 등). 원인을 단정하지 않는다.
+}
+
 function toNum(v: Prisma.Decimal | number | null | undefined): number | null {
   if (v === null || v === undefined) return null
   return Number(v)
@@ -284,6 +310,9 @@ export type ClientRow = {
   /** 뉴스 검색 실패 사유 원문. 성공했거나 기록이 없으면 null. 화면은 이 값만 근거로
    * 말하고 원인을 지어내지 않는다. */
   newsFetchError: string | null
+  /** 시가총액이 비어 있는 이유를 환율 미확보로 단정할 수 있으면 'FX_UNAVAILABLE'.
+   * 모르면 null 이고, 그때 화면은 이유를 말하지 않는다. */
+  marketCapBlankReason: 'FX_UNAVAILABLE' | null
 }
 
 export type ClientRun = {
@@ -385,6 +414,12 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
       }),
       display,
       newsFetchError: fetched?.error ?? null,
+      marketCapBlankReason: marketCapBlankReason({
+        isIndex: inst.isIndex,
+        marketCapKrwTrillion: toNum(q?.marketCapKrwTrillion),
+        fxRate: q?.fxRate ?? null,
+        close: quoteClose,
+      }),
     }
   })
 
