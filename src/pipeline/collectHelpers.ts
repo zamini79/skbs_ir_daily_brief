@@ -158,21 +158,28 @@ export async function isolate(worker: () => Promise<void>): Promise<{ ok: boolea
 }
 
 /**
- * 재실행으로 NewsCandidate/NewsSummary가 삭제되면 FK(onDelete: SetNull)가
- * Selection.chosenCandidateId/chosenSummaryId를 곧바로 null로 되돌린다. 하지만
- * decision은 그 자체로는 되돌아가지 않는다 — decision이 여전히 SELECTED인데 참조가
- * null이면, 존재하지 않는 후보를 가리키는 "완료된 선택"으로 보인다. 이 함수가 그
- * 판정을 내린다. OMITTED는 애초에 후보를 참조하지 않는 정상 상태이므로 대상이 아니다.
+ * 재실행으로 NewsCandidate가 삭제되면 FK(onDelete: SetNull)가
+ * Selection.chosenCandidateId를 곧바로 null로 되돌린다. 하지만 decision은 그 자체로는
+ * 되돌아가지 않는다 — decision이 여전히 SELECTED인데 참조가 null이면, 존재하지 않는
+ * 후보를 가리키는 "완료된 선택"으로 보인다. 이 함수가 그 판정을 내린다. OMITTED는
+ * 애초에 후보를 참조하지 않는 정상 상태이므로 대상이 아니다.
+ *
+ * chosenCandidateId만 본다 — chosenSummaryId는 보지 않는다. collect.ts는 재실행
+ * 시작 시 NewsCandidate를 통째로 지우므로(그 후보에 딸린 NewsSummary도 함께 지워짐),
+ * 후보 자체가 사라진 경우 chosenCandidateId 하나만으로 충분히 잡아낸다. 반대로
+ * chosenSummaryId가 null인데 chosenCandidateId는 여전히 유효한 경우도 있다 —
+ * 담당자가 고른 후보에 애초에 요약이 없어서(summaryError 없이 summaries가 빈
+ * 경우) 요약을 고르지 못한 채 선택을 끝낸 것으로, 이는 무효화가 아니라 정상적으로
+ * 끝난 선택이다. chosenSummaryId도 조건에 넣으면 그런 정상 선택을 매번 PENDING으로
+ * 되돌리게 된다.
  */
 export function needsPendingRevert(selection: {
   decision: string
   chosenCandidateId: string | null
+  /** 실제 Selection 행 모양과 맞추기 위해 받지만, 판정에는 쓰지 않는다(위 주석 참고). */
   chosenSummaryId: string | null
 }): boolean {
-  return (
-    selection.decision === 'SELECTED' &&
-    (selection.chosenCandidateId === null || selection.chosenSummaryId === null)
-  )
+  return selection.decision === 'SELECTED' && selection.chosenCandidateId === null
 }
 
 /** 접두사/포함 비교용으로 공백만 접는다. 자카드 같은 유사도는 과하다 — 네이버

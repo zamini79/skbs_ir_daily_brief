@@ -27,7 +27,6 @@ export function rowDisplayState(row: {
   candidateCount: number
   decision: string
   chosenCandidateId: string | null
-  chosenSummaryId: string | null
 }): RowState {
   if (row.candidateCount === 0) return 'NO_NEWS'
   if (row.decision === 'OMITTED') return 'OMITTED'
@@ -283,7 +282,6 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
         candidateCount: mine.length,
         decision: sel?.decision ?? 'PENDING',
         chosenCandidateId: sel?.chosenCandidateId ?? null,
-        chosenSummaryId: sel?.chosenSummaryId ?? null,
       }),
       display,
     }

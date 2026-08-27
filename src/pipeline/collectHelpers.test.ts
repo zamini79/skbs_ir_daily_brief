@@ -272,19 +272,20 @@ describe('isolate', () => {
 
 describe('needsPendingRevert', () => {
   it('SELECTED인데 chosenCandidateId가 null이면 되돌려야 한다', () => {
-    expect(needsPendingRevert({ decision: 'SELECTED', chosenCandidateId: null, chosenSummaryId: 's1' })).toBe(true)
-  })
-
-  it('SELECTED인데 chosenSummaryId가 null이면 되돌려야 한다', () => {
-    expect(needsPendingRevert({ decision: 'SELECTED', chosenCandidateId: 'c1', chosenSummaryId: null })).toBe(true)
-  })
-
-  it('SELECTED인데 둘 다 null이면 되돌려야 한다', () => {
     expect(needsPendingRevert({ decision: 'SELECTED', chosenCandidateId: null, chosenSummaryId: null })).toBe(true)
   })
 
-  it('SELECTED이고 참조가 온전하면 되돌리지 않는다', () => {
+  it('SELECTED이고 chosenCandidateId가 있으면 되돌리지 않는다', () => {
     expect(needsPendingRevert({ decision: 'SELECTED', chosenCandidateId: 'c1', chosenSummaryId: 's1' })).toBe(false)
+  })
+
+  // 후보는 여전히 유효한데(chosenCandidateId 있음) 그 후보에 애초에 요약이 없어
+  // (chosenSummaryId가 null) 요약을 고르지 못한 채 선택을 끝낸 경우 — 무효화가
+  // 아니라 정상 종결이다. 2026-08-27 실행 검수 화면에서 실제로 이 상태가
+  // STALE_SELECTION으로 잘못 표시됐던 결함과 같은 상황이므로, chosenSummaryId가
+  // null이어도 chosenCandidateId만 유효하면 되돌려지지 않는다는 것을 고정해 둔다.
+  it('후보 있음 + 요약 참조 null이면 무효화가 아니다 — 되돌리지 않는다', () => {
+    expect(needsPendingRevert({ decision: 'SELECTED', chosenCandidateId: 'c1', chosenSummaryId: null })).toBe(false)
   })
 
   it('PENDING은 참조가 null이어도 정상 상태다 — 되돌리지 않는다', () => {

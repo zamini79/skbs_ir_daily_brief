@@ -11,40 +11,42 @@ import {
 describe('rowDisplayState', () => {
   it('후보가 없으면 NO_NEWS 다', () => {
     expect(
-      rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, chosenSummaryId: null }),
+      rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null }),
     ).toBe('NO_NEWS')
   })
   it('후보가 없으면 담당자가 아직 안 봤어도 NO_NEWS 다', () => {
     expect(
-      rowDisplayState({ candidateCount: 0, decision: 'OMITTED', chosenCandidateId: null, chosenSummaryId: null }),
+      rowDisplayState({ candidateCount: 0, decision: 'OMITTED', chosenCandidateId: null }),
     ).toBe('NO_NEWS')
   })
   it('담당자가 뺐으면 OMITTED 다', () => {
     expect(
-      rowDisplayState({ candidateCount: 3, decision: 'OMITTED', chosenCandidateId: null, chosenSummaryId: null }),
+      rowDisplayState({ candidateCount: 3, decision: 'OMITTED', chosenCandidateId: null }),
     ).toBe('OMITTED')
   })
   it('아직 안 봤으면 PENDING 이다', () => {
     expect(
-      rowDisplayState({ candidateCount: 3, decision: 'PENDING', chosenCandidateId: null, chosenSummaryId: null }),
+      rowDisplayState({ candidateCount: 3, decision: 'PENDING', chosenCandidateId: null }),
     ).toBe('PENDING')
   })
   it('골랐으면 SELECTED 다', () => {
     expect(
-      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: 'c1', chosenSummaryId: 's1' }),
+      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: 'c1' }),
     ).toBe('SELECTED')
   })
   it('SELECTED인데 재수집으로 chosenCandidateId가 null로 되돌아갔으면 STALE_SELECTION이다', () => {
     expect(
-      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: null, chosenSummaryId: null }),
+      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: null }),
     ).toBe('STALE_SELECTION')
   })
   it('후보는 고른 채로 유효한데 그 후보에 애초에 요약이 없어 chosenSummaryId만 null이면, 무효화가 아니라 정상 종결된 SELECTED다', () => {
     // 재수집이 후보를 지운 것과 "고른 후보에 원래 요약이 없던 것"은 다르다. 후자를
     // STALE_SELECTION으로 잘못 표시하면 안 된다 — 2026-08-27 실행에서 후보 26건
     // 중 20건이 요약 없이 존재했으므로, 이 케이스는 드문 예외가 아니라 흔한 상황이다.
+    // rowDisplayState는 이제 chosenSummaryId를 아예 받지 않는다 — chosenCandidateId
+    // 만으로 판정이 충분하다는 것이 이 테스트의 요지이므로 여기서는 넘기지 않는다.
     expect(
-      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: 'c1', chosenSummaryId: null }),
+      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: 'c1' }),
     ).toBe('SELECTED')
   })
 })
