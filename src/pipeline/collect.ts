@@ -12,6 +12,7 @@ import { SUMMARY_VARIANTS } from '@/providers/summarize/prompt'
 import { pLimit } from './limit'
 import {
   resolveAliases,
+  missingFxCurrencies,
   resolveFxRate,
   resolveMarketCap,
   computeSameEventAsRank,
@@ -83,6 +84,7 @@ export async function runCollection(now: Date): Promise<{
   summariesFailed: number
   ytdBaseFailed: number
   newsFailed: number
+  fxFailed: number
 }> {
   const runDate = kstDateString(now)
   const year = Number(runDate.slice(0, 4))
@@ -123,8 +125,32 @@ export async function runCollection(now: Date): Promise<{
   // 1) 환율. 실패해도 절대 1로 대체하지 않는다 — 통화가 없으면 그 종목 시총은
   // null로 남는다(resolveFxRate/resolveMarketCap). 국내 종목은 네이버가 시총을
   // 직접 주므로 영향이 없다.
+  //
+  // 그 판단은 옳지만(틀린 숫자보다 공란이 낫다) 예전에는 실패가 아무 데도 남지 않아
+  // 해외사 9행의 시총이 통째로 조용히 비었다. 이제 어느 통화를 못 구했는지 남긴다.
+  //
+  // fetchFxToKrw 의 실패 형태는 두 가지이고 서로 구분된다:
+  //   전체 실패 — 던진다(HTTP 오류, 또는 KRW 환율 누락). 한 통화도 못 얻는다.
+  //   부분 결손 — 정상 반환하지만 특정 통화 키가 빠져 있다(frankfurter.ts 의
+  //               `if (!usdToC) continue`). 나머지 통화는 멀쩡하다.
+  // 요청한 통화와 돌려받은 키를 비교하면 둘 다 같은 방식으로 잡힌다.
   const currencies = [...new Set(instruments.map(i => i.currency))]
-  const fx = await fetchFxToKrw(currencies).catch(() => ({} as Record<string, number>))
+  let fx: Record<string, number> = {}
+  let fxError: string | null = null
+  try {
+    fx = await fetchFxToKrw(currencies)
+  } catch (e) {
+    fxError = e instanceof Error ? e.message : String(e)
+  }
+  // 카운터는 종목이 아니라 **통화** 개수다. 환율은 종목별 사실이 아니라 실행별·통화별
+  // 사실이라서, 종목 수로 세면 같은 통화를 쓰는 종목 수에 따라 숫자가 부풀려진다.
+  const missingCurrencies = missingFxCurrencies(currencies, fx)
+  const fxFailed = missingCurrencies.length
+  if (fxFailed > 0) {
+    // 사유는 있는 그대로 남긴다. 전체 실패면 원문 메시지가, 부분 결손이면 그 사실이 붙는다.
+    const why = fxError ?? '응답에 해당 통화 환율이 없음'
+    console.error(`[fx] 환율 미확보: ${missingCurrencies.join(', ')} — ${why}`)
+  }
 
   // 2) 시세
   const quotes = await fetchAllQuotes(targets)
@@ -335,11 +361,13 @@ export async function runCollection(now: Date): Promise<{
     })
   }
 
-  const status = computeRunStatus(summariesFailed, ytdBaseFailed, newsFailed)
+  const status = computeRunStatus(summariesFailed, ytdBaseFailed, newsFailed, fxFailed)
   const detailParts: string[] = []
   if (summariesFailed > 0) detailParts.push(`요약 ${summariesFailed}건 실패(후보 ${candidatesCreated}건 중)`)
   if (ytdBaseFailed > 0) detailParts.push(`연초 기준가 ${ytdBaseFailed}종목 조회 실패`)
   if (newsFailed > 0) detailParts.push(`뉴스 검색 ${newsFailed}종목 실패`)
+  // 통화 이름을 그대로 적는다 — 어느 행의 시총이 비었는지 운영자가 바로 짚을 수 있다.
+  if (fxFailed > 0) detailParts.push(`환율 미확보: ${missingCurrencies.join(', ')} (시가총액 공란)`)
   await prisma.briefRun.update({
     where: { id: run.id },
     data: {
@@ -349,5 +377,5 @@ export async function runCollection(now: Date): Promise<{
     },
   })
 
-  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, ytdBaseFailed, newsFailed }
+  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, ytdBaseFailed, newsFailed, fxFailed }
 }

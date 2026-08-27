@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { charLength } from '@/domain/text'
 import {
   resolveAliases,
+  missingFxCurrencies,
   resolveFxRate,
   resolveMarketCap,
   computeSameEventAsRank,
@@ -43,6 +44,37 @@ describe('resolveAliases', () => {
     const merck = { name: 'Merck', newsQuery: '머크', newsAliases: '' }
     expect(resolveAliases(pfizer)).toEqual(['화이자'])
     expect(resolveAliases(merck)).toEqual(['머크'])
+  })
+})
+
+describe('missingFxCurrencies', () => {
+  const REQUESTED = ['KRW', 'USD', 'GBP', 'EUR', 'CHF', 'HKD']
+
+  it('정상이면 비어 있다', () => {
+    const fx = { KRW: 1, USD: 1383, GBP: 1885, EUR: 1610, CHF: 1730, HKD: 177 }
+    expect(missingFxCurrencies(REQUESTED, fx)).toEqual([])
+  })
+
+  it('전체 실패(빈 객체)면 요청한 통화가 전부 담긴다', () => {
+    // fetchFxToKrw 가 던져서 호출부가 {} 를 들고 있는 경우다.
+    expect(missingFxCurrencies(REQUESTED, {})).toEqual(REQUESTED)
+  })
+
+  it('부분 결손이면 빠진 통화만 담긴다 — 나머지는 멀쩡하다', () => {
+    // frankfurter 가 200 을 주지만 특정 통화 rate 가 없는 경우(`if (!usdToC) continue`).
+    const fx = { KRW: 1, USD: 1383, GBP: 1885, EUR: 1610 }
+    expect(missingFxCurrencies(REQUESTED, fx)).toEqual(['CHF', 'HKD'])
+  })
+
+  it('중복 통화를 두 번 세지 않는다 — 단위는 종목이 아니라 통화다', () => {
+    // 23종목이 6통화를 쓴다. 종목 수로 세면 같은 통화가 여러 번 잡혀 부풀려진다.
+    expect(missingFxCurrencies(['USD', 'USD', 'USD'], {})).toEqual(['USD'])
+  })
+
+  it('KRW 만 쓰는 구성이면 환율이 비어도 결손이 없다고 보지 않는다', () => {
+    // KRW 는 fetchFxToKrw 가 항상 1로 채운다. 그게 없다는 건 조회가 통째로 실패했다는 뜻이다.
+    expect(missingFxCurrencies(['KRW'], {})).toEqual(['KRW'])
+    expect(missingFxCurrencies(['KRW'], { KRW: 1 })).toEqual([])
   })
 })
 
@@ -94,6 +126,28 @@ describe('resolveMarketCap', () => {
       isIndex: false, close: 1500, shares: 4_046_530_000, fxRate: 1700, priceDivisor: 1,
     })
     expect(withDivisor).toBeCloseTo(withoutDivisor! / 100, 6)
+  })
+})
+
+describe('resolveMarketCap — 환율 미확보 시 국내/해외 영향 분리', () => {
+  // 환율이 통째로 없을 때 해외사만 공란이 되어야 한다. 국내 행까지 번지면 안 된다.
+  it('국내 종목은 환율이 없어도 시총이 나온다 — 네이버가 시총을 직접 준다', () => {
+    expect(resolveMarketCap({
+      isIndex: false, quoteMarketCap: 73.37, close: 1_585_000,
+      shares: null, fxRate: null, priceDivisor: 1,
+    })).toBeCloseTo(73.37, 2)
+  })
+
+  it('해외 종목은 환율이 없으면 null 이다 — 1로 대체하지 않는다', () => {
+    expect(resolveMarketCap({
+      isIndex: false, close: 28.3, shares: 5_694_180_000, fxRate: null, priceDivisor: 1,
+    })).toBeNull()
+  })
+
+  it('지수는 환율과 무관하게 항상 null 이다 — 시총 개념이 없다', () => {
+    expect(resolveMarketCap({
+      isIndex: true, close: 7675.7, shares: null, fxRate: null, priceDivisor: 1,
+    })).toBeNull()
   })
 })
 
@@ -252,6 +306,16 @@ describe('computeRunStatus', () => {
 
   it('셋 다 없어야 READY이다', () => {
     expect(computeRunStatus(0, 0, 0)).toBe('READY')
+  })
+
+  it('환율 미확보도 PARTIAL로 본다', () => {
+    // 해외사 시가총액이 통째로 공란이 되는데 아무 표시가 없으면 아무도 모른다.
+    expect(computeRunStatus(0, 0, 0, 1)).toBe('PARTIAL')
+    expect(computeRunStatus(0, 0, 0, 6)).toBe('PARTIAL')
+  })
+
+  it('넷 다 없어야 READY이다', () => {
+    expect(computeRunStatus(0, 0, 0, 0)).toBe('READY')
   })
 })
 

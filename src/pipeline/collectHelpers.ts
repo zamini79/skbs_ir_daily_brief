@@ -22,6 +22,19 @@ export function resolveAliases(inst: { newsQuery: string; newsAliases: string })
 }
 
 /**
+ * 요청한 통화 중 환율을 얻지 못한 것들을 돌려준다.
+ *
+ * fetchFxToKrw 의 실패 형태 두 가지를 한 방식으로 잡는다:
+ *  - 전체 실패: 함수가 던져서 호출부가 빈 객체를 들고 있다 → 전 통화가 여기 담긴다.
+ *  - 부분 결손: 정상 반환했지만 특정 통화 키가 없다(frankfurter 의 `if (!usdToC) continue`)
+ *              → 그 통화만 담긴다.
+ * 둘을 갈라 보고 싶으면 호출부에서 "던졌는지"를 함께 보면 된다. 여기서는 결과만 센다.
+ */
+export function missingFxCurrencies(requested: string[], fx: Record<string, number>): string[] {
+  return [...new Set(requested)].filter(c => fx[c] === undefined)
+}
+
+/**
  * 환율 조회. 없으면 null — 절대 1로 대체하지 않는다.
  * 1로 대체하면 시가총액이 조용히 통화 배수만큼 틀어진다(예: USD를 1로 두면
  * 실제 값의 1300배 이상 축소된 숫자가 그럴듯하게 찍힌다).
@@ -146,13 +159,21 @@ export async function attemptSummary(
  *
  * 뉴스 검색 실패도 같은 규칙이다. 이쪽은 오히려 더 나빴다 — 실패한 행이 화면에서
  * "당일·D-1 기사 없음"이라는 **단정**으로 보였기 때문이다(모르는 것을 아는 것처럼 표시).
- * 이제 NewsFetch 에 사실이 남고, 상태에도 반영해 운영자가 실행 단위로 알 수 있다. */
+ * 이제 NewsFetch 에 사실이 남고, 상태에도 반영해 운영자가 실행 단위로 알 수 있다.
+ *
+ * 환율 미확보도 같은 규칙이다. 환율이 없으면 해외사 시가총액이 통째로 공란이 되는데,
+ * 1로 대체하지 않는 판단은 옳지만(틀린 숫자보다 공란이 낫다) 그 사실이 어디에도 남지
+ * 않으면 담당자는 시총이 왜 비었는지 알 수 없다. 이쪽만 단위가 종목이 아니라 통화다 —
+ * 환율은 실행별·통화별 사실이기 때문이다. */
 export function computeRunStatus(
   summariesFailed: number,
   ytdBaseFailed = 0,
   newsFailed = 0,
+  fxFailed = 0,
 ): 'READY' | 'PARTIAL' {
-  return summariesFailed > 0 || ytdBaseFailed > 0 || newsFailed > 0 ? 'PARTIAL' : 'READY'
+  return summariesFailed > 0 || ytdBaseFailed > 0 || newsFailed > 0 || fxFailed > 0
+    ? 'PARTIAL'
+    : 'READY'
 }
 
 /**
