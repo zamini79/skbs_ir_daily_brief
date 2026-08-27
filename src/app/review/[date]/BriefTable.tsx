@@ -214,6 +214,28 @@ export function BriefTable({ runDate, rows }: { runDate: string; rows: ClientRow
                             <span className="ml-1 text-[10px] text-blue-600">(수기)</span>
                           )}
                         </>
+                      ) : row.quoteFailReason !== null ? (
+                        /*
+                         * 시세 수집이 실패한 행. 그냥 '-'로 두면 주가·전일대비·%·연초대비
+                         * 네 칸이 전부 공란이 되는데, 그 공란은 "값이 없다"와 "받아오지
+                         * 못했다"를 똑같이 뜻하게 된다 — 배너가 초록색 「준비 완료」일
+                         * 때는 담당자가 구분할 근거가 화면에 하나도 없다.
+                         *
+                         * NEWS_FAILED 라벨(NewsCell)과 **같은 시각 언어**를 쓴다
+                         * (orange pill). 화면에 실패 표시가 두 가지 방언으로 존재하면
+                         * 안 된다. 같은 orange 계열인 시총의 '환율 미확보'가 pill이
+                         * 아니라 평문인 것은 뜻이 달라서다 — 그쪽은 시총 한 칸만
+                         * 못 채운 부분 결손이고, 이쪽은 이 행의 숫자가 통째로 없다.
+                         *
+                         * 사유는 지어내지 않는다. title 에 errorMessage 원문을 그대로
+                         * 남겨 담당자·운영자가 DB를 열지 않고도 원문을 볼 수 있게 한다.
+                         */
+                        <span
+                          className="inline-block rounded bg-orange-200 px-2 py-0.5 text-xs font-medium text-orange-900"
+                          title={row.quoteFailReason}
+                        >
+                          시세 실패
+                        </span>
                       ) : (
                         '-'
                       )}

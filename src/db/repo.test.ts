@@ -9,6 +9,7 @@ import {
   groupByCategory,
   resolveDisplayQuote,
   marketCapBlankReason,
+  quoteFailureReason,
   type ClientCandidate,
   type RowState,
 } from './repo'
@@ -487,5 +488,61 @@ describe('marketCapBlankReason', () => {
 
   it('시총이 있으면 환율이 없어도 이유를 붙이지 않는다', () => {
     expect(marketCapBlankReason({ ...foreign, marketCapKrwTrillion: 12.3 })).toBeNull()
+  })
+})
+
+describe('quoteFailureReason', () => {
+  // 자동 소스가 실패해 표시할 값이 아무것도 없는 행.
+  const failed = {
+    quoteSource: 'twelvedata',
+    displayClose: null,
+    errorMessage: 'twelvedata: PFE 응답 없음',
+  }
+
+  it('수집이 실패하고 표시할 값도 없으면 사유 원문을 그대로 준다', () => {
+    // 지어내지 않는다 — errorMessage 를 요약하거나 바꾸지 않고 그대로 넘긴다.
+    expect(quoteFailureReason(failed)).toBe('twelvedata: PFE 응답 없음')
+  })
+
+  it('krx provider 가 구분해 놓은 세 사유가 각각 그대로 전달된다', () => {
+    // provider 가 휴장 상한 초과 / 지수명 불일치 / 인증을 서로 다른 문구로 갈라 놨다.
+    // 화면까지 그 구분이 살아 있어야 이 작업이 의미가 있다.
+    const reasons = [
+      '[코스피 200 헬스케어] 20260827 부터 10일을 거슬러 올라가도 거래일을 찾지 못함',
+      '[코스피 200 헬스케어] 20260826 응답 51행에 해당 지수가 없음',
+      '[코스피 200 헬스케어] KRX HTTP 401 Unauthorized Key (basDd=20260826)',
+    ]
+    for (const r of reasons) {
+      expect(quoteFailureReason({ ...failed, quoteSource: 'krx-index', errorMessage: r })).toBe(r)
+    }
+  })
+
+  it("quoteSource 가 'manual' 이면 실패라고 하지 않는다", () => {
+    // 수집을 시도조차 하지 않은 행이다. 파이프라인이 남기는 '소스 없음(수기 입력 대상)'은
+    // 기록이지 장애가 아니다 — 이걸 실패로 그리면 정상인 행에 매일 딱지가 붙는다.
+    expect(quoteFailureReason({
+      quoteSource: 'manual',
+      displayClose: null,
+      errorMessage: '소스 없음(수기 입력 대상)',
+    })).toBeNull()
+  })
+
+  it('수기 입력값이 대신 채워졌으면 실패라고 하지 않는다', () => {
+    // 담당자가 지금 조치할 것이 없고, 그 행은 이미 '(수기)' 표시로 구분된다.
+    expect(quoteFailureReason({ ...failed, displayClose: 2173.53 })).toBeNull()
+  })
+
+  it('시세가 정상이면 아무 말도 하지 않는다', () => {
+    expect(quoteFailureReason({
+      quoteSource: 'naver-stock',
+      displayClose: 1_585_000,
+      errorMessage: null,
+    })).toBeNull()
+  })
+
+  it('값도 없고 사유도 기록되지 않았으면 원인을 지어내지 않는다', () => {
+    // 예: QuoteSnapshot 쓰기 자체가 실패해 행이 아예 없는 경우. 화면은 '-' 로 두고
+    // 배너가 대신 말한다(collect.ts 의 quoteFailed 는 이 경우도 센다).
+    expect(quoteFailureReason({ ...failed, errorMessage: null })).toBeNull()
   })
 })

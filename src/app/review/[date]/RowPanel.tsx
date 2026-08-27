@@ -91,6 +91,24 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
         </div>
       )}
 
+      {/*
+        * 시세 수집이 실패한 행. 뉴스 조회 실패 블록(아래 fieldset 안)과 **같은 구조**로
+        * 말한다 — 무엇이 일어났는지 한 문장, 그다음 사유 원문 한 줄. 원문만 근거로
+        * 삼고 원인을 지어내지 않는 것도 같다.
+        *
+        * 위치가 뉴스 쪽과 다른 것은 이 사실이 뉴스가 아니라 시세에 대한 것이기
+        * 때문이다. 바로 아래 '환율 미확보' 블록과 나란히 두고 같은 박스 모양을 쓴다.
+        * quoteFailReason 은 수기 입력 대상 행과 수기 값으로 채워진 행을 이미
+        * 걸러내므로(repo.ts), 여기 뜨면 그건 진짜 실패다.
+        */}
+      {row.quoteFailReason !== null && (
+        <p className="rounded border border-orange-200 bg-orange-50 p-2 text-xs text-orange-800">
+          시세를 받아오지 못했습니다 — 주가·전일대비·%·연초대비가 비어 있는 것은 값이
+          없어서가 아니라 조회에 실패했기 때문입니다. 이 행의 숫자는 신뢰할 수 없습니다.
+          <span className="mt-0.5 block text-orange-700">사유: {row.quoteFailReason}</span>
+        </p>
+      )}
+
       {/* 시총이 왜 비었는지 아는 경우에만 말한다. 이유를 모르면 아무 말도 하지 않는다. */}
       {row.marketCapBlankReason === 'FX_UNAVAILABLE' && (
         <p className="rounded border border-orange-200 bg-orange-50 p-2 text-xs text-orange-800">

@@ -269,6 +269,34 @@ export function marketCapBlankReason(row: {
   return null // 환율은 있는데 시총이 없다(주식수 미등록 등). 원인을 단정하지 않는다.
 }
 
+/**
+ * 시세 칸이 비어 있는 이유를 **수집 실패로 단정할 수 있는 경우에만** 원문 사유로 준다.
+ * 규칙은 marketCapBlankReason 과 같다 — 모르면 null 이고, 그때 화면은 이유를 말하지 않는다.
+ *
+ * 이게 없으면 실패한 행이 주가·전일대비·%·연초대비 네 칸을 전부 `-` 로 보여주는데,
+ * 그 `-` 는 "값이 없다"와 "받아오지 못했다"를 똑같이 뜻하게 된다. 사유는 이미
+ * QuoteSnapshot.errorMessage 에 저장돼 클라이언트까지 실려 오지만 아무도 읽지 않았다.
+ *
+ * 두 경우는 실패가 아니므로 일부러 걸러낸다:
+ *
+ *  - **quoteSource 가 'manual'** — 수집을 시도조차 하지 않은 행이다. 파이프라인이
+ *    '소스 없음(수기 입력 대상)' 을 errorMessage 에 남기지만 그건 기록이지 장애가 아니다.
+ *    이걸 실패로 그리면 정상인 행에 매일 실패 딱지가 붙고, 진짜 실패와 구분이 사라진다.
+ *  - **표시할 값이 있는 행** — 수기 입력값이 대신 채웠으면 담당자가 지금 할 일이 없다.
+ *    그 행은 이미 '(수기)' 표시로 구분된다(resolveDisplayQuote).
+ *
+ * 사유는 지어내지 않는다. errorMessage 원문을 그대로 돌려주고, 원문이 없으면 null 이다.
+ */
+export function quoteFailureReason(row: {
+  quoteSource: string
+  displayClose: number | null
+  errorMessage: string | null
+}): string | null {
+  if (row.quoteSource === 'manual') return null
+  if (row.displayClose !== null) return null
+  return row.errorMessage
+}
+
 function toNum(v: Prisma.Decimal | number | null | undefined): number | null {
   if (v === null || v === undefined) return null
   return Number(v)
@@ -337,6 +365,9 @@ export type ClientRow = {
   /** 시가총액이 비어 있는 이유를 환율 미확보로 단정할 수 있으면 'FX_UNAVAILABLE'.
    * 모르면 null 이고, 그때 화면은 이유를 말하지 않는다. */
   marketCapBlankReason: 'FX_UNAVAILABLE' | null
+  /** 시세 칸이 비어 있는 이유를 수집 실패로 단정할 수 있으면 그 원문 사유. 아니면 null
+   * (수기 입력 대상이거나, 표시할 값이 있거나, 사유가 기록되지 않았다). */
+  quoteFailReason: string | null
 }
 
 export type ClientRun = {
@@ -443,6 +474,11 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
         marketCapKrwTrillion: toNum(q?.marketCapKrwTrillion),
         fxRate: q?.fxRate ?? null,
         close: quoteClose,
+      }),
+      quoteFailReason: quoteFailureReason({
+        quoteSource: inst.quoteSource,
+        displayClose: display.close,
+        errorMessage: q?.errorMessage ?? null,
       }),
     }
   })

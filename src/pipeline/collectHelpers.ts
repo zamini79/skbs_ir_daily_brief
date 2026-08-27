@@ -172,16 +172,61 @@ export async function attemptSummary(
  * 환율 미확보도 같은 규칙이다. 환율이 없으면 해외사 시가총액이 통째로 공란이 되는데,
  * 1로 대체하지 않는 판단은 옳지만(틀린 숫자보다 공란이 낫다) 그 사실이 어디에도 남지
  * 않으면 담당자는 시총이 왜 비었는지 알 수 없다. 이쪽만 단위가 종목이 아니라 통화다 —
- * 환율은 실행별·통화별 사실이기 때문이다. */
+ * 환율은 실행별·통화별 사실이기 때문이다.
+ *
+ * 시세 수집 실패는 위 넷과 같은 규칙이면서 **가장 넓은 경로**다. 실패한 행은 주가·
+ * 전일대비·%·연초대비·시가총액 다섯 칸이 전부 공란이 되는데, 이 카운터가 없으면 그
+ * 행이 초록색 「준비 완료」 배너 아래에 놓인다. Twelve Data 가 분당 크레딧을 넘기면
+ * HTTP 200 + 평면 에러 객체를 주고 미국 5행이 통째로 빠지는데(심볼별 맵이 아니라서
+ * 전 심볼이 응답에서 사라진다), 그 상태로 메일 본문이 확정될 수 있었다. marketstack
+ * 전체 실패(4행)·네이버 스키마 변경(10행)·KRX 키 만료(1행)도 같은 경로다.
+ *
+ * 세는 단위는 **실제로 실패한 종목**이다. quoteSource 가 'manual' 인 행(수집 대상이
+ * 아니라 수기 입력 대상)은 여기 들어오지 않는다 — 의도된 공란을 장애로 세면 매일
+ * PARTIAL 이 뜨고 배너가 아무 뜻도 없어진다(collect.ts 의 quoteFailed 참고). */
 export function computeRunStatus(
   summariesFailed: number,
   ytdBaseFailed = 0,
   newsFailed = 0,
   fxFailed = 0,
+  quoteFailed = 0,
 ): 'READY' | 'PARTIAL' {
-  return summariesFailed > 0 || ytdBaseFailed > 0 || newsFailed > 0 || fxFailed > 0
+  return summariesFailed > 0 || ytdBaseFailed > 0 || newsFailed > 0 || fxFailed > 0 || quoteFailed > 0
     ? 'PARTIAL'
     : 'READY'
+}
+
+/**
+ * 배너에 붙는 사유 문구를 만든다. `computeRunStatus` 와 **반드시 짝을 이룬다** —
+ * 같은 카운터 다섯 개를 보고, 하나라도 0이 아니면 그 항목을 문구에 싣는다.
+ * (둘이 어긋나면 「부분 완료」인데 사유가 비거나, 사유가 있는데 「준비 완료」가 된다.
+ * 그 불일치를 막는 것이 이 함수를 인라인 문자열에서 빼낸 이유다 — 테스트가 짝을 지킨다.)
+ *
+ * 순서는 무게 순이다. 시세 실패가 맨 앞인 것은 그 행의 숫자가 통째로 없다는 뜻이라
+ * 나머지 넷보다 무겁기 때문이다(요약·기준가·뉴스·환율은 한 칸씩 비운다).
+ *
+ * 통화 이름은 그대로 적는다 — 어느 행의 시총이 비었는지 운영자가 바로 짚을 수 있다.
+ * 실패가 하나도 없으면 null 이다(문구 없음).
+ */
+export function buildStatusDetail(counts: {
+  quoteFailed: number
+  summariesFailed: number
+  candidatesCreated: number
+  ytdBaseFailed: number
+  newsFailed: number
+  missingCurrencies: string[]
+}): string | null {
+  const parts: string[] = []
+  if (counts.quoteFailed > 0) parts.push(`시세 ${counts.quoteFailed}종목 수집 실패`)
+  if (counts.summariesFailed > 0) {
+    parts.push(`요약 ${counts.summariesFailed}건 실패(후보 ${counts.candidatesCreated}건 중)`)
+  }
+  if (counts.ytdBaseFailed > 0) parts.push(`연초 기준가 ${counts.ytdBaseFailed}종목 조회 실패`)
+  if (counts.newsFailed > 0) parts.push(`뉴스 검색 ${counts.newsFailed}종목 실패`)
+  if (counts.missingCurrencies.length > 0) {
+    parts.push(`환율 미확보: ${counts.missingCurrencies.join(', ')} (시가총액 공란)`)
+  }
+  return parts.length > 0 ? parts.join(', ') : null
 }
 
 /**

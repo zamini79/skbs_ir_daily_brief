@@ -10,6 +10,7 @@ import {
   createQuotaGuard,
   attemptSummary,
   computeRunStatus,
+  buildStatusDetail,
   isolate,
   needsPendingRevert,
   buildFallbackSummaries,
@@ -328,6 +329,84 @@ describe('computeRunStatus', () => {
 
   it('넷 다 없어야 READY이다', () => {
     expect(computeRunStatus(0, 0, 0, 0)).toBe('READY')
+  })
+
+  it('시세 수집 실패도 PARTIAL로 본다 — 나머지가 전부 성공이어도', () => {
+    // 이게 없으면 다섯 칸이 전부 공란인 행이 초록색 「준비 완료」 배너 아래에 놓인다.
+    // Twelve Data 분당 크레딧 초과면 미국 5행이 통째로 빠지는데 배너는 초록이었다.
+    expect(computeRunStatus(0, 0, 0, 0, 1)).toBe('PARTIAL')
+    expect(computeRunStatus(0, 0, 0, 0, 5)).toBe('PARTIAL')
+  })
+
+  it('다섯 가지가 다 없어야 READY이다', () => {
+    expect(computeRunStatus(0, 0, 0, 0, 0)).toBe('READY')
+  })
+
+  it('시세 인자를 생략하면 기존 동작 그대로다', () => {
+    expect(computeRunStatus(0, 0, 0, 0)).toBe('READY')
+    expect(computeRunStatus(0, 0, 0, 1)).toBe('PARTIAL')
+  })
+})
+
+describe('buildStatusDetail', () => {
+  const clean = {
+    quoteFailed: 0,
+    summariesFailed: 0,
+    candidatesCreated: 43,
+    ytdBaseFailed: 0,
+    newsFailed: 0,
+    missingCurrencies: [] as string[],
+  }
+
+  it('실패가 없으면 null 이다 — 배너에 붙일 말이 없다', () => {
+    expect(buildStatusDetail(clean)).toBeNull()
+  })
+
+  it('시세 실패를 종목 수와 함께 말한다', () => {
+    expect(buildStatusDetail({ ...clean, quoteFailed: 5 })).toBe('시세 5종목 수집 실패')
+  })
+
+  it('시세 실패를 맨 앞에 둔다 — 한 행의 숫자가 통째로 없다는 뜻이라 가장 무겁다', () => {
+    const d = buildStatusDetail({
+      ...clean, quoteFailed: 5, summariesFailed: 2, ytdBaseFailed: 1, newsFailed: 3,
+      missingCurrencies: ['USD'],
+    })
+    expect(d?.startsWith('시세 5종목 수집 실패')).toBe(true)
+  })
+
+  it('여러 실패를 콤마로 잇는다', () => {
+    expect(buildStatusDetail({ ...clean, quoteFailed: 1, newsFailed: 2 }))
+      .toBe('시세 1종목 수집 실패, 뉴스 검색 2종목 실패')
+  })
+
+  it('환율은 통화 이름을 그대로 적는다 — 어느 행이 비었는지 짚을 수 있게', () => {
+    expect(buildStatusDetail({ ...clean, missingCurrencies: ['USD', 'GBP'] }))
+      .toBe('환율 미확보: USD, GBP (시가총액 공란)')
+  })
+
+  it('기존 네 항목의 문구는 그대로다 — 시세 항목만 새로 붙는다', () => {
+    expect(buildStatusDetail({ ...clean, summariesFailed: 12, candidatesCreated: 43 }))
+      .toBe('요약 12건 실패(후보 43건 중)')
+    expect(buildStatusDetail({ ...clean, ytdBaseFailed: 2 })).toBe('연초 기준가 2종목 조회 실패')
+  })
+
+  // 이 짝이 깨지면 「부분 완료」인데 사유가 비거나, 사유가 있는데 「준비 완료」가 된다.
+  it('computeRunStatus 와 항상 짝을 이룬다 — PARTIAL 이면 사유가 있고, READY 면 없다', () => {
+    const cases = [
+      { ...clean, quoteFailed: 1 },
+      { ...clean, summariesFailed: 1 },
+      { ...clean, ytdBaseFailed: 1 },
+      { ...clean, newsFailed: 1 },
+      { ...clean, missingCurrencies: ['USD'] },
+      clean,
+    ]
+    for (const c of cases) {
+      const status = computeRunStatus(
+        c.summariesFailed, c.ytdBaseFailed, c.newsFailed, c.missingCurrencies.length, c.quoteFailed,
+      )
+      const detail = buildStatusDetail(c)
+      expect(status === 'PARTIAL', JSON.stringify(c)).toBe(detail !== null)
+    }
   })
 })
 

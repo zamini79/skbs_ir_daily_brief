@@ -19,6 +19,7 @@ import {
   createQuotaGuard,
   attemptSummary,
   computeRunStatus,
+  buildStatusDetail,
   isolate,
   needsPendingRevert,
   buildFallbackSummaries,
@@ -86,6 +87,7 @@ export async function runCollection(now: Date): Promise<{
   ytdBaseFailed: number
   newsFailed: number
   fxFailed: number
+  quoteFailed: number
 }> {
   const runDate = kstDateString(now)
   const year = Number(runDate.slice(0, 4))
@@ -190,6 +192,15 @@ export async function runCollection(now: Date): Promise<{
   // 상태 갱신까지 전부 건너뛴다.
   let ok = 0
   let failed = 0
+  // `failed` 와 `quoteFailed` 는 일부러 다르다.
+  //   failed      — 이번 실행에서 시세 값을 얻지 못한 행 전부. 수기 입력 대상(quoteSource
+  //                 'manual', 애초에 수집하지 않는다)도 포함한다. 크론 응답 JSON 의
+  //                 기존 의미를 그대로 유지한다.
+  //   quoteFailed — 그중 **실제로 실패한** 행만. 이 값이 배너(BriefRun.status/statusDetail)를
+  //                 움직인다. 의도된 공란(manual)을 장애로 세면 매일 PARTIAL 이 떠서
+  //                 배너가 아무 뜻도 없어진다 — 지금은 manual 종목이 없지만, 운영 문서가
+  //                 KRX 약관 문제 시 이 행을 manual 로 되돌리라고 안내하고 있다.
+  let quoteFailed = 0
   for (const inst of instruments) {
     const q = quotes.get(inst.id)
     const { ok: wrote } = await isolate(async () => {
@@ -201,6 +212,10 @@ export async function runCollection(now: Date): Promise<{
           },
         })
         failed++
+        // Error 인 경우만 장애다. q 가 아예 없는 것은 fetchAllQuotes 가 manual 을
+        // 의도적으로 제외한 결과이지 실패가 아니다(providers/quote/index.ts).
+        // 화면 쪽도 같은 규칙으로 가른다 — repo.ts 의 quoteFailureReason 참고.
+        if (q instanceof Error) quoteFailed++
         return
       }
       const rate = resolveFxRate(inst.currency, fx)
@@ -232,7 +247,12 @@ export async function runCollection(now: Date): Promise<{
     })
     // isolate가 예외를 삼켰다면(DB 쓰기 자체가 실패 등) worker 내부의 ok/failed 증가는
     // 일어나지 않았다 — 여기서 이 종목만 실패로 집계하고 나머지는 계속 진행한다.
-    if (!wrote) failed++
+    // 이 경우는 QuoteSnapshot 자체가 없어서 화면이 사유조차 보여줄 수 없다(행이 통째로
+    // 빈다). 사유를 못 남기더라도 배너에는 반드시 남아야 하므로 quoteFailed 로도 센다.
+    if (!wrote) {
+      failed++
+      quoteFailed++
+    }
   }
 
   // 5) 뉴스 수집 + 별칭 필터 + 클러스터링.
@@ -365,21 +385,21 @@ export async function runCollection(now: Date): Promise<{
     })
   }
 
-  const status = computeRunStatus(summariesFailed, ytdBaseFailed, newsFailed, fxFailed)
-  const detailParts: string[] = []
-  if (summariesFailed > 0) detailParts.push(`요약 ${summariesFailed}건 실패(후보 ${candidatesCreated}건 중)`)
-  if (ytdBaseFailed > 0) detailParts.push(`연초 기준가 ${ytdBaseFailed}종목 조회 실패`)
-  if (newsFailed > 0) detailParts.push(`뉴스 검색 ${newsFailed}종목 실패`)
-  // 통화 이름을 그대로 적는다 — 어느 행의 시총이 비었는지 운영자가 바로 짚을 수 있다.
-  if (fxFailed > 0) detailParts.push(`환율 미확보: ${missingCurrencies.join(', ')} (시가총액 공란)`)
+  // status 와 statusDetail 은 같은 카운터 다섯 개에서 나온다. 둘이 어긋나지 않도록
+  // 문구 조립은 collectHelpers 의 순수 함수에 두고 테스트가 짝을 지킨다.
+  const status = computeRunStatus(summariesFailed, ytdBaseFailed, newsFailed, fxFailed, quoteFailed)
+  const statusDetail = buildStatusDetail({
+    quoteFailed,
+    summariesFailed,
+    candidatesCreated,
+    ytdBaseFailed,
+    newsFailed,
+    missingCurrencies,
+  })
   await prisma.briefRun.update({
     where: { id: run.id },
-    data: {
-      status,
-      statusDetail: detailParts.length > 0 ? detailParts.join(', ') : null,
-      finishedAt: new Date(),
-    },
+    data: { status, statusDetail, finishedAt: new Date() },
   })
 
-  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, ytdBaseFailed, newsFailed, fxFailed }
+  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, ytdBaseFailed, newsFailed, fxFailed, quoteFailed }
 }
