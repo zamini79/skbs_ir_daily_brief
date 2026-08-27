@@ -142,14 +142,22 @@ export function BriefTable({ runDate, rows }: { runDate: string; rows: ClientRow
        * 레이아웃에 맡기면 브라우저가 내용 길이에 따라 뉴스 칼럼을 계속
        * 넓혔다 좁혔다 해서(글자 수가 행마다 다르므로) 표가 흔들린다.
        */}
+      {/*
+       * 사용자 요청: 뉴스 칸을 줄이고 주가/전일대비/%/연초대비/시가총액을 20%씩
+       * 늘인다. Tailwind 고정 스케일에는 20% 단위가 없어 arbitrary value를 쓴다
+       * (7rem→8.4rem, 6rem→7.2rem, 4rem→4.8rem, 5rem→6rem, 6rem→7.2rem). 구분/기업은
+       * 그대로 두고, 뉴스는 remainder라 남은 폭만큼 자동으로 줄어든다.
+       * 이 변경이 기존 줄바꿈 버그도 고친다 — 삼성바이오로직스 "KRW 1,594,000"이
+       * w-28(7rem)에서 두 줄로 넘쳤는데 8.4rem에서는 한 줄에 들어간다(스크린샷으로 확인).
+       */}
       <colgroup>
         <col className="w-16" />
         <col className="w-40" />
-        <col className="w-28" />
+        <col className="w-[8.4rem]" />
+        <col className="w-[7.2rem]" />
+        <col className="w-[4.8rem]" />
         <col className="w-24" />
-        <col className="w-16" />
-        <col className="w-20" />
-        <col className="w-24" />
+        <col className="w-[7.2rem]" />
         <col />
       </colgroup>
       <thead>
