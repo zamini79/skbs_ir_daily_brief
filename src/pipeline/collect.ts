@@ -20,7 +20,14 @@ import {
   computeRunStatus,
   isolate,
   needsPendingRevert,
+  buildFallbackSummaries,
 } from './collectHelpers'
+
+/** 본문이 짧아 요약 자체를 시도하지 않은 경우의 사유 — 화면에 "사유 미기록"으로
+ * 뜨지 않도록 남긴다. summariesFailed 에는 넣지 않는다(의도된 결정이지 장애가 아니다). */
+const EMPTY_BODY_REASON = '본문이 너무 짧아 요약을 생략함'
+/** 할당량 소진 이후 아예 시도하지 않고 건너뛴 경우의 사유. */
+const QUOTA_EXHAUSTED_REASON = '할당량 소진 이후 요약을 건너뜀'
 
 /** Gemini 무료 티어 한도에 맞춘 동시 호출 수. 늘리면 429가 난다. */
 const SUMMARY_CONCURRENCY = 4
@@ -206,6 +213,12 @@ export async function runCollection(now: Date): Promise<{
             const attempt = await attemptSummary({ title: c.representative.title, body }, quotaGuard, summarize)
 
             if (attempt.outcome === 'skipped-empty-body') {
+              // 뽑아낼 본문 자체가 없으니 발췌 대체 요약도 만들 수 없다 — 그래도 사유는
+              // 남긴다. 화면이 "사유 미기록"을 보여주지 않도록.
+              await prisma.newsCandidate.update({
+                where: { id: candidate.id },
+                data: { summaryError: EMPTY_BODY_REASON },
+              })
               summariesSkippedEmptyBody++
               return
             }
@@ -224,13 +237,26 @@ export async function runCollection(now: Date): Promise<{
               summariesGenerated++
               return
             }
-            // 'failed' | 'skipped-quota-exhausted'
-            const errorMessage =
-              attempt.outcome === 'failed' ? attempt.error : '할당량 소진 이후 요약을 건너뜀'
+            // 'failed' | 'skipped-quota-exhausted' — 모델 요약은 없지만 후보를 빈 칸으로
+            // 남기지 않는다. 이미 손에 있는 본문/스니펫에서 발췌한 대체 요약을 채운다
+            // (재요청하지 않는다). summaryError 는 그대로 남겨 모델이 아니라 발췌라는 걸
+            // 검수자/운영자가 알 수 있게 한다.
+            const errorMessage = attempt.outcome === 'failed' ? attempt.error : QUOTA_EXHAUSTED_REASON
             await prisma.newsCandidate.update({
               where: { id: candidate.id },
               data: { summaryError: errorMessage },
             })
+            const fallbacks = buildFallbackSummaries(body, c.representative.description)
+            if (fallbacks.length > 0) {
+              await prisma.newsSummary.createMany({
+                data: fallbacks.map((text, i) => ({
+                  candidateId: candidate.id,
+                  variant: SUMMARY_VARIANTS[i].variant,
+                  text,
+                  isFallback: true,
+                })),
+              })
+            }
             summariesFailed++
           })
           // isolate가 예외를 삼켰다면(예: newsCandidate.create 자체가 실패) worker 내부의

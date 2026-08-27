@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { charLength } from '@/domain/text'
 import {
   resolveAliases,
   resolveFxRate,
@@ -10,6 +11,7 @@ import {
   computeRunStatus,
   isolate,
   needsPendingRevert,
+  buildFallbackSummaries,
 } from './collectHelpers'
 
 const LONG_BODY = 'x'.repeat(30)
@@ -281,5 +283,53 @@ describe('needsPendingRevert', () => {
 
   it('OMITTED는 애초에 후보를 참조하지 않는 정상 상태다 — 되돌리지 않는다', () => {
     expect(needsPendingRevert({ decision: 'OMITTED', chosenCandidateId: null, chosenSummaryId: null })).toBe(false)
+  })
+})
+
+describe('buildFallbackSummaries', () => {
+  // 문장 경계(.)가 있는 긴 본문 — truncateAtSentence 가 실제로 자를 구간이 있어야
+  // "본문 선두"와 "다음 구간"이 우연히 같은 지점에서 끊기지 않는다.
+  const LONG_SENTENCE_BODY = Array.from({ length: 30 }, (_, i) => `이것은 문장 번호 ${i + 1}입니다.`).join(' ')
+  const SNIPPET = '이것은 검색 스니펫으로 본문과는 전혀 다른 문장입니다.'
+
+  it('긴 본문에서 서로 다른 세 구간(선두/다음/스니펫)을 뽑는다', () => {
+    const r = buildFallbackSummaries(LONG_SENTENCE_BODY, SNIPPET)
+    expect(r).toHaveLength(3)
+    expect(new Set(r).size).toBe(3) // 셋 다 다르다
+    expect(r[2]).toBe(SNIPPET)
+  })
+
+  it('각 슬라이스는 100 코드포인트를 넘지 않는다', () => {
+    const r = buildFallbackSummaries(LONG_SENTENCE_BODY, SNIPPET)
+    for (const s of r) expect(charLength(s)).toBeLessThanOrEqual(100)
+  })
+
+  it('본문이 짧으면(다음 구간이 없으면) 복제하지 않고 개수를 줄인다', () => {
+    const shortBody = '짧은 본문 하나뿐인 문장입니다'
+    const r = buildFallbackSummaries(shortBody, SNIPPET)
+    // 본문 선두 1개 + 스니펫 1개 = 2개. "다음 구간"은 본문을 다 써버려서 없다.
+    expect(r).toHaveLength(2)
+    expect(new Set(r).size).toBe(2)
+  })
+
+  it('스니펫이 본문과 같으면 중복을 만들지 않는다', () => {
+    const body = '본문과 스니펫이 완전히 같은 경우'
+    const r = buildFallbackSummaries(body, body)
+    expect(r).toHaveLength(1)
+  })
+
+  it('스니펫이 없으면 본문에서만 뽑는다', () => {
+    const r = buildFallbackSummaries(LONG_SENTENCE_BODY, '')
+    expect(r.length).toBeGreaterThan(0)
+    expect(r.length).toBeLessThanOrEqual(2)
+  })
+
+  it('본문이 비어 있으면 스니펫만으로 만든다', () => {
+    const r = buildFallbackSummaries('', SNIPPET)
+    expect(r).toEqual([SNIPPET])
+  })
+
+  it('본문과 스니펫이 둘 다 비어 있으면 빈 배열을 준다', () => {
+    expect(buildFallbackSummaries('', '')).toEqual([])
   })
 })

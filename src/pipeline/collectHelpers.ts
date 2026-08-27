@@ -1,7 +1,8 @@
 import { marketCapKrwTrillion } from '@/domain/calc'
-import { charLength } from '@/domain/text'
+import { charLength, truncateAtSentence } from '@/domain/text'
 import { tokenize, jaccard } from './cluster'
 import type { SummarySet } from '@/providers/summarize/gemini'
+import { MAX_SUMMARY_CHARS } from '@/providers/summarize/prompt'
 
 /**
  * 뉴스 관련성 필터에 쓸 별칭 목록을 만든다. newsAliases 는 콤마 구분 문자열이다.
@@ -168,4 +169,51 @@ export function needsPendingRevert(selection: {
     selection.decision === 'SELECTED' &&
     (selection.chosenCandidateId === null || selection.chosenSummaryId === null)
   )
+}
+
+/**
+ * 요약이 실패했을 때 화면 칸을 비워두지 않기 위한 기계적 발췌 3안을 만든다.
+ * 모델이 만든 게 아니므로(isFallback 마커는 호출자가 붙인다) 본문/스니펫에서
+ * 있는 그대로 잘라낸다 — 새로 텍스트를 짓지 않는다.
+ *
+ * 슬라이스 전략: (1) 본문 선두, (2) 본문에서 (1)이 소비한 구간 다음, (3) 검색
+ * 스니펫(본문과 다를 때만). 각각 100자(코드포인트) 제한을 지키기 위해
+ * truncateAtSentence 로 문장 경계에서 자른다 — 모델이 만든 요약과 같은 제약이다.
+ * 본문이 짧아 서로 다른 구간을 뽑을 수 없으면 중복을 만들지 않고 개수를 줄인다.
+ */
+export function buildFallbackSummaries(body: string, snippet: string): string[] {
+  const cap = (s: string): string => {
+    const t = s.trim()
+    if (!t) return ''
+    return charLength(t) <= MAX_SUMMARY_CHARS ? t : truncateAtSentence(t, MAX_SUMMARY_CHARS)
+  }
+
+  const slices: string[] = []
+  const trimmedBody = body.trim()
+
+  if (trimmedBody) {
+    const first = cap(trimmedBody)
+    slices.push(first)
+
+    // (1)이 소비한 구간 다음부터 다시 자른다 — 완전히 다른 문장들이 된다.
+    const bodyChars = [...trimmedBody]
+    const rest = bodyChars.slice(charLength(first)).join('').trim()
+    if (rest) slices.push(cap(rest))
+  }
+
+  const trimmedSnippet = snippet.trim()
+  if (trimmedSnippet && trimmedSnippet !== trimmedBody) {
+    slices.push(cap(trimmedSnippet))
+  }
+
+  // 본문이 짧아 스니펫과 겹치는 등, 중복이 생기면 하나로 줄인다 — 복제본으로
+  // 채우지 않는다.
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const s of slices) {
+    if (!s || seen.has(s)) continue
+    seen.add(s)
+    out.push(s)
+  }
+  return out.slice(0, 3)
 }

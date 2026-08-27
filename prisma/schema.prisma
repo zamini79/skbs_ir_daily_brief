@@ -120,6 +120,10 @@ model NewsSummary {
   candidateId String
   variant     Int    // 1=수치 2=배경 3=시사점
   text        String @db.Text
+  /// 모델이 만든 게 아니라 기사 본문/스니펫에서 기계적으로 발췌한 대체 텍스트면 true.
+  /// 요약이 전부 실패했을 때 화면을 비워두지 않기 위한 것 — 검수자가 모델 산출물로
+  /// 착각하지 않도록 반드시 구분해서 보여줘야 한다.
+  isFallback  Boolean @default(false)
 
   candidate NewsCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
   /// NewsCandidate.chosenBy 와 같은 이유로 존재한다.
