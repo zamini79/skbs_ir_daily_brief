@@ -5,8 +5,11 @@ import {
   runStatusLabel,
   sameEventBadgeLabel,
   summaryErrorShortLabel,
+  newsColumnContent,
   groupByCategory,
   resolveDisplayQuote,
+  type ClientCandidate,
+  type RowState,
 } from './repo'
 
 const ALL_ROW_STATES = ['NEWS_FAILED', 'NO_NEWS', 'OMITTED', 'PENDING', 'SELECTED', 'STALE_SELECTION'] as const
@@ -97,6 +100,210 @@ describe('rowStateLabel', () => {
     expect(rowStateLabel('PENDING')).toBe('미검토')
     expect(rowStateLabel('SELECTED')).toBe('선택 완료')
     expect(rowStateLabel('STALE_SELECTION')).toBe('선택 무효화됨 (재수집으로 초기화 — 다시 검토 필요)')
+  })
+})
+
+function candidate(overrides: Partial<ClientCandidate> = {}): ClientCandidate {
+  return {
+    id: 'c1',
+    rank: 1,
+    title: '기본 제목',
+    url: 'https://example.com/1',
+    publisher: 'example',
+    publishedAt: '2026-08-27T00:00:00.000Z',
+    clusterSize: 1,
+    sameEventAsRank: null,
+    summaryError: null,
+    summaries: [],
+    ...overrides,
+  }
+}
+
+describe('newsColumnContent', () => {
+  it('NO_NEWS와 NEWS_FAILED는 절대 같은 문자열로 수렴하지 않는다 — 이번 세션의 핵심 결함', () => {
+    const noNews = newsColumnContent({
+      state: 'NO_NEWS',
+      candidates: [],
+      chosenCandidateId: null,
+      chosenSummaryId: null,
+      editedText: null,
+    })
+    const failed = newsColumnContent({
+      state: 'NEWS_FAILED',
+      candidates: [],
+      chosenCandidateId: null,
+      chosenSummaryId: null,
+      editedText: null,
+    })
+    expect(noNews).toEqual({ kind: 'none' })
+    expect(failed).toEqual({ kind: 'label', text: rowStateLabel('NEWS_FAILED') })
+    expect(noNews).not.toEqual(failed)
+  })
+
+  it('OMITTED는 NO_NEWS와 다른 kind다 — 둘 다 화면상 "-"로 보일 수 있어도 구조적으로 갈라 둔다', () => {
+    const omitted = newsColumnContent({
+      state: 'OMITTED',
+      candidates: [],
+      chosenCandidateId: null,
+      chosenSummaryId: null,
+      editedText: null,
+    })
+    expect(omitted).toEqual({ kind: 'omitted' })
+  })
+
+  it('STALE_SELECTION은 지금의 경고 라벨을 그대로 쓴다', () => {
+    const result = newsColumnContent({
+      state: 'STALE_SELECTION',
+      candidates: [candidate()],
+      chosenCandidateId: null,
+      chosenSummaryId: null,
+      editedText: null,
+    })
+    expect(result).toEqual({ kind: 'label', text: rowStateLabel('STALE_SELECTION') })
+  })
+
+  it('SELECTED는 editedText가 있으면 요약 원문 대신 editedText를 쓴다 — 최종 출력이 그 값이므로', () => {
+    const cand = candidate({
+      id: 'c1',
+      title: '제목A',
+      url: 'https://example.com/a',
+      summaries: [{ id: 's1', variant: 1, text: '원본 요약', isFallback: false }],
+    })
+    const result = newsColumnContent({
+      state: 'SELECTED',
+      candidates: [cand],
+      chosenCandidateId: 'c1',
+      chosenSummaryId: 's1',
+      editedText: '담당자가 고친 요약',
+    })
+    expect(result).toEqual({
+      kind: 'article',
+      confirmed: true,
+      title: '제목A',
+      url: 'https://example.com/a',
+      summary: '담당자가 고친 요약',
+    })
+  })
+
+  it('SELECTED인데 editedText가 없으면 선택된 요약 원문을 쓴다', () => {
+    const cand = candidate({
+      id: 'c1',
+      summaries: [{ id: 's1', variant: 1, text: '원본 요약', isFallback: false }],
+    })
+    const result = newsColumnContent({
+      state: 'SELECTED',
+      candidates: [cand],
+      chosenCandidateId: 'c1',
+      chosenSummaryId: 's1',
+      editedText: null,
+    })
+    expect(result.kind).toBe('article')
+    expect((result as { summary: string | null }).summary).toBe('원본 요약')
+  })
+
+  it('SELECTED인데 고른 후보에 요약이 아예 없으면(실제로 흔하다) 제목만 나오고 깨지지 않는다', () => {
+    const cand = candidate({ id: 'c1', title: '요약 없는 제목', summaries: [] })
+    const result = newsColumnContent({
+      state: 'SELECTED',
+      candidates: [cand],
+      chosenCandidateId: 'c1',
+      chosenSummaryId: null,
+      editedText: null,
+    })
+    expect(result).toEqual({
+      kind: 'article',
+      confirmed: true,
+      title: '요약 없는 제목',
+      url: cand.url,
+      summary: null,
+    })
+  })
+
+  it('PENDING은 1순위 후보의 ①안 요약을 미리보기로 보여주되 confirmed: false 다', () => {
+    const rank1 = candidate({
+      id: 'c1',
+      rank: 1,
+      title: '1순위 제목',
+      url: 'https://example.com/rank1',
+      summaries: [
+        { id: 's1', variant: 1, text: '①안 요약', isFallback: false },
+        { id: 's2', variant: 2, text: '②안 요약', isFallback: false },
+      ],
+    })
+    const rank2 = candidate({ id: 'c2', rank: 2, title: '2순위 제목' })
+    const result = newsColumnContent({
+      state: 'PENDING',
+      candidates: [rank1, rank2],
+      chosenCandidateId: null,
+      chosenSummaryId: null,
+      editedText: null,
+    })
+    expect(result).toEqual({
+      kind: 'article',
+      confirmed: false,
+      title: '1순위 제목',
+      url: 'https://example.com/rank1',
+      summary: '①안 요약',
+    })
+  })
+
+  it('PENDING 미리보기는 SELECTED 확정본과 confirmed 플래그가 다르다 — 화면이 절대 같아 보이면 안 된다', () => {
+    const cand = candidate({
+      id: 'c1',
+      rank: 1,
+      summaries: [{ id: 's1', variant: 1, text: '요약', isFallback: false }],
+    })
+    const pending = newsColumnContent({
+      state: 'PENDING',
+      candidates: [cand],
+      chosenCandidateId: null,
+      chosenSummaryId: null,
+      editedText: null,
+    })
+    const selected = newsColumnContent({
+      state: 'SELECTED',
+      candidates: [cand],
+      chosenCandidateId: 'c1',
+      chosenSummaryId: 's1',
+      editedText: null,
+    })
+    expect(pending.kind).toBe('article')
+    expect(selected.kind).toBe('article')
+    expect((pending as { confirmed: boolean }).confirmed).toBe(false)
+    expect((selected as { confirmed: boolean }).confirmed).toBe(true)
+  })
+
+  it('PENDING인데 1순위 후보에 요약이 없으면 제목만 나오고 깨지지 않는다', () => {
+    const cand = candidate({ id: 'c1', rank: 1, title: '요약 없는 1순위', summaries: [] })
+    const result = newsColumnContent({
+      state: 'PENDING',
+      candidates: [cand],
+      chosenCandidateId: null,
+      chosenSummaryId: null,
+      editedText: null,
+    })
+    expect(result).toEqual({
+      kind: 'article',
+      confirmed: false,
+      title: '요약 없는 1순위',
+      url: cand.url,
+      summary: null,
+    })
+  })
+
+  it('모든 RowState가 예외 없이 하나의 kind를 반환한다', () => {
+    const ALL: RowState[] = ['NEWS_FAILED', 'NO_NEWS', 'OMITTED', 'PENDING', 'SELECTED', 'STALE_SELECTION']
+    for (const state of ALL) {
+      const cand = candidate({ id: 'c1', rank: 1 })
+      const result = newsColumnContent({
+        state,
+        candidates: state === 'NO_NEWS' || state === 'NEWS_FAILED' ? [] : [cand],
+        chosenCandidateId: state === 'SELECTED' ? 'c1' : null,
+        chosenSummaryId: null,
+        editedText: null,
+      })
+      expect(['article', 'omitted', 'none', 'label']).toContain(result.kind)
+    }
   })
 })
 

@@ -98,6 +98,66 @@ export function summaryErrorShortLabel(raw: string): string {
   return '모델 요약 실패'
 }
 
+/**
+ * 뉴스 칼럼에 무엇을 보여줄지 정한다. 이 칼럼이 이제 상태 배지를 대신하므로,
+ * 상태 정보를 잃지 않으면서(NEWS_FAILED/STALE_SELECTION은 지금 라벨을 유지)
+ * 기사 링크+요약(SELECTED/PENDING)을 함께 보여줘야 한다.
+ *
+ * PENDING의 'article'은 반드시 confirmed: false 로 표시된다 — 1순위 후보를
+ * 미리보기로 보여주는 것이지 담당자가 확정한 것이 아니다. SELECTED와 같은 'article'
+ * kind를 쓰되 confirmed 플래그로 구분해, 호출자가 시각적으로도(진하기/기울임/
+ * "미확정" 표시 등) 절대 같아 보이지 않게 렌더해야 한다 — 확정본과 구분되지
+ * 않으면 담당자가 미확정 미리보기를 그대로 메일에 싣게 된다.
+ *
+ * OMITTED는 NO_NEWS와 똑같이 '텅 빈 칸'으로 보이면 안 된다 — 하나는 "기사가
+ * 없었다"(NO_NEWS)이고 하나는 "담당자가 뺐다"(OMITTED)라서, 별도 kind로
+ * 구조적으로 갈라 둔다. NEWS_FAILED("못 찾아봤다")도 이 둘과 절대 같은 문자열로
+ * 수렴하면 안 된다 — 'label' kind로 완전히 다른 값을 돌려준다.
+ */
+export type NewsColumnContent =
+  | { kind: 'article'; confirmed: boolean; title: string; url: string; summary: string | null }
+  | { kind: 'omitted' }
+  | { kind: 'none' }
+  | { kind: 'label'; text: string }
+
+export function newsColumnContent(row: {
+  state: RowState
+  candidates: Array<Pick<ClientCandidate, 'id' | 'rank' | 'title' | 'url' | 'summaries'>>
+  chosenCandidateId: string | null
+  chosenSummaryId: string | null
+  editedText: string | null
+}): NewsColumnContent {
+  switch (row.state) {
+    case 'NEWS_FAILED':
+    case 'STALE_SELECTION':
+      return { kind: 'label', text: rowStateLabel(row.state) }
+    case 'NO_NEWS':
+      return { kind: 'none' }
+    case 'OMITTED':
+      return { kind: 'omitted' }
+    case 'SELECTED': {
+      const cand = row.candidates.find(c => c.id === row.chosenCandidateId)
+      // rowDisplayState가 SELECTED를 주는 것은 chosenCandidateId가 유효한 후보를
+      // 가리킬 때뿐이므로 정상 경로에서는 항상 찾는다. 그래도 못 찾으면(방어적으로)
+      // STALE_SELECTION과 같은 라벨로 떨어뜨린다 — 존재하지 않는 후보를 가리키는
+      // "확정본"을 보여주는 것보다 안전하다.
+      if (!cand) return { kind: 'label', text: rowStateLabel('STALE_SELECTION') }
+      const chosenSummary = cand.summaries.find(s => s.id === row.chosenSummaryId)
+      // editedText가 있으면 그것이 최종 산출물이다 — 요약 원문이 남아 있어도 우선한다.
+      const summary = row.editedText ?? chosenSummary?.text ?? null
+      return { kind: 'article', confirmed: true, title: cand.title, url: cand.url, summary }
+    }
+    case 'PENDING': {
+      // candidateCount === 0이면 rowDisplayState가 PENDING을 주지 않으므로
+      // (NO_NEWS/NEWS_FAILED로 먼저 빠진다) 여기서는 후보가 항상 최소 1건 있다.
+      const cand = row.candidates.find(c => c.rank === 1) ?? row.candidates[0]
+      if (!cand) return { kind: 'none' }
+      const summary = cand.summaries.find(s => s.variant === 1)?.text ?? null
+      return { kind: 'article', confirmed: false, title: cand.title, url: cand.url, summary }
+    }
+  }
+}
+
 export type CategoryGroup<T> = { category: string; rows: T[] }
 
 /**
