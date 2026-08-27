@@ -9,6 +9,16 @@ import {
   resolveDisplayQuote,
 } from './repo'
 
+const ALL_ROW_STATES = ['NEWS_FAILED', 'NO_NEWS', 'OMITTED', 'PENDING', 'SELECTED', 'STALE_SELECTION'] as const
+
+describe('rowStateLabel 완전성', () => {
+  it('모든 행 상태에 라벨이 있고 서로 다르다', () => {
+    const labels = ALL_ROW_STATES.map(s => rowStateLabel(s))
+    expect(labels.every(l => typeof l === 'string' && l.length > 0)).toBe(true)
+    expect(new Set(labels).size).toBe(ALL_ROW_STATES.length)
+  })
+})
+
 describe('rowDisplayState', () => {
   it('후보가 없으면 NO_NEWS 다', () => {
     expect(
@@ -20,6 +30,34 @@ describe('rowDisplayState', () => {
       rowDisplayState({ candidateCount: 0, decision: 'OMITTED', chosenCandidateId: null }),
     ).toBe('NO_NEWS')
   })
+  // 이 작업의 핵심. 이 두 케이스가 같은 값으로 수렴하면 결함이 되돌아온 것이다.
+  it('검색 성공 + 후보 0건 은 NO_NEWS 다 — 정말로 기사가 없었다', () => {
+    expect(
+      rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'OK' }),
+    ).toBe('NO_NEWS')
+  })
+  it('검색 실패 + 후보 0건 은 NEWS_FAILED 다 — 기사가 없는지 알 수 없다', () => {
+    expect(
+      rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'FAILED' }),
+    ).toBe('NEWS_FAILED')
+  })
+  it('두 경우가 절대 같은 상태로 수렴하지 않는다', () => {
+    const ok = rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'OK' })
+    const failed = rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'FAILED' })
+    expect(ok).not.toBe(failed)
+    expect(rowStateLabel(ok)).not.toBe(rowStateLabel(failed))
+  })
+  it('검색 실패라도 후보가 있으면 평소대로 판정한다', () => {
+    expect(
+      rowDisplayState({ candidateCount: 3, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'FAILED' }),
+    ).toBe('PENDING')
+  })
+  it('기록이 없으면(구 실행) 기존 동작 그대로 NO_NEWS 다', () => {
+    expect(
+      rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: null }),
+    ).toBe('NO_NEWS')
+  })
+
   it('담당자가 뺐으면 OMITTED 다', () => {
     expect(
       rowDisplayState({ candidateCount: 3, decision: 'OMITTED', chosenCandidateId: null }),

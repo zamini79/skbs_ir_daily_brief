@@ -2,11 +2,16 @@ import { prisma } from './client'
 import { changePct as calcChangePct } from '@/domain/calc'
 import type { Prisma } from '@prisma/client'
 
-export type RowState = 'NO_NEWS' | 'OMITTED' | 'PENDING' | 'SELECTED' | 'STALE_SELECTION'
+export type RowState = 'NEWS_FAILED' | 'NO_NEWS' | 'OMITTED' | 'PENDING' | 'SELECTED' | 'STALE_SELECTION'
 
 /**
  * 시스템이 후보를 못 만든 것(NO_NEWS)과 담당자가 뺀 것(OMITTED)은 다르다.
  * 출력 표에서는 둘 다 공란이지만 검수 화면에서는 구분해 보여야 한다.
+ *
+ * NEWS_FAILED 는 NO_NEWS 와 반드시 갈라야 한다. 둘 다 후보 0건이지만 뜻이 정반대다 —
+ * NO_NEWS 는 "찾아봤고 없었다"(사실)이고 NEWS_FAILED 는 "못 찾아봤다"(모름)이다.
+ * 예전에는 네이버 429 로 검색이 실패한 행까지 「당일·D-1 기사 없음」이라고 단정해서,
+ * 담당자가 "오늘 이 회사 뉴스가 없구나"로 읽었다. 실제로는 기사가 있었다.
  *
  * decision이 SELECTED인데 chosenCandidateId가 null이면, 담당자가 고른 뒤 재수집이
  * 일어나 그 후보가 삭제되고 FK(onDelete: SetNull)가 참조를 null로 되돌린 것이다.
@@ -27,7 +32,12 @@ export function rowDisplayState(row: {
   candidateCount: number
   decision: string
   chosenCandidateId: string | null
+  /** NewsFetch.status. 기록이 없으면 null (이 기록이 생기기 전에 수집된 실행). */
+  newsFetchStatus?: string | null
 }): RowState {
+  // 후보가 0건인 이유가 두 가지다. 검색이 실패했다면 "기사가 없다"고 말할 근거가
+  // 없으므로 NO_NEWS 로 뭉뚱그리지 않는다 — 담당자가 직접 찾아봐야 하는 행이다.
+  if (row.candidateCount === 0 && row.newsFetchStatus === 'FAILED') return 'NEWS_FAILED'
   if (row.candidateCount === 0) return 'NO_NEWS'
   if (row.decision === 'OMITTED') return 'OMITTED'
   if (row.decision === 'SELECTED') {
@@ -37,6 +47,7 @@ export function rowDisplayState(row: {
 }
 
 const ROW_STATE_LABEL: Record<RowState, string> = {
+  NEWS_FAILED: '뉴스 조회 실패 — 확인 필요',
   NO_NEWS: '당일·D-1 기사 없음',
   OMITTED: '싣지 않음 (담당자 결정)',
   PENDING: '미검토',
@@ -210,6 +221,9 @@ export type ClientRow = {
   selection: ClientSelection
   state: RowState
   display: DisplayQuote
+  /** 뉴스 검색 실패 사유 원문. 성공했거나 기록이 없으면 null. 화면은 이 값만 근거로
+   * 말하고 원인을 지어내지 않는다. */
+  newsFetchError: string | null
 }
 
 export type ClientRun = {
@@ -237,14 +251,17 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
     orderBy: { rank: 'asc' },
   })
   const selections = await prisma.selection.findMany({ where: { runId: run.id } })
+  const newsFetches = await prisma.newsFetch.findMany({ where: { runId: run.id } })
 
   const quoteBy = new Map(quotes.map(q => [q.instrumentId, q]))
   const selBy = new Map(selections.map(s => [s.instrumentId, s]))
+  const fetchBy = new Map(newsFetches.map(f => [f.instrumentId, f]))
 
   const rows: ClientRow[] = instruments.map(inst => {
     const q = quoteBy.get(inst.id) ?? null
     const mine = candidates.filter(c => c.instrumentId === inst.id)
     const sel = selBy.get(inst.id) ?? null
+    const fetched = fetchBy.get(inst.id) ?? null
 
     const quoteClose = toNum(q?.close)
     const quotePrevClose = toNum(q?.prevClose)
@@ -304,8 +321,10 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
         candidateCount: mine.length,
         decision: sel?.decision ?? 'PENDING',
         chosenCandidateId: sel?.chosenCandidateId ?? null,
+        newsFetchStatus: fetched?.status ?? null,
       }),
       display,
+      newsFetchError: fetched?.error ?? null,
     }
   })
 

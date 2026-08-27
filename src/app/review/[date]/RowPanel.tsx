@@ -93,7 +93,22 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
 
       <fieldset className="space-y-2">
         <legend className="mb-1 text-xs font-semibold text-gray-500">뉴스 후보</legend>
-        {row.candidates.length === 0 && (
+        {/*
+          * 후보 0건의 두 가지 뜻을 갈라서 말한다. 검색이 실패했으면 "기사가 없다"고
+          * 말할 근거가 없다 — 담당자가 직접 찾아봐야 하는 행이다.
+          * 사유는 error 원문만 근거로 삼고 원인을 지어내지 않는다. 원문이 없으면
+          * (기록 이전 실행) 사유를 짐작하지 않고 미기록이라고만 말한다.
+          */}
+        {row.candidates.length === 0 && row.state === 'NEWS_FAILED' && (
+          <p className="text-sm text-orange-700" title={row.newsFetchError ?? undefined}>
+            뉴스 조회에 실패했습니다 — 기사가 없는 것이 아니라 확인하지 못한 것입니다.
+            직접 검색해 확인해 주세요.
+            <span className="mt-0.5 block text-xs text-orange-600">
+              사유: {row.newsFetchError ?? '미기록'}
+            </span>
+          </p>
+        )}
+        {row.candidates.length === 0 && row.state !== 'NEWS_FAILED' && (
           <p className="text-sm text-gray-400">당일·D-1 기사가 없습니다.</p>
         )}
         {row.candidates.map(c => (

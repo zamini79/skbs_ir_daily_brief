@@ -6,14 +6,19 @@ import { groupByCategory, rowStateLabel, type ClientRow, type RowState } from '@
 import { RowPanel } from './RowPanel'
 
 /**
- * 다섯 가지 행 상태를 한눈에 구분할 수 있도록 서로 다른 배경/배지 색을 준다.
+ * 여섯 가지 행 상태를 한눈에 구분할 수 있도록 서로 다른 배경/배지 색을 준다.
  * bg와 text를 항상 짝으로 명시한다 — text를 비워 상위(main)의 글자색 상속에
  * 맡기면, 페이지가 라이트로 고정돼 있어도 나중에 이 조각만 재사용될 때 다시
  * 깨질 수 있다.
  * STALE_SELECTION은 PENDING(미검토)과 같은 급의 "다시 봐야 함"이지만 사유가
  * 다르므로(담당자가 고른 뒤 재수집으로 무효화됨) amber와 겹치지 않는 rose를 쓴다.
+ *
+ * NEWS_FAILED는 NO_NEWS의 회색과 반드시 달라야 한다. 회색은 "볼 것 없음"으로 읽히는데,
+ * 이 행은 정반대로 **담당자가 직접 네이버에서 찾아봐야 하는 행**이다. 조용한 공란과
+ * 섞이면 안 되므로 주의를 끄는 orange를 쓴다(amber/rose와도 겹치지 않는다).
  */
 const ROW_BG: Record<RowState, string> = {
+  NEWS_FAILED: 'bg-orange-50 text-gray-900',
   NO_NEWS: 'bg-gray-50 text-gray-500',
   OMITTED: 'bg-gray-100 text-gray-600',
   PENDING: 'bg-amber-50 text-gray-900',
@@ -21,6 +26,7 @@ const ROW_BG: Record<RowState, string> = {
   STALE_SELECTION: 'bg-rose-50 text-gray-900',
 }
 const BADGE_STYLE: Record<RowState, string> = {
+  NEWS_FAILED: 'bg-orange-200 text-orange-900',
   NO_NEWS: 'bg-gray-200 text-gray-500',
   OMITTED: 'bg-gray-300 text-gray-700',
   PENDING: 'bg-amber-200 text-amber-900',
