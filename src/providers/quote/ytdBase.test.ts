@@ -245,6 +245,41 @@ describe('fetchYtdBase — twelvedata 배치와 429 재시도', () => {
     expect(r.failures).toEqual([])
   })
 
+  // end_date 가 배타적이라는 것은 실측으로만 알 수 있다(모킹된 fetch 로는 API 의
+  // 해석을 검증할 수 없다). 여기서 고정하는 것은 "우리가 창을 넓게 보내는가"와
+  // "넓혀서 딸려 온 당해 1/1 을 고르지 않는가" 두 가지다. 둘 다 없으면 기준가가
+  // 각각 반대 방향으로 하루 어긋난다.
+  it('조회 창의 end_date 를 당해 1/1 로 넓힌다 — 전년 12/31 이 배타적으로 잘려나가지 않게', async () => {
+    const spy = vi.fn(async (_url: string) =>
+      new Response(JSON.stringify(series([['2025-12-30', '24.99'], ['2025-12-31', '24.90']])), { status: 200 }))
+    vi.stubGlobal('fetch', spy)
+
+    const r = await fetchYtdBase([td('p', 'PFE')], 2026)
+    const url = String(spy.mock.calls[0][0])
+    expect(url).toContain('start_date=2025-12-01')
+    expect(url).toContain('end_date=2026-01-01')
+    expect(r.prices.get('p')).toBe(24.9) // 12/31 종가. 12/30(24.99)이 아니다.
+  })
+
+  it('창을 넓혀 당해 1/1 행이 딸려 와도 전년 마지막 거래일을 고른다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string) =>
+      new Response(JSON.stringify(series([
+        ['2025-12-30', '24.99'],
+        ['2025-12-31', '24.90'],
+        ['2026-01-02', '25.40'], // 당해 행 — 이걸 고르면 기준가가 반대로 어긋난다
+      ])), { status: 200 })))
+    const r = await fetchYtdBase([td('p', 'PFE')], 2026)
+    expect(r.prices.get('p')).toBe(24.9)
+  })
+
+  it('응답에 전년 행이 하나도 없으면 값을 지어내지 않고 사유를 남긴다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string) =>
+      new Response(JSON.stringify(series([['2026-01-02', '25.40']])), { status: 200 })))
+    const r = await fetchYtdBase([td('p', 'PFE')], 2026)
+    expect(r.prices.has('p')).toBe(false)
+    expect(r.failures).toHaveLength(1)
+  })
+
   it('심볼이 하나면 응답이 시계열 객체로 온다 — 그 구조도 읽는다', async () => {
     vi.stubGlobal('fetch', vi.fn(async (_url: string) =>
       new Response(JSON.stringify(series([['2025-12-01', '20.00'], ['2025-12-30', '24.99']])), { status: 200 })))

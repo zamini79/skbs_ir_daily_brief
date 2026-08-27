@@ -105,9 +105,16 @@ function isRateLimited(status: number, body: unknown): boolean {
   return (body as { code?: number } | null)?.code === 429
 }
 
-/** 전년 12월 마지막 거래일 종가를 뽑는다. 값이 없거나 이상하면 null. */
-function lastCloseOf(series: TdSeries | undefined): number | null {
-  const values = series?.values ?? []
+/**
+ * `prevYear` 의 마지막 거래일 종가를 뽑는다. 값이 없거나 이상하면 null.
+ *
+ * **연도로 거르는 것이 이 함수의 핵심이다.** 호출부가 조회 창을 다음 해 1/1 까지
+ * 넓혀 두었으므로(아래 twelveDataYtdBase 주석 참조) 응답에 당해 1/1 행이 섞여 올 수
+ * 있다. 거르지 않고 마지막 행을 고르면 기준가가 반대 방향으로 하루 어긋난다.
+ */
+function lastCloseOf(series: TdSeries | undefined, prevYear: number): number | null {
+  const prefix = `${prevYear}-`
+  const values = (series?.values ?? []).filter(v => v.datetime.startsWith(prefix))
   if (values.length === 0) return null
   const sorted = [...values].sort((a, b) => a.datetime.localeCompare(b.datetime))
   const close = Number(sorted[sorted.length - 1].close)
@@ -138,10 +145,17 @@ async function twelveDataYtdBase(
   }
 
   const prev = year - 1
+  // **end_date 는 그 날짜를 제외한다(실측).** 문서로는 알 수 없고 호출해 봐야 안다:
+  //   start_date=2025-12-29 & end_date=2025-12-31 -> 12-29, 12-30 만 옴
+  //   start_date=2025-12-29 & end_date=2026-01-01 -> 12-31 까지 옴
+  // 미국장은 12/31 에 거래하므로(휴장일은 1/1) 창을 12-31 로 끊으면 전년 마지막
+  // 거래일이 통째로 빠지고 12/30 종가가 기준가가 된다 — 값이 그럴듯해서 조용히 틀린다.
+  // 그래서 창을 다음 해 1/1 까지 넓히고, 경계 판단은 API 규칙이 아니라 우리 코드가
+  // 한다(lastCloseOf 의 연도 필터). **"정리"한다고 이 창을 좁히지 마라.**
   // URL 에 키가 들어간다. 이 문자열을 로그·에러 메시지에 절대 싣지 마라.
   const url =
     `https://api.twelvedata.com/time_series?symbol=${symbols.join(',')}&interval=1day` +
-    `&start_date=${prev}-12-01&end_date=${prev}-12-31&apikey=${key}`
+    `&start_date=${prev}-12-01&end_date=${year}-01-01&apikey=${key}`
 
   let json: unknown = null
   let lastReason = ''
@@ -193,7 +207,7 @@ async function twelveDataYtdBase(
       failures.push({ symbol: s, reason: series.message ?? 'twelvedata 오류 응답' })
       continue
     }
-    const close = lastCloseOf(series)
+    const close = lastCloseOf(series, prev)
     if (close === null) {
       failures.push({ symbol: s, reason: `${prev}년 12월 거래일 데이터 없음` })
       continue
