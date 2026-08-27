@@ -22,6 +22,35 @@ export function resolveAliases(inst: { newsQuery: string; newsAliases: string })
 }
 
 /**
+ * 뉴스 칸에 **증시 시황·수급 기사가 들어오는 것이 정답인 행**의 이름 목록.
+ * cluster.ts 의 newsPenalty 가 이 행에서만 시황·수급 감점을 건너뛴다.
+ *
+ * **왜 `isIndex` 로는 안 되는가.** 감점 예외의 진짜 기준은 "지수인가"가 아니라
+ * **"이 행이 원하는 것이 시황인가"** 다. 처음에는 둘이 같아 보였다 — 지수 행이
+ * 셋뿐이었고 셋 다 시황을 원했기 때문이다. 코스피200 헬스케어 행에 업종 검색어
+ * (`제약주`)를 준 뒤로 그 전제가 깨졌다: 이 행도 `isIndex: true` 지만 원하는 것은
+ * 시황이 아니라 **헬스케어 업종 동향**이다(원본 샘플 엑셀의 「美 FDA, 의약품 용기
+ * 지침 바뀐다…삼성·셀트리온 시밀러도 영향」이 그 근거다. prisma/instruments.ts 주석 참고).
+ *
+ * `isIndex` 를 그대로 쓰면 이 행에서 미국 증시 시황이 감점 없이 업종 기사와 동률이
+ * 되어, 실측(2026-08-27)에서 정작 업종 기사인 「한미약품 3.5조 잭팟에 제약株
+ * 불붙었다」가 2순위로 밀렸다.
+ *
+ * **"지수인데 왜 따로 두지" 하고 `isIndex` 로 되돌리지 마라.** 그러면 헬스케어 행이
+ * 다시 미국 증시 시황으로 채워진다. 네 지수 행이 서로 다른 것을 원한다는 것이 요점이다.
+ *
+ * 검색어 문자열로 추론하지 않고 이름을 명시한다 — `newsQuery` 가 '뉴욕증시'라서
+ * 시황 행이라고 넘겨짚으면, 검색어를 바꾸는 순간 감점 규칙이 조용히 따라 바뀐다.
+ * 목록의 이름이 실재하는 지수 행인지는 prisma/instruments.test.ts 가 지킨다.
+ */
+export const MARKET_WRAP_ROWS: ReadonlySet<string> = new Set(['S&P500', 'Nasdaq', 'KOSPI'])
+
+/** 이 행의 뉴스 칸이 증시 시황·수급 기사를 원하는가. 위 MARKET_WRAP_ROWS 주석 참고. */
+export function wantsMarketWrapNews(inst: { name: string }): boolean {
+  return MARKET_WRAP_ROWS.has(inst.name)
+}
+
+/**
  * 요청한 통화 중 환율을 얻지 못한 것들을 돌려준다. KRW는 절대 여기 담기지 않는다 —
  * 국내 종목의 시가총액은 네이버가 직접 주고(resolveMarketCap이 quoteMarketCap을
  * fxRate 검사보다 먼저 반환한다), 국내 종목은 애초에 fx['KRW']를 들여다보지 않는다.

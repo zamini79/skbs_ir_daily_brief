@@ -13,10 +13,16 @@ function item(title: string, opts: Partial<NewsItem> = {}): NewsItem {
   }
 }
 
-/** 국내사·해외사 행. 시황·수급 감점이 적용된다. */
-const NOT_INDEX = { isIndex: false }
-/** 지수(Index) 행. 시황·수급은 이 행에서 정답이므로 감점하지 않는다. */
-const IS_INDEX = { isIndex: true }
+/**
+ * 시황이 정답이 **아닌** 행 — 국내사·해외사, 그리고 업종 검색어를 쓰는
+ * 코스피200 헬스케어. 시황·수급 감점이 적용된다.
+ */
+const COMPANY_ROW = { wantsMarketWrap: false }
+/**
+ * 시황이 정답인 행 — KOSPI·S&P500·Nasdaq. 시황·수급을 감점하지 않는다.
+ * 기준이 `isIndex` 가 아니라는 것이 요점이다(collectHelpers.ts 의 MARKET_WRAP_ROWS).
+ */
+const MARKET_WRAP_ROW = { wantsMarketWrap: true }
 
 describe('normalizeTitle', () => {
   it('대괄호 말머리를 없앤다', () => {
@@ -53,18 +59,18 @@ describe('topClusters', () => {
       item('셀트리온 글로벌 톱3 굳힌다고 밝혀'),
       item('셀트리온 신규 공장 착공'),
     ]
-    const r = topClusters(items, 3, NOT_INDEX)
+    const r = topClusters(items, 3, COMPANY_ROW)
     expect(r[0].size).toBe(3)
     expect(r[1].size).toBe(1)
   })
 
   it('최대 topN 개만 준다', () => {
     const items = ['가나다 사건', '라마바 사건', '사아자 사건', '차카타 사건'].map(t => item(t))
-    expect(topClusters(items, 3, NOT_INDEX)).toHaveLength(3)
+    expect(topClusters(items, 3, COMPANY_ROW)).toHaveLength(3)
   })
 
   it('기사가 없으면 빈 배열을 준다', () => {
-    expect(topClusters([], 3, NOT_INDEX)).toEqual([])
+    expect(topClusters([], 3, COMPANY_ROW)).toEqual([])
   })
 
   it('대표 기사는 네이버뉴스 링크가 있는 쪽을 고른다', () => {
@@ -72,7 +78,7 @@ describe('topClusters', () => {
       item('셀트리온 글로벌 톱3 굳힌다'),
       item('셀트리온 글로벌 톱3 굳힌다 확정', { naverUrl: 'https://n.news.naver.com/1' }),
     ]
-    const r = topClusters(items, 3, NOT_INDEX)
+    const r = topClusters(items, 3, COMPANY_ROW)
     expect(r[0].representative.naverUrl).toContain('n.news.naver.com')
   })
 })
@@ -233,21 +239,21 @@ describe('topClusters — 전이적 유사도 (모든 멤버와 비교)', () => 
 
   it('A, B, C 순서로 들어와도 하나의 묶음이 된다', () => {
     const items = [item(A), item(B), item(C)]
-    const r = topClusters(items, 3, NOT_INDEX)
+    const r = topClusters(items, 3, COMPANY_ROW)
     expect(r).toHaveLength(1)
     expect(r[0].size).toBe(3)
   })
 
   it('C, B, A 역순으로 들어와도 하나의 묶음이 된다 (순서에 무관하다)', () => {
     const items = [item(C), item(B), item(A)]
-    const r = topClusters(items, 3, NOT_INDEX)
+    const r = topClusters(items, 3, COMPANY_ROW)
     expect(r).toHaveLength(1)
     expect(r[0].size).toBe(3)
   })
 
   it('서로 무관한 두 제목은 여전히 별개의 묶음이 된다', () => {
     const items = [item('ff gg hh'), item('ii jj kk')]
-    const r = topClusters(items, 3, NOT_INDEX)
+    const r = topClusters(items, 3, COMPANY_ROW)
     expect(r).toHaveLength(2)
     expect(r[0].size).toBe(1)
     expect(r[1].size).toBe(1)
@@ -255,7 +261,7 @@ describe('topClusters — 전이적 유사도 (모든 멤버와 비교)', () => 
 
   it('병합 후 묶음 크기는 실제 멤버 수와 같다 (검토자에게 보이는 숫자)', () => {
     const items = [item(A), item(B), item(C)]
-    const r = topClusters(items, 3, NOT_INDEX)
+    const r = topClusters(items, 3, COMPANY_ROW)
     expect(r[0].size).toBe(3)
   })
 })
@@ -274,12 +280,12 @@ describe('newsPenalty — 감점 대상 (전부 2026-08-27 라이브 실측 제�
     ]
     for (const t of TITLES) {
       it(`감점한다: ${t}`, () => {
-        expect(newsPenalty(t, NOT_INDEX)).toBe(NEWS_PENALTY.AUTO_QUOTE)
+        expect(newsPenalty(t, COMPANY_ROW)).toBe(NEWS_PENALTY.AUTO_QUOTE)
       })
-      it(`지수 행에서도 감점한다: ${t}`, () => {
+      it(`시황을 원하는 행에서도 감점한다: ${t}`, () => {
         // 지수의 자동생성 기사에도 값이 없다. 여기만 예외로 두면 지수 행이
         // 자동생성 기사로 채워진다.
-        expect(newsPenalty(t, IS_INDEX)).toBe(NEWS_PENALTY.AUTO_QUOTE)
+        expect(newsPenalty(t, MARKET_WRAP_ROW)).toBe(NEWS_PENALTY.AUTO_QUOTE)
       })
     }
   })
@@ -293,34 +299,34 @@ describe('newsPenalty — 감점 대상 (전부 2026-08-27 라이브 실측 제�
     ]
     for (const [genre, t] of CASES) {
       it(`${genre}: ${t}`, () => {
-        expect(newsPenalty(t, NOT_INDEX)).toBe(NEWS_PENALTY.NON_NEWS)
-        expect(newsPenalty(t, IS_INDEX)).toBe(NEWS_PENALTY.NON_NEWS)
+        expect(newsPenalty(t, COMPANY_ROW)).toBe(NEWS_PENALTY.NON_NEWS)
+        expect(newsPenalty(t, MARKET_WRAP_ROW)).toBe(NEWS_PENALTY.NON_NEWS)
       })
     }
   })
 
-  describe('시황·수급 — 카테고리에 따라 판정이 뒤집힌다', () => {
-    // 여기가 이 작업에서 제일 깨지기 쉬운 곳이다. 지수 3행이 지금 잘 뽑고 있는
-    // 1순위가 바로 이 기사들이다.
+  describe('시황·수급 — 그 행이 시황을 원하는가에 따라 판정이 뒤집힌다', () => {
+    // 여기가 이 작업에서 제일 깨지기 쉬운 곳이다. KOSPI·S&P500·Nasdaq 세 행이
+    // 지금 잘 뽑고 있는 1순위가 바로 이 기사들이다.
     const 시황: string[] = [
       "미국증시 다우 '연일 상승'..머크·엔비디아·GS '뛰고', 나이키 '뚝'",
       '[美증시] 암 백신 모더나 14% 또 폭등…머크·화이자도 동반 상승',
     ]
     for (const t of 시황) {
       it(`국내사·해외사 행에서는 감점한다: ${t}`, () => {
-        expect(newsPenalty(t, NOT_INDEX)).toBe(NEWS_PENALTY.MARKET_WRAP)
+        expect(newsPenalty(t, COMPANY_ROW)).toBe(NEWS_PENALTY.MARKET_WRAP)
       })
-      it(`지수 행에서는 감점하지 않는다: ${t}`, () => {
-        expect(newsPenalty(t, IS_INDEX)).toBe(NEWS_PENALTY.NONE)
+      it(`시황을 원하는 행에서는 감점하지 않는다: ${t}`, () => {
+        expect(newsPenalty(t, MARKET_WRAP_ROW)).toBe(NEWS_PENALTY.NONE)
       })
     }
 
     const 수급 = '[코스닥 외국인] 대한광통신 에코프로 알테오젠 집중 매수'
     it(`국내사 행에서는 감점한다: ${수급}`, () => {
-      expect(newsPenalty(수급, NOT_INDEX)).toBe(NEWS_PENALTY.NON_NEWS)
+      expect(newsPenalty(수급, COMPANY_ROW)).toBe(NEWS_PENALTY.NON_NEWS)
     })
-    it('지수 행에서는 수급도 그 지수의 뉴스다 — 감점하지 않는다', () => {
-      expect(newsPenalty(수급, IS_INDEX)).toBe(NEWS_PENALTY.NONE)
+    it('시황을 원하는 행에서는 수급도 그 지수의 뉴스다 — 감점하지 않는다', () => {
+      expect(newsPenalty(수급, MARKET_WRAP_ROW)).toBe(NEWS_PENALTY.NONE)
     })
   })
 
@@ -337,8 +343,8 @@ describe('newsPenalty — 감점 대상 (전부 2026-08-27 라이브 실측 제�
     ]
     for (const t of CLEAN) {
       it(`무감점: ${t}`, () => {
-        expect(newsPenalty(t, NOT_INDEX)).toBe(NEWS_PENALTY.NONE)
-        expect(newsPenalty(t, IS_INDEX)).toBe(NEWS_PENALTY.NONE)
+        expect(newsPenalty(t, COMPANY_ROW)).toBe(NEWS_PENALTY.NONE)
+        expect(newsPenalty(t, MARKET_WRAP_ROW)).toBe(NEWS_PENALTY.NONE)
       })
     }
   })
@@ -355,7 +361,7 @@ describe('topClusters — 감점 순위', () => {
   const 기술수출 = "K-바이오 1~8월 기술수출 17조…알테오젠 'ALT-B4' 1100억 돌파"
 
   it('3개 매체 브랜드평판보다 1개 매체 기술수출 뉴스가 앞선다', () => {
-    const r = topClusters([...브랜드평판, 기술수출].map(t => item(t)), 3, NOT_INDEX)
+    const r = topClusters([...브랜드평판, 기술수출].map(t => item(t)), 3, COMPANY_ROW)
     expect(r[0].representative.title).toBe(기술수출)
     expect(r[0].size).toBe(1)
     expect(r[0].penalty).toBe(NEWS_PENALTY.NONE)
@@ -371,7 +377,7 @@ describe('topClusters — 감점 순위', () => {
       '에이비엘바이오 주가, 8월 27일 장중 76,500원 2.55% 상승',
       '에이비엘바이오, 장초반 1%대 상승…최근 교차 흐름 속 7만5000원대',
     ].map(t => item(t))
-    const r = topClusters(items, 3, NOT_INDEX)
+    const r = topClusters(items, 3, COMPANY_ROW)
     expect(r).toHaveLength(2)
     expect(r.every(c => c.penalty === NEWS_PENALTY.AUTO_QUOTE)).toBe(true)
   })
@@ -382,10 +388,10 @@ describe('topClusters — 감점 순위', () => {
       "[광고로 읽는 시대]한국화이자 '모리민'",
       '[헬로스톡] 8/27 주목할 종목 : 인바디·SK바이오팜·SK이노베이션',
     ].map(t => item(t))
-    expect(topClusters(items, 3, NOT_INDEX)).toHaveLength(3)
+    expect(topClusters(items, 3, COMPANY_ROW)).toHaveLength(3)
   })
 
-  describe('같은 입력, 카테고리만 다를 때 1순위가 뒤집힌다', () => {
+  describe('같은 입력, wantsMarketWrap 만 다를 때 1순위가 뒤집힌다', () => {
     // 시황 3개 매체 vs 개별 기업 뉴스 1개 매체.
     const 시황 = [
       '코스피 반도체 강세에 2600선 회복',
@@ -395,20 +401,50 @@ describe('topClusters — 감점 순위', () => {
     const 기업뉴스 = '셀트리온 짐펜트라 미국 처방 확대'
     const items = () => [...시황, 기업뉴스].map(t => item(t))
 
-    it('지수 행: 시황이 그대로 1순위다 (지금 잘 되는 것을 지킨다)', () => {
-      const r = topClusters(items(), 3, IS_INDEX)
+    it('시황을 원하는 행: 시황이 그대로 1순위다 (지금 잘 되는 것을 지킨다)', () => {
+      const r = topClusters(items(), 3, MARKET_WRAP_ROW)
       expect(r[0].representative.title).toBe(시황[0])
       expect(r[0].size).toBe(3)
       expect(r[0].penalty).toBe(NEWS_PENALTY.NONE)
     })
 
-    it('국내사 행: 같은 입력인데 개별 기업 뉴스가 1순위가 된다', () => {
-      const r = topClusters(items(), 3, NOT_INDEX)
+    it('시황을 원하지 않는 행: 같은 입력인데 개별 기업 뉴스가 1순위가 된다', () => {
+      const r = topClusters(items(), 3, COMPANY_ROW)
       expect(r[0].representative.title).toBe(기업뉴스)
       expect(r[0].penalty).toBe(NEWS_PENALTY.NONE)
       expect(r[1].penalty).toBe(NEWS_PENALTY.MARKET_WRAP)
       // 어느 쪽에서도 사라지는 후보는 없다
       expect(r).toHaveLength(2)
     })
+  })
+})
+
+describe('topClusters — 코스피200 헬스케어(업종 검색어를 쓰는 지수 행)', () => {
+  // 2026-08-27 실측 그대로. 이 행은 isIndex 이지만 원하는 것이 시황이 아니라
+  // 헬스케어 업종 동향이다. 예외 기준을 isIndex 로 두면 미국 증시 시황 두 건이
+  // 감점 없이 업종 기사와 동률이 되어, 정작 업종 기사가 1순위를 놓친다.
+  const 미국시황A = "미국증시 다우지수 '하락'...제약주 & 엔비디아 '뚝', 애플 '상승'"
+  const 미국시황B = '[美증시] 국채금리·유가 하락에 3대지수 동반 상승…반도체·제약주 주...'
+  const 업종기사 = '한미약품 3.5조 잭팟에 제약株 불붙었다…오름·앱클론도 급등[바이오맥...'
+  // 실측에서 이 순서로 들어왔다. 감점이 같으면 정렬이 안정적이라 입력 순서가 남는다.
+  const items = () => [미국시황A, 업종기사, 미국시황B].map(t => item(t))
+
+  it('업종 기사가 1순위다 — 미국 증시 시황은 감점되어 뒤로 밀린다', () => {
+    const r = topClusters(items(), 3, COMPANY_ROW)
+    expect(r[0].representative.title).toBe(업종기사)
+    expect(r[0].penalty).toBe(NEWS_PENALTY.NONE)
+    expect(r[1].penalty).toBe(NEWS_PENALTY.MARKET_WRAP)
+    expect(r[2].penalty).toBe(NEWS_PENALTY.MARKET_WRAP)
+    // 감점이지 필터가 아니다 — 시황 두 건도 그대로 남는다.
+    expect(r).toHaveLength(3)
+  })
+
+  it('회귀 재현: 이 행을 시황 행으로 취급하면 업종 기사가 1순위를 놓친다', () => {
+    // 이 테스트는 "isIndex 로 되돌리면 무슨 일이 생기는가"를 고정해 둔 것이다.
+    // 실패하게 만들려는 것이 아니라, 되돌렸을 때의 결과를 눈에 보이게 남긴다.
+    const r = topClusters(items(), 3, MARKET_WRAP_ROW)
+    expect(r.every(c => c.penalty === NEWS_PENALTY.NONE)).toBe(true)
+    expect(r[0].representative.title).toBe(미국시황A)
+    expect(r[1].representative.title).toBe(업종기사)
   })
 })

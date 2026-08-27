@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { charLength } from '@/domain/text'
 import {
   resolveAliases,
+  wantsMarketWrapNews,
+  MARKET_WRAP_ROWS,
   missingFxCurrencies,
   resolveFxRate,
   currencyMismatchReason,
@@ -635,5 +637,31 @@ describe('buildFallbackSummaries', () => {
     const r = buildFallbackSummaries(body, distinctSnippet)
     expect(r).toContain(distinctSnippet)
     expect(r.length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('wantsMarketWrapNews', () => {
+  // 감점 예외의 기준이 `isIndex` 가 아니라 "이 행이 원하는 것이 시황인가"라는 것을
+  // 고정한다. 네 지수 행이 서로 다른 것을 원한다 — 그게 이 함수가 존재하는 이유다.
+  it('KOSPI·S&P500·Nasdaq 은 시황을 원한다', () => {
+    expect(wantsMarketWrapNews({ name: 'KOSPI' })).toBe(true)
+    expect(wantsMarketWrapNews({ name: 'S&P500' })).toBe(true)
+    expect(wantsMarketWrapNews({ name: 'Nasdaq' })).toBe(true)
+  })
+
+  it('코스피200 헬스케어는 지수지만 시황이 아니라 업종 동향을 원한다', () => {
+    // 여기가 요점이다. isIndex 로 갈랐을 때 이 행이 잘못된 쪽에 들어갔다 —
+    // 실측(2026-08-27)에서 미국 증시 시황이 업종 기사를 밀어냈다.
+    expect(wantsMarketWrapNews({ name: '코스피200 헬스케어' })).toBe(false)
+  })
+
+  it('개별 기업 행은 시황을 원하지 않는다', () => {
+    for (const name of ['셀트리온', '알테오젠', 'Pfizer', 'Lonza']) {
+      expect(wantsMarketWrapNews({ name }), name).toBe(false)
+    }
+  })
+
+  it('목록은 세 행뿐이다 — 늘리려면 그 행이 정말 시황을 원하는지 따져야 한다', () => {
+    expect([...MARKET_WRAP_ROWS].sort()).toEqual(['KOSPI', 'Nasdaq', 'S&P500'])
   })
 })

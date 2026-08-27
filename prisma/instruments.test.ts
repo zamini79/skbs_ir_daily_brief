@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { INSTRUMENTS } from './instruments'
 import { KRX_IDX_NM_KOSPI200_HEALTHCARE } from '@/providers/quote/krx'
+import { MARKET_WRAP_ROWS } from '@/pipeline/collectHelpers'
 
 describe('INSTRUMENTS', () => {
   it('23행이다', () => {
@@ -47,6 +48,26 @@ describe('INSTRUMENTS', () => {
     for (const i of INSTRUMENTS.filter(i => i.quoteSource === 'marketstack')) {
       expect(i.quoteSymbol).not.toMatch(/\.X[A-Z]{3}$/)
     }
+  })
+
+  it('MARKET_WRAP_ROWS 는 실재하는 지수 행만 가리킨다', () => {
+    // 이 목록은 이름 문자열로 시드와 맞춘다. 시드에서 name 을 바꾸거나 행을 지우면
+    // 목록이 아무 행에도 걸리지 않게 되고, 그러면 그 행에서 시황이 조용히 감점되기
+    // 시작한다 — 화면에는 "순위가 좀 이상하다"로만 보인다. 그래서 여기서 지킨다.
+    for (const name of MARKET_WRAP_ROWS) {
+      const row = INSTRUMENTS.find(i => i.name === name)
+      expect(row, name).toBeDefined()
+      expect(row!.isIndex, name).toBe(true)
+    }
+  })
+
+  it('코스피200 헬스케어는 지수지만 MARKET_WRAP_ROWS 에 없다', () => {
+    // 감점 예외의 기준이 `isIndex` 가 아니라는 것을 시드 쪽에서도 고정한다.
+    // 이 행은 업종 검색어(`제약주`)를 쓰고 원하는 것이 시황이 아니라 업종 동향이다.
+    // 「지수인데 왜 빠졌지」 하고 넣으면 미국 증시 시황이 업종 기사를 밀어낸다.
+    const hc = INSTRUMENTS.find(i => i.name === '코스피200 헬스케어')!
+    expect(hc.isIndex).toBe(true)
+    expect(MARKET_WRAP_ROWS.has(hc.name)).toBe(false)
   })
 })
 

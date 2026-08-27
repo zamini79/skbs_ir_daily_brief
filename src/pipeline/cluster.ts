@@ -181,12 +181,16 @@ type PenaltyRule = {
   name: string
   penalty: number
   /**
-   * true 면 **지수(Index) 행에서는 이 규칙을 적용하지 않는다.**
-   * 시황과 수급은 개별 기업 행에서는 잡음이지만 지수 행에서는 바로 그 지수의 뉴스다.
-   * KOSPI·S&P500·Nasdaq 행이 지금 잘 뽑고 있는 1순위가 전부 시황 기사이므로,
+   * true 면 **시황을 원하는 행(opts.wantsMarketWrap)에서는 이 규칙을 적용하지 않는다.**
+   * 시황과 수급은 개별 기업 행에서는 잡음이지만 KOSPI·S&P500·Nasdaq 행에서는 바로
+   * 그 지수의 뉴스다. 세 행이 지금 잘 뽑고 있는 1순위가 전부 시황 기사이므로,
    * 이 구분을 빠뜨리면 잘 되던 3행을 한꺼번에 망가뜨리는 회귀가 된다.
+   *
+   * 기준이 `isIndex` 가 **아니라는 것**이 중요하다 — 네 번째 지수 행(코스피200
+   * 헬스케어)은 시황이 아니라 업종 동향을 원한다. 어느 행이 시황을 원하는지는
+   * collectHelpers.ts 의 MARKET_WRAP_ROWS 에 명시돼 있고, 그 주석에 이유가 있다.
    */
-  indexExempt: boolean
+  wantedOnMarketWrapRows: boolean
   patterns: RegExp[]
 }
 
@@ -200,10 +204,11 @@ const PENALTY_RULES: PenaltyRule[] = [
     // 한미약품 주가, 8월 27일 504,000원 4.91% 하락 마감
     // 에이비엘바이오, 장초반 1%대 상승…최근 교차 흐름 속 7만5000원대
     //
-    // 지수 행에서도 감점이다(지수의 자동생성 기사에도 값이 없다) — indexExempt: false.
+    // 시황을 원하는 행에서도 감점이다(지수의 자동생성 기사에도 값이 없다)
+    // — wantedOnMarketWrapRows: false.
     name: 'auto-quote',
     penalty: NEWS_PENALTY.AUTO_QUOTE,
-    indexExempt: false,
+    wantedOnMarketWrapRows: false,
     patterns: [
       /주가[,\s]+\d{1,2}\s*월\s*\d{1,2}\s*일/,          // "주가, 8월 27일"
       /[\d,]+\s*원\s*\d+(?:\.\d+)?\s*%/,                 // "76,500원 2.55%"
@@ -215,7 +220,7 @@ const PENALTY_RULES: PenaltyRule[] = [
     // 생물공학 상장기업 브랜드평판 8월 빅데이터 분석결과…1위 알테오젠
     name: 'brand-ranking',
     penalty: NEWS_PENALTY.NON_NEWS,
-    indexExempt: false,
+    wantedOnMarketWrapRows: false,
     patterns: [/브랜드\s*평판/, /평판\s*지수/, /빅데이터\s*분석/],
   },
   {
@@ -224,14 +229,14 @@ const PENALTY_RULES: PenaltyRule[] = [
     // 진짜 뉴스일 수 있으므로 건드리지 않는다.
     name: 'ad-column',
     penalty: NEWS_PENALTY.NON_NEWS,
-    indexExempt: false,
+    wantedOnMarketWrapRows: false,
     patterns: [/\[[^\]]*광고[^\]]*\]/],
   },
   {
     // [포토] 코스피, 삼성전자·SK하이닉스 상승에 6900선 회복
     name: 'photo',
     penalty: NEWS_PENALTY.NON_NEWS,
-    indexExempt: false,
+    wantedOnMarketWrapRows: false,
     patterns: [/\[\s*(?:포토|사진)[^\]]*\]/],
   },
   {
@@ -239,7 +244,7 @@ const PENALTY_RULES: PenaltyRule[] = [
     // 종목 나열형 추천물. 지수 행에서도 개별 종목 나열일 뿐이라 예외를 두지 않는다.
     name: 'stock-pick',
     penalty: NEWS_PENALTY.NON_NEWS,
-    indexExempt: false,
+    wantedOnMarketWrapRows: false,
     patterns: [/주목할\s*종목/, /관심\s*종목/, /추천\s*종목/, /오늘의\s*종목/],
   },
   {
@@ -249,7 +254,7 @@ const PENALTY_RULES: PenaltyRule[] = [
     // 나온 것일 뿐이지만, 지수 행에서는 그 지수의 수급 자체가 뉴스다. 그래서 예외다.
     name: 'flow',
     penalty: NEWS_PENALTY.NON_NEWS,
-    indexExempt: true,
+    wantedOnMarketWrapRows: true,
     patterns: [/\[[^\]]*(?:외국인|기관|개인)[^\]]*\]/, /순매수/, /순매도/, /집중\s*매[수도]/],
   },
   {
@@ -261,7 +266,7 @@ const PENALTY_RULES: PenaltyRule[] = [
     // 무감점 후보가 없으면 여전히 1순위로 남는다 — 버리는 필터였다면 못 할 타협이다.
     name: 'market-wrap',
     penalty: NEWS_PENALTY.MARKET_WRAP,
-    indexExempt: true,
+    wantedOnMarketWrapRows: true,
     patterns: [/증시/, /시황/, /코스피/, /코스닥/, /나스닥/, /다우지수/, /다우존스/, /항셍/, /닛케이/, /S&P\s*500/i],
   },
 ]
@@ -274,10 +279,10 @@ const PENALTY_RULES: PenaltyRule[] = [
  * 장르인가"를 뜻하는 것이지 누적 점수가 아니다. 합으로 하면 약한 규칙 두 개에 걸린
  * 제목이 자동생성 주가 기사와 같은 자리로 밀려나 단계의 뜻이 흐려진다.
  */
-export function newsPenalty(title: string, opts: { isIndex: boolean }): number {
+export function newsPenalty(title: string, opts: { wantsMarketWrap: boolean }): number {
   let worst: number = NEWS_PENALTY.NONE
   for (const rule of PENALTY_RULES) {
-    if (opts.isIndex && rule.indexExempt) continue
+    if (opts.wantsMarketWrap && rule.wantedOnMarketWrapRows) continue
     if (rule.patterns.some(p => p.test(title))) {
       if (rule.penalty > worst) worst = rule.penalty
     }
@@ -299,14 +304,16 @@ export function newsPenalty(title: string, opts: { isIndex: boolean }): number {
  * (b) 홍보성 보도자료가 여러 매체에 동시 배포되면 진짜 뉴스를 밀어낸다. 감점은
  * 후보를 **버리지 않고 뒤로만 민다** — 이유는 newsPenalty 주석 참고.
  *
- * opts.isIndex 를 그대로 newsPenalty 로 넘긴다. 이 값이 없으면 시황·수급 기사가
- * 지수 3행에서도 감점되어 지금 잘 뽑히는 1순위가 전부 엉뚱한 것으로 바뀐다.
- * 그래서 기본값을 두지 않고 호출부가 반드시 정하게 한다.
+ * opts.wantsMarketWrap 을 그대로 newsPenalty 로 넘긴다. 이 값이 없으면 시황·수급
+ * 기사가 KOSPI·S&P500·Nasdaq 행에서도 감점되어 지금 잘 뽑히는 1순위가 전부 엉뚱한
+ * 것으로 바뀐다. 그래서 기본값을 두지 않고 호출부가 반드시 정하게 한다.
+ * 어느 행이 시황을 원하는지는 collectHelpers.ts 의 MARKET_WRAP_ROWS 가 정한다 —
+ * `isIndex` 가 아니다(코스피200 헬스케어는 지수지만 업종 동향을 원한다).
  */
 export function topClusters(
   items: NewsItem[],
   topN: number,
-  opts: { isIndex: boolean },
+  opts: { wantsMarketWrap: boolean },
 ): Array<{ representative: NewsItem; size: number; penalty: number }> {
   const clusters: Array<{ members: NewsItem[]; memberTokens: string[][] }> = []
 
