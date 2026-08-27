@@ -19,20 +19,30 @@ const okSummary = { numeric: 'n', context: 'c', implication: 'i' }
 
 describe('resolveAliases', () => {
   it('콤마로 구분된 별칭을 배열로 만든다', () => {
-    expect(resolveAliases({ name: '삼성바이오로직스', newsAliases: '삼성바이오로직스,삼성바이오,삼바' }))
+    expect(resolveAliases({ newsQuery: '삼성바이오로직스', newsAliases: '삼성바이오로직스,삼성바이오,삼바' }))
       .toEqual(['삼성바이오로직스', '삼성바이오', '삼바'])
   })
 
   it('앞뒤 공백을 제거한다', () => {
-    expect(resolveAliases({ name: 'GSK', newsAliases: ' GSK , 지에스케이 ' })).toEqual(['GSK', '지에스케이'])
+    expect(resolveAliases({ newsQuery: 'GSK', newsAliases: ' GSK , 지에스케이 ' })).toEqual(['GSK', '지에스케이'])
   })
 
-  it('비어 있으면 name 하나로 폴백한다', () => {
-    expect(resolveAliases({ name: '셀트리온', newsAliases: '' })).toEqual(['셀트리온'])
+  it('비어 있으면 newsQuery 하나로 폴백한다', () => {
+    expect(resolveAliases({ newsQuery: '셀트리온', newsAliases: '' })).toEqual(['셀트리온'])
   })
 
-  it('공백뿐이어도 name 으로 폴백한다', () => {
-    expect(resolveAliases({ name: '셀트리온', newsAliases: '   ' })).toEqual(['셀트리온'])
+  it('공백뿐이어도 newsQuery 로 폴백한다', () => {
+    expect(resolveAliases({ newsQuery: '셀트리온', newsAliases: '   ' })).toEqual(['셀트리온'])
+  })
+
+  it('해외사처럼 name 이 영문이어도 폴백은 한국어 newsQuery 다', () => {
+    // 호출부(collect.ts)는 Instrument 전체를 그대로 넘긴다. name 이 함께 들어와도
+    // 무시되고 한국어 newsQuery 가 나와야 한다 — name 으로 폴백하면 'Pfizer' 가
+    // 한국어 헤드라인에 등장하지 않아 관련성 필터가 후보를 전량 탈락시킨다.
+    const pfizer = { name: 'Pfizer', newsQuery: '화이자', newsAliases: '' }
+    const merck = { name: 'Merck', newsQuery: '머크', newsAliases: '' }
+    expect(resolveAliases(pfizer)).toEqual(['화이자'])
+    expect(resolveAliases(merck)).toEqual(['머크'])
   })
 })
 

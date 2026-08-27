@@ -6,15 +6,19 @@ import { MAX_SUMMARY_CHARS } from '@/providers/summarize/prompt'
 
 /**
  * 뉴스 관련성 필터에 쓸 별칭 목록을 만든다. newsAliases 는 콤마 구분 문자열이다.
- * 비어 있으면(설정 누락) name 하나로 폴백한다 — 필터가 조용히 전부 통과시키는
+ * 비어 있으면(설정 누락) newsQuery 하나로 폴백한다 — 필터가 조용히 전부 통과시키는
  * 사고를 막기 위함이다.
+ *
+ * 폴백을 name 이 아니라 newsQuery 로 두는 이유: name 은 영문 표기다(Pfizer, Merck, GSK).
+ * 한국어 헤드라인에 그 문자열은 등장하지 않으므로 name 으로 폴백하면 관련성 필터가
+ * 후보를 전량 탈락시킨다. newsQuery 는 실제로 검색에 쓰는 한국어 문자열이다(화이자, 머크).
  */
-export function resolveAliases(inst: { name: string; newsAliases: string }): string[] {
+export function resolveAliases(inst: { newsQuery: string; newsAliases: string }): string[] {
   const list = inst.newsAliases
     .split(',')
     .map(s => s.trim())
     .filter(s => s.length > 0)
-  return list.length > 0 ? list : [inst.name]
+  return list.length > 0 ? list : [inst.newsQuery]
 }
 
 /**
