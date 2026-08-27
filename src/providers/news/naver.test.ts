@@ -46,6 +46,20 @@ describe('stripHtml', () => {
     expect(out).toBe('&#99999999; 망가진 엔티티')
     expect([...out].length).toBe([...'&#99999999; 망가진 엔티티'].length)
   })
+  it('한국어 기사에 흔한 명명 엔티티 8종을 디코딩한다', () => {
+    expect(stripHtml('&lsquo;x&rsquo;')).toBe('‘x’')
+    expect(stripHtml('&ldquo;x&rdquo;')).toBe('“x”')
+    expect(stripHtml('A&middot;B')).toBe('A·B')
+    expect(stripHtml('A&hellip;B')).toBe('A…B')
+    expect(stripHtml('A&ndash;B')).toBe('A–B')
+    expect(stripHtml('A&mdash;B')).toBe('A—B')
+  })
+  it('실제 기사 제목에 쓰이는 조합(작은따옴표+가운뎃점)을 정확히 디코딩한다', () => {
+    expect(stripHtml('&lsquo;램시마SC&middot;짐펜트라&rsquo;')).toBe('‘램시마SC·짐펜트라’')
+  })
+  it('명명 엔티티 목록이 늘어나도 모르는 이름 엔티티는 여전히 원문 그대로 남긴다', () => {
+    expect(stripHtml('A &foobar; B')).toBe('A &foobar; B')
+  })
 })
 
 describe('searchNaverNews', () => {

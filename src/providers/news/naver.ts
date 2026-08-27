@@ -8,6 +8,14 @@ const NAMED_ENTITIES: Record<string, string> = {
   gt: '>',
   apos: "'",
   nbsp: ' ',
+  lsquo: '‘',
+  rsquo: '’',
+  ldquo: '“',
+  rdquo: '”',
+  middot: '·',
+  hellip: '…',
+  ndash: '–',
+  mdash: '—',
 }
 
 const ENTITY_RE = /&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);/g

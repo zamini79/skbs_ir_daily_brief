@@ -42,6 +42,10 @@ describe('extractNaverArticleBody', () => {
     const html = `<div id="dic_area">&quot;인용&quot;&nbsp;그리고&nbsp;A&amp;B</div>`
     expect(extractNaverArticleBody(html)).toBe('"인용" 그리고 A&B')
   })
+  it('&middot; 는 실제 가운뎃점 문자로 디코딩된다', () => {
+    const html = `<div id="dic_area">램시마SC&middot;짐펜트라</div>`
+    expect(extractNaverArticleBody(html)).toBe('램시마SC·짐펜트라')
+  })
 })
 
 describe('fetchArticleBody', () => {
