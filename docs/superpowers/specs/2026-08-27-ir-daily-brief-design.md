@@ -179,7 +179,7 @@ HTTPS는 무료 플랜에서 정상 동작한다(v2 실측). HTTP 전용이라�
       id, category(국내사|해외사|Index), displayOrder, name,
       currency, sharesOutstanding?, quoteSource, quoteSymbol, newsQuery
 
-    YearOpenPrice       연초 기준가 캐시
+    YtdBasePrice        연초 기준가 캐시(전년 마지막 거래일 종가)
       instrumentId, year, price                      (unique: instrumentId+year)
 
     BriefRun            일자별 수집 실행
@@ -222,7 +222,7 @@ HTTPS는 무료 플랜에서 정상 동작한다(v2 실측). HTTP 전용이라�
    (예: 월요일 실행 시 시세는 금요일 종가, 뉴스는 일·월요일 기사).
 2. **환율 수집** — Frankfurter 1회 호출, USD/EUR/GBP/CHF/HKD → KRW
 3. **시세 수집** — 종목별 Provider 호출. 실패한 종목은 해당 행만 비우고 계속 진행
-4. **YTD 보정** — `YearOpenPrice` 미보유 종목만 연초 종가 조회 후 캐시
+4. **YTD 보정** — `YtdBasePrice` 미보유 종목만 전년 마지막 거래일 종가 조회 후 캐시
 5. **뉴스 수집** — 종목별 네이버 검색 API. 당일·D-1 기사만 필터
 6. **클러스터링** — 상위 3개 선정 (§7)
 7. **요약 생성** — 후보당 3안 (§8)
@@ -348,6 +348,9 @@ Index 행도 개별 종목과 동일하게 처리한다. 샘플에서 Nasdaq 칸
    `Instrument.priceDivisorForMarketCap`으로 처리하고 테스트로 고정한다.
 4. **네이버 비공개 엔드포인트 의존** — 국내 시세·지수는 공식 API가 아니다.
    스키마 변경 시 즉시 깨진다. Provider 격리로 수정 범위를 한 파일에 가둔다.
-5. **연초대비 수정주가 기준 미확정** — §3.5. 담당자 확인이 필요하다.
 6. **뉴스 본문 크롤링 안정성** — 원 언론사 링크는 구조가 제각각이다.
    네이버뉴스 링크 우선, 실패 시 description 폴백으로 완화한다.
+
+해소된 항목: 옛 5번 "연초대비 수정주가 기준 미확정"은 더 이상 리스크가 아니다.
+기준가는 국내 10종목 실측 대조로 **전년도 마지막 거래일 종가**로 확정됐고, 수정주가는
+원인이 아니었다. 결론과 근거는 §3.5에 있다. (남은 번호는 다시 매기지 않는다.)
