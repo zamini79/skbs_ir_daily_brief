@@ -128,6 +128,18 @@ export function extractJsonText(payload: unknown): string {
   throw new Error('gemini: 모든 파트가 thought 뿐이거나 text 가 없다')
 }
 
+/**
+ * 100자 제한을 강제한다. **초과해도 재생성하지 않는다** — 곧바로 절삭한다.
+ *
+ * 스펙 초안은 "초과 시 1회 재생성, 그래도 초과하면 절삭"이었고, 2026-08-27 에
+ * 재생성을 빼기로 확정하면서 스펙 §8 에 그 근거를 적었다. 요약하면: 같은
+ * 프롬프트로 다시 물어도 짧아질 이유가 없고(100자 초과는 그 모델의 계통적
+ * 성향이다), 무료 티어의 일일 쿼터가 실질 제약이라 한 건의 절삭을 고치려고
+ * 그날 남은 요약 전부의 품질을 걸게 되며, 호출 지연이 8초다.
+ *
+ * 절삭이 내용을 통째로 날리지 않도록 하는 것은 `truncateAtSentence` 쪽 책임이다
+ * (경계가 예산의 절반에 못 미치면 하드 컷 — domain/text.ts).
+ */
 export function enforceLimit(s: string): string {
   const t = s.trim()
   if (charLength(t) <= MAX_SUMMARY_CHARS) return t
