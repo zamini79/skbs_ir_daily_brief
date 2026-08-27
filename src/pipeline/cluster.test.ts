@@ -127,6 +127,62 @@ describe('filterByTitleMention', () => {
     expect(r).toHaveLength(1)
     expect(r[0].title).toBe('코스피, 금리 인상에 흔들렸지만 6900선대 강세')
   })
+
+  describe('Lonza(론자) — "-론자"(-論者) 접미사 오매칭', () => {
+    const LONZA_ALIASES = ['론자', 'Lonza']
+
+    // 실제 재현 사례(2026-08-27 실행). "…없다'론자"는 "'중도는 없다'는 주장을
+    // 하는 사람"이라는 뜻의 정치 기사이지 Lonza 기사가 아니다.
+    it('실패 재현 1: 절 종결어미(다) + 인용부호 + 론자는 매칭하지 않는다', () => {
+      const items = [item('김민석 "鄭은 \'중도는 없다\'론자"…정청래 "무례하고 폭력적인 마이크"')]
+      expect(filterByTitleMention(items, LONZA_ALIASES)).toHaveLength(0)
+    })
+
+    it('실패 재현 2: 같은 접미사 패턴의 다른 정치 기사도 매칭하지 않는다', () => {
+      const items = [item('김민석 "정청래는 \'중도 없다\'론자 … 당원 선택은 민생·실용·확장"')]
+      expect(filterByTitleMention(items, LONZA_ALIASES)).toHaveLength(0)
+    })
+
+    // 음성 케이스만으로는 "론자를 통째로 버린다"는 구현도 테스트를 통과한다 —
+    // 그게 이 작업의 핵심 함정이므로 실제 Lonza 기사 제목을 양성 픽스처로 반드시 넣는다.
+    // 아래 다섯 개는 네이버/경제지 실제 기사 제목이다.
+    it.each([
+      '론자 등 CDMO 고래들,세포유전자치료제 승부수...매출1조 넘은 SK팜테코 전략은',
+      '세계 1위 CDMO 기업 론자, 대대적 시설투자 단행',
+      '론자, 캡슐·건기식 원료 사업 3.2조원에 론스타 매각…\'순수 CDMO 기업\' 전환',
+      '세계 1위 CDMO 론자, 美 바이오의약품 공장 12억 달러에 인수',
+    ])('실제 Lonza 기사는 그대로 매칭한다: %s', title => {
+      expect(filterByTitleMention([item(title)], LONZA_ALIASES)).toHaveLength(1)
+    })
+
+    // 뒤쪽(trailing)에 조사가 공백 없이 바로 붙는 정상적인 경우 — 이걸 막아 버리면
+    // 진짜 Lonza 기사까지 함께 떨어진다. hasGenuineMention 이 뒤쪽은 보지 않는 이유.
+    it('뒤에 조사(는)가 공백 없이 바로 붙어도 매칭한다', () => {
+      const items = [item('다가온 CDMO 시대…론자는 어떻게 K-바이오의 \'워너비 기업\' 됐나[비즈니스 포커스]')]
+      expect(filterByTitleMention(items, LONZA_ALIASES)).toHaveLength(1)
+    })
+
+    it('앞이 인용부호 없이 곧바로 "다"여도(중간에 따옴표가 없어도) 버린다', () => {
+      // "있다론자" — 인용부호가 아예 없는 경우도 같은 규칙으로 잡혀야 한다.
+      const items = [item('그는 여전히 냉전이 끝나지 않았다론자 취급을 받는다')]
+      expect(filterByTitleMention(items, LONZA_ALIASES)).toHaveLength(0)
+    })
+  })
+
+  // 다른 짧은 한글 별칭(머크, 삼바, 녹십자)이 이번 변경으로 회귀하지 않는지 확인한다.
+  // hasGenuineMention은 "바로 앞이 다인 경우"만 버리므로, 그 조건에 해당하지 않는
+  // 정상적인 문맥에서는 여전히 부분문자열 포함과 동일하게 동작해야 한다.
+  describe('짧은 별칭 회귀 방지', () => {
+    it('머크: 정상 문맥에서 그대로 매칭한다', () => {
+      expect(filterByTitleMention([item('머크, 항암제 임상 3상 성공')], ['머크'])).toHaveLength(1)
+    })
+    it('삼바: 정상 문맥에서 그대로 매칭한다', () => {
+      expect(filterByTitleMention([item('삼바 4공장 가동률 상승')], ['삼바'])).toHaveLength(1)
+    })
+    it('녹십자: 정상 문맥에서 그대로 매칭한다', () => {
+      expect(filterByTitleMention([item('녹십자, 독감 백신 출하 시작')], ['녹십자'])).toHaveLength(1)
+    })
+  })
 })
 
 describe('topClusters — 전이적 유사도 (모든 멤버와 비교)', () => {
