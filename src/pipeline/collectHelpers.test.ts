@@ -376,6 +376,14 @@ describe('computeRunStatus', () => {
     expect(computeRunStatus(0, 0, 0, 0, 0)).toBe('READY')
   })
 
+  it('뉴스 상태 기록 실패도 PARTIAL로 본다 — 화면이 근거 없이 「기사 없음」을 단정한다', () => {
+    expect(computeRunStatus(0, 0, 0, 0, 0, 1)).toBe('PARTIAL')
+  })
+
+  it('여섯 가지가 다 없어야 READY이다', () => {
+    expect(computeRunStatus(0, 0, 0, 0, 0, 0)).toBe('READY')
+  })
+
   it('시세 인자를 생략하면 기존 동작 그대로다', () => {
     expect(computeRunStatus(0, 0, 0, 0)).toBe('READY')
     expect(computeRunStatus(0, 0, 0, 1)).toBe('PARTIAL')
@@ -389,6 +397,7 @@ describe('buildStatusDetail', () => {
     candidatesCreated: 43,
     ytdBaseFailed: 0,
     newsFailed: 0,
+    newsRecordFailed: 0,
     missingCurrencies: [] as string[],
   }
 
@@ -424,6 +433,15 @@ describe('buildStatusDetail', () => {
     expect(buildStatusDetail({ ...clean, ytdBaseFailed: 2 })).toBe('연초 기준가 2종목 조회 실패')
   })
 
+  it('뉴스 상태 기록 실패는 검색 실패와 다른 문구로 말한다', () => {
+    // 둘이 같은 문구면 "검색이 실패했다"와 "검색은 했는데 그 사실을 못 남겼다"가
+    // 뭉개진다. 후자는 그 행의 「기사 없음」 표시 자체를 믿을 수 없다는 뜻이다.
+    const record = buildStatusDetail({ ...clean, newsRecordFailed: 2 })
+    const search = buildStatusDetail({ ...clean, newsFailed: 2 })
+    expect(record).toContain('기록 실패')
+    expect(record).not.toBe(search)
+  })
+
   // 이 짝이 깨지면 「부분 완료」인데 사유가 비거나, 사유가 있는데 「준비 완료」가 된다.
   it('computeRunStatus 와 항상 짝을 이룬다 — PARTIAL 이면 사유가 있고, READY 면 없다', () => {
     const cases = [
@@ -431,12 +449,14 @@ describe('buildStatusDetail', () => {
       { ...clean, summariesFailed: 1 },
       { ...clean, ytdBaseFailed: 1 },
       { ...clean, newsFailed: 1 },
+      { ...clean, newsRecordFailed: 1 },
       { ...clean, missingCurrencies: ['USD'] },
       clean,
     ]
     for (const c of cases) {
       const status = computeRunStatus(
         c.summariesFailed, c.ytdBaseFailed, c.newsFailed, c.missingCurrencies.length, c.quoteFailed,
+        c.newsRecordFailed,
       )
       const detail = buildStatusDetail(c)
       expect(status === 'PARTIAL', JSON.stringify(c)).toBe(detail !== null)

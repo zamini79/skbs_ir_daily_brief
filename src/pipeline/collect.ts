@@ -57,23 +57,30 @@ const TOP_N = 3
 
 /**
  * 종목별 뉴스 검색 결과를 남긴다. 이 기록 자체가 실패해도 수집을 멈추지 않는다 —
- * 기록이 없으면 화면이 그 행을 "기사 없음"으로 보게 되지만, 여기서 예외를 던져
- * 뉴스 단계 전체를 무너뜨리는 것보다는 낫다.
+ * 여기서 예외를 던져 뉴스 단계 전체를 무너뜨리는 것보다는 낫다.
+ *
+ * **다만 조용히 넘어가지는 않는다.** 기록이 없으면 rowDisplayState 가 그 행을
+ * NO_NEWS 로 보고 화면이 「당일·D-1 기사 없음」이라고 **단정**한다(repo.ts) —
+ * 검색이 실패했는데도 그렇다. 기록 실패를 삼키면 그 단정이 근거 없이 서고,
+ * 그것은 이 코드베이스가 반복해서 고쳐 온 바로 그 결함이다.
+ * 그래서 성공 여부를 돌려주고 호출부가 실행 단위로 집계한다.
  */
 async function recordNewsFetch(
   runId: string,
   instrumentId: string,
   status: 'OK' | 'FAILED',
   error: string | null,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await prisma.newsFetch.upsert({
       where: { runId_instrumentId: { runId, instrumentId } },
       update: { status, error },
       create: { runId, instrumentId, status, error },
     })
-  } catch {
-    // 위 주석 참조. 조용히 넘어가되 수집은 계속한다.
+    return true
+  } catch (e) {
+    console.error(`[news] 상태 기록 실패 (${instrumentId}): ${e instanceof Error ? e.message : String(e)}`)
+    return false
   }
 }
 
@@ -88,6 +95,7 @@ export async function runCollection(now: Date): Promise<{
   bodyCrawlFailed: number
   ytdBaseFailed: number
   newsFailed: number
+  newsRecordFailed: number
   fxFailed: number
   quoteFailed: number
 }> {
@@ -282,6 +290,10 @@ export async function runCollection(now: Date): Promise<{
   // 검색 성공 여부를 NewsFetch 에 남긴다 — 이게 없으면 "후보 0건"이 "오늘 기사가 없다"와
   // "검색을 못 했다" 두 가지를 동시에 뜻하게 되고, 화면은 그 둘을 구분할 수 없다.
   let newsFailed = 0
+  // 검색 결과를 DB 에 남기지 못한 종목 수. 이 행은 화면에서 근거 없이
+  // 「당일·D-1 기사 없음」으로 단정된다(recordNewsFetch 주석 참고) — 행별로는
+  // 바로잡을 수 없어도 실행 단위 배너에는 반드시 남아야 한다.
+  let newsRecordFailed = 0
   const newsLimit = pLimit(NEWS_CONCURRENCY)
   const perInstrument = await Promise.all(
     instruments.map(inst =>
@@ -289,14 +301,14 @@ export async function runCollection(now: Date): Promise<{
         try {
           const items = await searchNaverNews(inst.newsQuery, now)
           const filtered = filterByTitleMention(items, resolveAliases(inst))
-          await recordNewsFetch(run.id, inst.id, 'OK', null)
+          if (!(await recordNewsFetch(run.id, inst.id, 'OK', null))) newsRecordFailed++
           return { inst, clusters: topClusters(filtered, TOP_N) }
         } catch (e) {
           // 사유는 그대로 남긴다. 지어내지 않는다 — 담당자가 이 문구를 근거로 판단한다.
           const reason = e instanceof Error ? e.message : String(e)
           newsFailed++
           console.error(`[news] ${inst.name}: ${reason}`)
-          await recordNewsFetch(run.id, inst.id, 'FAILED', reason)
+          if (!(await recordNewsFetch(run.id, inst.id, 'FAILED', reason))) newsRecordFailed++
           return { inst, clusters: [] }
         }
       }),
@@ -431,15 +443,16 @@ export async function runCollection(now: Date): Promise<{
     })
   }
 
-  // status 와 statusDetail 은 같은 카운터 다섯 개에서 나온다. 둘이 어긋나지 않도록
+  // status 와 statusDetail 은 같은 카운터 여섯 개에서 나온다. 둘이 어긋나지 않도록
   // 문구 조립은 collectHelpers 의 순수 함수에 두고 테스트가 짝을 지킨다.
-  const status = computeRunStatus(summariesFailed, ytdBaseFailed, newsFailed, fxFailed, quoteFailed)
+  const status = computeRunStatus(summariesFailed, ytdBaseFailed, newsFailed, fxFailed, quoteFailed, newsRecordFailed)
   const statusDetail = buildStatusDetail({
     quoteFailed,
     summariesFailed,
     candidatesCreated,
     ytdBaseFailed,
     newsFailed,
+    newsRecordFailed,
     missingCurrencies,
   })
   await prisma.briefRun.update({
@@ -447,5 +460,5 @@ export async function runCollection(now: Date): Promise<{
     data: { status, statusDetail, finishedAt: new Date() },
   })
 
-  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, bodyCrawlFailed, ytdBaseFailed, newsFailed, fxFailed, quoteFailed }
+  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, bodyCrawlFailed, ytdBaseFailed, newsFailed, newsRecordFailed, fxFailed, quoteFailed }
 }

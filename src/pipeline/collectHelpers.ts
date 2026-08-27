@@ -219,22 +219,33 @@ export async function attemptSummary(
  *
  * 세는 단위는 **실제로 실패한 종목**이다. quoteSource 가 'manual' 인 행(수집 대상이
  * 아니라 수기 입력 대상)은 여기 들어오지 않는다 — 의도된 공란을 장애로 세면 매일
- * PARTIAL 이 뜨고 배너가 아무 뜻도 없어진다(collect.ts 의 quoteFailed 참고). */
+ * PARTIAL 이 뜨고 배너가 아무 뜻도 없어진다(collect.ts 의 quoteFailed 참고).
+ *
+ * 뉴스 상태 **기록** 실패(newsRecordFailed)도 같은 규칙이다. 이쪽은 값이 비는 게
+ * 아니라 **화면이 없는 사실을 단정하게 되는** 경우다 — NewsFetch 기록이 없으면
+ * rowDisplayState 가 NO_NEWS 를 주고 화면은 「당일·D-1 기사 없음」이라고 말하는데,
+ * 그 근거가 실은 없다. 행별로 바로잡을 수 없으니 실행 단위로라도 남긴다. */
 export function computeRunStatus(
   summariesFailed: number,
   ytdBaseFailed = 0,
   newsFailed = 0,
   fxFailed = 0,
   quoteFailed = 0,
+  newsRecordFailed = 0,
 ): 'READY' | 'PARTIAL' {
-  return summariesFailed > 0 || ytdBaseFailed > 0 || newsFailed > 0 || fxFailed > 0 || quoteFailed > 0
+  return summariesFailed > 0 ||
+    ytdBaseFailed > 0 ||
+    newsFailed > 0 ||
+    fxFailed > 0 ||
+    quoteFailed > 0 ||
+    newsRecordFailed > 0
     ? 'PARTIAL'
     : 'READY'
 }
 
 /**
  * 배너에 붙는 사유 문구를 만든다. `computeRunStatus` 와 **반드시 짝을 이룬다** —
- * 같은 카운터 다섯 개를 보고, 하나라도 0이 아니면 그 항목을 문구에 싣는다.
+ * 같은 카운터 여섯 개를 보고, 하나라도 0이 아니면 그 항목을 문구에 싣는다.
  * (둘이 어긋나면 「부분 완료」인데 사유가 비거나, 사유가 있는데 「준비 완료」가 된다.
  * 그 불일치를 막는 것이 이 함수를 인라인 문자열에서 빼낸 이유다 — 테스트가 짝을 지킨다.)
  *
@@ -250,6 +261,8 @@ export function buildStatusDetail(counts: {
   candidatesCreated: number
   ytdBaseFailed: number
   newsFailed: number
+  /** 기본값 0 — 이 카운터가 생기기 전 호출부(테스트 포함)와의 호환용. */
+  newsRecordFailed?: number
   missingCurrencies: string[]
 }): string | null {
   const parts: string[] = []
@@ -259,6 +272,11 @@ export function buildStatusDetail(counts: {
   }
   if (counts.ytdBaseFailed > 0) parts.push(`연초 기준가 ${counts.ytdBaseFailed}종목 조회 실패`)
   if (counts.newsFailed > 0) parts.push(`뉴스 검색 ${counts.newsFailed}종목 실패`)
+  if ((counts.newsRecordFailed ?? 0) > 0) {
+    // 문구가 "검색 실패"와 헷갈리면 안 된다. 이쪽은 검색은 했는데 그 결과를 남기지
+    // 못한 것이고, 그래서 그 행의 「기사 없음」 표시를 믿을 수 없다는 뜻이다.
+    parts.push(`뉴스 상태 기록 실패 ${counts.newsRecordFailed}종목 (해당 행의 「기사 없음」은 근거 없음)`)
+  }
   if (counts.missingCurrencies.length > 0) {
     parts.push(`환율 미확보: ${counts.missingCurrencies.join(', ')} (시가총액 공란)`)
   }
