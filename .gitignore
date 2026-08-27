@@ -1,0 +1,19 @@
+# 환경변수 (API 키 포함 — 절대 커밋 금지)
+.env
+.env.local
+.env*.local
+
+# 의존성 / 빌드
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# OMC / SDD 작업공간
+.omc/
+.superpowers/
+
+# OS
+.DS_Store
+*.log
