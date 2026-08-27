@@ -8,6 +8,9 @@ vi.mock('./naver', () => ({
 vi.mock('./twelvedata', () => ({
   fetchTwelveDataQuotes: vi.fn(async () => new Map([['PFE', { close: 28.3, prevClose: 28.57, currency: 'USD', asOf: '2026-08-26' }]])),
 }))
+vi.mock('./krx', () => ({
+  fetchKrxIndexQuote: vi.fn(async () => ({ close: 2173.53, prevClose: 2108.2, currency: 'KRW', asOf: '2026-08-26' })),
+}))
 vi.mock('./marketstack', () => ({
   fetchMarketstackQuotes: vi.fn(async () => new Map([['GSK.L', { close: 1890.5, prevClose: 1875, currency: 'GBP', asOf: '2026-08-25' }]])),
   fetchMarketstackYtdBase: vi.fn(async () => new Map()),
@@ -17,6 +20,7 @@ import { fetchAllQuotes } from './index'
 import { fetchNaverStock, fetchNaverDomesticIndex, fetchNaverWorldIndex } from './naver'
 import { fetchTwelveDataQuotes } from './twelvedata'
 import { fetchMarketstackQuotes } from './marketstack'
+import { fetchKrxIndexQuote } from './krx'
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -30,6 +34,27 @@ describe('fetchAllQuotes', () => {
     expect((r.get('a') as any).close).toBe(100)
     expect((r.get('b') as any).close).toBeCloseTo(28.3, 4)
     expect((r.get('c') as any).close).toBeCloseTo(1890.5, 4)
+  })
+
+  it('krx-index 는 KRX 지수 fetcher 로 간다 — 심볼이 . 로 시작하지 않아도 네이버로 새지 않는다', async () => {
+    const r = await fetchAllQuotes([
+      { id: 'h', quoteSource: 'krx-index', quoteSymbol: '코스피 200 헬스케어' },
+    ])
+    expect((r.get('h') as any).close).toBeCloseTo(2173.53, 2)
+    expect(fetchKrxIndexQuote).toHaveBeenCalledWith('코스피 200 헬스케어')
+    expect(fetchNaverDomesticIndex).not.toHaveBeenCalled()
+    expect(fetchNaverStock).not.toHaveBeenCalled()
+  })
+
+  it('krx-index 가 실패해도 다른 종목은 살아남고 사유가 Error 로 남는다', async () => {
+    vi.mocked(fetchKrxIndexQuote).mockRejectedValueOnce(new Error('[코스피 200 헬스케어] 거래일을 찾지 못함'))
+    const r = await fetchAllQuotes([
+      { id: 'h', quoteSource: 'krx-index', quoteSymbol: '코스피 200 헬스케어' },
+      { id: 'a', quoteSource: 'naver-stock', quoteSymbol: '207940' },
+    ])
+    expect(r.get('h')).toBeInstanceOf(Error)
+    expect((r.get('h') as Error).message).toContain('거래일을 찾지 못함')
+    expect((r.get('a') as any).close).toBe(100)
   })
 
   it('manual 소스는 결과에 넣지 않는다', async () => {

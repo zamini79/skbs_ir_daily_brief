@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { INSTRUMENTS } from './instruments'
+import { KRX_IDX_NM_KOSPI200_HEALTHCARE } from '@/providers/quote/krx'
 
 describe('INSTRUMENTS', () => {
   it('23행이다', () => {
@@ -25,6 +26,23 @@ describe('INSTRUMENTS', () => {
       expect(i.quoteSymbol).toMatch(/^\d{6}$/)
     }
   })
+  it('코스피200 헬스케어는 KRX 자동 수집이고 quoteSymbol 이 KRX 표기와 정확히 같다', () => {
+    // 표기가 두 가지다. 우리 name 은 원본 브리프 엑셀을 따른 '코스피200 헬스케어'(공백
+    // 없음)이고, KRX 응답의 IDX_NM 은 '코스피 200 헬스케어'(공백 있음)다. quoteSymbol 은
+    // **KRX 쪽 표기**여야 한다 — name 을 그대로 넣으면 51행 중 아무것도 안 걸린다.
+    const hc = INSTRUMENTS.find(i => i.name === '코스피200 헬스케어')
+    expect(hc).toBeDefined()
+    expect(hc!.quoteSource).toBe('krx-index')
+    expect(hc!.quoteSymbol).toBe(KRX_IDX_NM_KOSPI200_HEALTHCARE)
+    expect(hc!.quoteSymbol).not.toBe(hc!.name)
+    expect(hc!.isIndex).toBe(true)
+  })
+
+  it('수기 입력에 의존하는 종목은 더 이상 없다', () => {
+    // 'manual' 경로 자체는 남겨 뒀지만(검수 화면의 수기 입력), 이제 쓰는 종목은 없다.
+    expect(INSTRUMENTS.filter(i => i.quoteSource === 'manual')).toEqual([])
+  })
+
   it('비미국 4종목은 MIC 접미사를 쓰지 않는다', () => {
     for (const i of INSTRUMENTS.filter(i => i.quoteSource === 'marketstack')) {
       expect(i.quoteSymbol).not.toMatch(/\.X[A-Z]{3}$/)

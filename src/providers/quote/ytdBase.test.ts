@@ -334,6 +334,56 @@ describe('fetchYtdBase — twelvedata 배치와 429 재시도', () => {
   })
 })
 
+describe('fetchYtdBase — KRX 지수', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  const HEALTHCARE = '코스피 200 헬스케어'
+  const krxTarget = { id: 'h', quoteSource: 'krx-index', quoteSymbol: HEALTHCARE }
+
+  /** 실측: 20251231 은 0행(연말 휴장), 20251230 은 51행이고 종가 2392.04. */
+  function stubKrx(byDate: Record<string, unknown>) {
+    const calls: string[] = []
+    const spy = vi.fn(async (url: string) => {
+      const basDd = new URL(url).searchParams.get('basDd') ?? ''
+      calls.push(basDd)
+      return new Response(JSON.stringify(byDate[basDd] ?? { OutBlock_1: [] }), { status: 200 })
+    })
+    vi.stubGlobal('fetch', spy)
+    return calls
+  }
+
+  it('전년 마지막 거래일(12/30)의 종가를 쓴다 — 12/31 이 휴장이어도', async () => {
+    vi.stubEnv('KRX_AUTH_KEY', 'TEST-KEY')
+    const calls = stubKrx({
+      '20251230': { OutBlock_1: [{ BAS_DD: '20251230', IDX_NM: HEALTHCARE, CLSPRC_IDX: '2392.04', CMPPREVDD_IDX: '-6.67' }] },
+    })
+    const r = await fetchYtdBase([krxTarget], 2026)
+    expect(r.prices.get('h')).toBeCloseTo(2392.04, 2)
+    expect(r.failures).toEqual([])
+    expect(calls).toEqual(['20251231', '20251230'])
+  })
+
+  it('기준가를 못 구하면 조용히 비우지 않고 사유를 남긴다', async () => {
+    vi.stubEnv('KRX_AUTH_KEY', 'TEST-KEY')
+    stubKrx({}) // 전부 휴장 응답
+    const r = await fetchYtdBase([krxTarget], 2026)
+    expect(r.prices.has('h')).toBe(false)
+    expect(r.failures).toHaveLength(1)
+    expect(r.failures[0].id).toBe('h')
+    expect(r.failures[0].reason).toContain('거래일을 찾지 못함')
+  })
+
+  it('AUTH_KEY 가 없으면 사유에 그렇게 적히고 키 값은 실리지 않는다', async () => {
+    vi.stubEnv('KRX_AUTH_KEY', '')
+    stubKrx({})
+    const r = await fetchYtdBase([krxTarget], 2026)
+    expect(r.failures[0].reason).toContain('KRX_AUTH_KEY 없음')
+  })
+})
+
 describe('fetchYtdBase — 라우팅과 실패 정책', () => {
   afterEach(() => vi.unstubAllGlobals())
 

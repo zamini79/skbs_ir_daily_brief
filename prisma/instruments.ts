@@ -3,7 +3,7 @@ export type InstrumentSeed = {
   displayOrder: number
   name: string
   currency: string
-  quoteSource: 'naver-stock' | 'naver-index' | 'twelvedata' | 'marketstack' | 'manual'
+  quoteSource: 'naver-stock' | 'naver-index' | 'krx-index' | 'twelvedata' | 'marketstack' | 'manual'
   quoteSymbol: string
   newsQuery: string
   /** 관련성 필터용 콤마 구분 별칭 목록. 비우면 파이프라인이 name 하나로 폴백한다. */
@@ -55,5 +55,14 @@ export const INSTRUMENTS: InstrumentSeed[] = [
   { category: 'Index', displayOrder: 20, name: 'S&P500',           currency: 'USD', quoteSource: 'naver-index', quoteSymbol: '.INX',  newsQuery: '뉴욕증시', newsAliases: 'S&P500,S&P 500,스탠더드앤드푸어스', isIndex: true },
   { category: 'Index', displayOrder: 21, name: 'Nasdaq',           currency: 'USD', quoteSource: 'naver-index', quoteSymbol: '.IXIC', newsQuery: '나스닥',   newsAliases: '나스닥,Nasdaq', isIndex: true },
   { category: 'Index', displayOrder: 22, name: 'KOSPI',            currency: 'KRW', quoteSource: 'naver-index', quoteSymbol: 'KOSPI', newsQuery: '코스피',   newsAliases: '코스피,KOSPI', isIndex: true },
-  { category: 'Index', displayOrder: 23, name: '코스피200 헬스케어', currency: 'KRW', quoteSource: 'manual',     quoteSymbol: '',      newsQuery: '코스피200 헬스케어', newsAliases: '코스피200 헬스케어,코스피200헬스케어', isIndex: true },
+  // 코스피200 헬스케어: KRX Open API(`data-dbg.krx.co.kr`)로 자동 수집한다(Task 25).
+  // quoteSymbol 은 종목코드가 아니라 **KRX 응답의 `IDX_NM` 문자열 그대로**다 —
+  // KRX 는 '코스피 200 헬스케어'(코스피와 200 사이 공백 있음)라 쓰고 우리 name 은
+  // 원본 브리프 엑셀을 따라 '코스피200 헬스케어'(공백 없음)라 쓴다. 두 표기가 다르므로
+  // name 으로 매칭하면 51행 중 아무것도 안 걸린다. 상수는
+  // src/providers/quote/krx.ts 의 KRX_IDX_NM_KOSPI200_HEALTHCARE 이고,
+  // 이 값과 같은지는 instruments.test.ts 가 지킨다.
+  // 시가총액은 응답에 MKTCAP 이 와도 채우지 않는다 — 원본 엑셀이 지수 행의 시총 칸을
+  // '-' 로 비우고 다른 지수 3행도 그렇다.
+  { category: 'Index', displayOrder: 23, name: '코스피200 헬스케어', currency: 'KRW', quoteSource: 'krx-index',  quoteSymbol: '코스피 200 헬스케어', newsQuery: '코스피200 헬스케어', newsAliases: '코스피200 헬스케어,코스피200헬스케어', isIndex: true },
 ]

@@ -1,5 +1,12 @@
 export type Category = '국내사' | '해외사' | 'Index'
-export type QuoteSource = 'naver-stock' | 'naver-index' | 'twelvedata' | 'marketstack' | 'manual'
+export type QuoteSource =
+  | 'naver-stock'
+  | 'naver-index'
+  | 'krx-index'
+  | 'twelvedata'
+  | 'marketstack'
+  /** 지금 쓰는 종목은 없다. 검수 화면의 수기 입력 경로를 위해 남겨 둔다. */
+  | 'manual'
 export type Decision = 'PENDING' | 'SELECTED' | 'OMITTED'
 
 export type RawQuote = {

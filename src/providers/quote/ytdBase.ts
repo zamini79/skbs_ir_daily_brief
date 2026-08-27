@@ -1,5 +1,6 @@
 import type { QuoteTarget } from './index'
 import { fetchMarketstackYtdBase } from './marketstack'
+import { fetchKrxIndexYtdBase } from './krx'
 import { parseKoreanNumber } from './naverParse'
 
 /** 기준가를 얻지 못한 종목 하나. 조용히 사라지지 않도록 반드시 호출자에게 돌려준다. */
@@ -222,11 +223,12 @@ export async function fetchYtdBase(
   const ms = targets.filter(t => t.quoteSource === 'marketstack')
   const td = targets.filter(t => t.quoteSource === 'twelvedata')
   const naver = targets.filter(t => t.quoteSource === 'naver-stock' || t.quoteSource === 'naver-index')
+  const krx = targets.filter(t => t.quoteSource === 'krx-index')
 
   // manual 은 의도적으로 건너뛴다(수기 입력 대상). 그 외 모르는 소스는 설정 오류이므로
   // 조용히 사라지지 않도록 실패로 남긴다.
   for (const t of targets) {
-    const known = ['marketstack', 'twelvedata', 'naver-stock', 'naver-index', 'manual']
+    const known = ['marketstack', 'twelvedata', 'naver-stock', 'naver-index', 'krx-index', 'manual']
     if (!known.includes(t.quoteSource)) {
       failures.push({ id: t.id, symbol: t.quoteSymbol, reason: `알 수 없는 quoteSource: ${t.quoteSource}` })
     }
@@ -266,6 +268,19 @@ export async function fetchYtdBase(
         for (const t of td) failures.push({ id: t.id, symbol: t.quoteSymbol, reason })
       }
     })(),
+
+    // KRX 지수. 전년 12/31 부터 거슬러 올라가 처음 만나는 거래일의 종가를 쓴다
+    // (국내 증시의 2025년 마지막 거래일은 12/30 이다 — 날짜를 가정하지 않는다).
+    ...krx.map(async t => {
+      try {
+        const v = await fetchKrxIndexYtdBase(t.quoteSymbol, year)
+        if (Number.isFinite(v)) prices.set(t.id, v)
+        else failures.push({ id: t.id, symbol: t.quoteSymbol, reason: 'KRX 전년 마지막 거래일 종가 없음' })
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e)
+        failures.push({ id: t.id, symbol: t.quoteSymbol, reason })
+      }
+    }),
 
     ...naver.map(async t => {
       try {

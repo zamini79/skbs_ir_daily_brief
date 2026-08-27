@@ -2,6 +2,7 @@ import type { RawQuote } from '@/domain/types'
 import { fetchNaverStock, fetchNaverDomesticIndex, fetchNaverWorldIndex } from './naver'
 import { fetchTwelveDataQuotes } from './twelvedata'
 import { fetchMarketstackQuotes } from './marketstack'
+import { fetchKrxIndexQuote } from './krx'
 
 export type QuoteTarget = { id: string; quoteSource: string; quoteSymbol: string }
 
@@ -15,14 +16,17 @@ export async function fetchAllQuotes(
   const out = new Map<string, RawQuote | Error>()
 
   const perItem = instruments.filter(i =>
-    ['naver-stock', 'naver-index'].includes(i.quoteSource),
+    ['naver-stock', 'naver-index', 'krx-index'].includes(i.quoteSource),
   )
   const td = instruments.filter(i => i.quoteSource === 'twelvedata')
   const ms = instruments.filter(i => i.quoteSource === 'marketstack')
 
   // manual 은 의도적으로 결과에서 제외한다. 그 외 알려지지 않은 quoteSource 는
   // 설정 오류이므로 manual 과 구분되도록 Error 로 남긴다(조용히 사라지면 안 됨).
-  const known = ['naver-stock', 'naver-index', 'twelvedata', 'marketstack', 'manual']
+  //
+  // manual 은 지금 쓰는 종목이 없다(코스피200 헬스케어가 krx-index 로 옮겨갔다).
+  // 그래도 경로는 남겨 둔다 — 다른 종목이 나중에 쓸 수 있고, 지우면 되돌리기가 번거롭다.
+  const known = ['naver-stock', 'naver-index', 'krx-index', 'twelvedata', 'marketstack', 'manual']
   for (const i of instruments) {
     if (!known.includes(i.quoteSource)) {
       out.set(i.id, new Error(`알 수 없는 quoteSource: ${i.quoteSource}`))
@@ -34,7 +38,9 @@ export async function fetchAllQuotes(
     ...perItem.map(async i => {
       try {
         let q: RawQuote
-        if (i.quoteSource === 'naver-stock') {
+        if (i.quoteSource === 'krx-index') {
+          q = await fetchKrxIndexQuote(i.quoteSymbol)
+        } else if (i.quoteSource === 'naver-stock') {
           q = await fetchNaverStock(i.quoteSymbol)
         } else if (i.quoteSymbol.startsWith('.')) {
           q = await fetchNaverWorldIndex(i.quoteSymbol)
