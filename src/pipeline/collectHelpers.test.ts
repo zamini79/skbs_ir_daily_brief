@@ -226,6 +226,22 @@ describe('computeRunStatus', () => {
   it('요약 실패가 없으면 READY이다', () => {
     expect(computeRunStatus(0)).toBe('READY')
   })
+
+  it('연초 기준가 조회 실패도 PARTIAL로 본다 — 요약 실패와 같은 규칙이다', () => {
+    // 이 실패는 API 분당 한도 경합이라 어느 종목이 빌지가 매일 달라진다.
+    // 상태에 남기지 않으면 재현되지 않는 공란이 되어 아무도 눈치채지 못한다.
+    expect(computeRunStatus(0, 1)).toBe('PARTIAL')
+    expect(computeRunStatus(0, 4)).toBe('PARTIAL')
+  })
+
+  it('둘 다 없어야 READY이다', () => {
+    expect(computeRunStatus(0, 0)).toBe('READY')
+  })
+
+  it('기준가 인자를 생략하면 기존 동작 그대로다', () => {
+    expect(computeRunStatus(0)).toBe('READY')
+    expect(computeRunStatus(2)).toBe('PARTIAL')
+  })
 })
 
 describe('isolate', () => {

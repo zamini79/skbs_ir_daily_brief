@@ -137,9 +137,14 @@ export async function attemptSummary(
 }
 
 /** 요약 실패가 하나라도 있으면 PARTIAL — "오늘 뉴스가 적었다"와 "요약기가 죽어있었다"를
- * 검수 화면과 운영자가 구분할 수 있어야 한다. */
-export function computeRunStatus(summariesFailed: number): 'READY' | 'PARTIAL' {
-  return summariesFailed > 0 ? 'PARTIAL' : 'READY'
+ * 검수 화면과 운영자가 구분할 수 있어야 한다.
+ *
+ * 연초 기준가 실패도 같은 규칙으로 PARTIAL 로 본다. 근거는 요약 실패와 동일하다:
+ * 연초대비 칸이 비었을 때 "기준가를 못 구했다"와 "정상인데 값이 0이다"를 구분할 수
+ * 있어야 한다. 특히 이 실패는 API 분당 한도 경합이라 어느 종목이 빌지가 매일 달라진다 —
+ * 상태에 남기지 않으면 재현되지 않는 공란이 되어 아무도 눈치채지 못한다. */
+export function computeRunStatus(summariesFailed: number, ytdBaseFailed = 0): 'READY' | 'PARTIAL' {
+  return summariesFailed > 0 || ytdBaseFailed > 0 ? 'PARTIAL' : 'READY'
 }
 
 /**

@@ -42,6 +42,7 @@ export async function runCollection(now: Date): Promise<{
   summariesGenerated: number
   summariesSkippedEmptyBody: number
   summariesFailed: number
+  ytdBaseFailed: number
 }> {
   const runDate = kstDateString(now)
   const year = Number(runDate.slice(0, 4))
@@ -87,18 +88,26 @@ export async function runCollection(now: Date): Promise<{
   // 2) 시세
   const quotes = await fetchAllQuotes(targets)
 
-  // 3) 연초대비 기준가(전년 마지막 거래일 종가) — 캐시에 없는 종목만 조회
+  // 3) 연초대비 기준가(전년 마지막 거래일 종가) — 캐시에 없는 종목만 조회.
+  // 기준가를 못 구해도 나머지 열은 계속 채운다. 다만 조용히 넘어가지는 않는다 —
+  // 어느 종목이 왜 비었는지 로그와 반환값에 남긴다(재현되지 않는 공란 방지).
+  let ytdBaseFailed = 0
   const cached = await prisma.ytdBasePrice.findMany({ where: { year } })
   const cachedIds = new Set(cached.map(c => c.instrumentId))
   const missing = targets.filter(t => !cachedIds.has(t.id))
   if (missing.length > 0) {
-    const fetched = await fetchYtdBase(missing, year)
-    for (const [instrumentId, price] of fetched) {
+    const { prices, failures } = await fetchYtdBase(missing, year)
+    for (const [instrumentId, price] of prices) {
       await prisma.ytdBasePrice.upsert({
         where: { instrumentId_year: { instrumentId, year } },
         update: { price },
         create: { instrumentId, year, price },
       })
+    }
+    ytdBaseFailed = failures.length
+    for (const f of failures) {
+      // 심볼과 사유만 남긴다. URL 에는 API 키가 들어 있으므로 절대 싣지 않는다.
+      console.error(`[ytdBase] ${f.symbol}: ${f.reason}`)
     }
   }
   const ytdBases = new Map(
@@ -276,15 +285,18 @@ export async function runCollection(now: Date): Promise<{
     })
   }
 
-  const status = computeRunStatus(summariesFailed)
+  const status = computeRunStatus(summariesFailed, ytdBaseFailed)
+  const detailParts: string[] = []
+  if (summariesFailed > 0) detailParts.push(`요약 ${summariesFailed}건 실패(후보 ${candidatesCreated}건 중)`)
+  if (ytdBaseFailed > 0) detailParts.push(`연초 기준가 ${ytdBaseFailed}종목 조회 실패`)
   await prisma.briefRun.update({
     where: { id: run.id },
     data: {
       status,
-      statusDetail: status === 'PARTIAL' ? `요약 ${summariesFailed}건 실패(후보 ${candidatesCreated}건 중)` : null,
+      statusDetail: detailParts.length > 0 ? detailParts.join(', ') : null,
       finishedAt: new Date(),
     },
   })
 
-  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed }
+  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, ytdBaseFailed }
 }
