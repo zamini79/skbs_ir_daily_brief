@@ -24,6 +24,24 @@ describe('extractNaverArticleBody', () => {
   it('본문 영역이 없으면 빈 문자열을 준다', () => {
     expect(extractNaverArticleBody('<html><body>없음</body></html>')).toBe('')
   })
+  it('선행 0이 있는 10진 엔티티(&#039;)를 디코딩한다', () => {
+    const html = `<div id="dic_area">치료제 &#039;램시마SC&#039;</div>`
+    expect(extractNaverArticleBody(html)).toBe("치료제 '램시마SC'")
+  })
+  it('높은 10진 엔티티(&#8943;)를 디코딩한다', () => {
+    const html = `<div id="dic_area">성장&#8943;확대</div>`
+    expect(extractNaverArticleBody(html)).toBe('성장⋯확대')
+  })
+  it('script 안의 텍스트는 여전히 제거된다', () => {
+    const html = `<div id="dic_area">앞<script>alert('스크립트 안의 한글 텍스트')</script>뒤</div>`
+    const result = extractNaverArticleBody(html)
+    expect(result).not.toContain('스크립트 안의 한글 텍스트')
+    expect(result).toBe('앞 뒤')
+  })
+  it('&nbsp;, &quot;, &amp; 는 기존과 같이 디코딩된다', () => {
+    const html = `<div id="dic_area">&quot;인용&quot;&nbsp;그리고&nbsp;A&amp;B</div>`
+    expect(extractNaverArticleBody(html)).toBe('"인용" 그리고 A&B')
+  })
 })
 
 describe('fetchArticleBody', () => {

@@ -1,3 +1,4 @@
+import { stripHtml } from './naver'
 import type { NewsItem } from './types'
 
 /** 이보다 짧으면 본문 추출에 실패한 것으로 본다. */
@@ -14,16 +15,14 @@ export function extractNaverArticleBody(html: string): string {
   for (const re of BODY_SELECTORS) {
     const m = html.match(re)
     if (!m) continue
-    const text = m[1]
+    // <script>/<style> 내용은 여기서 먼저 걷어낸다. stripHtml 이 태그만 지우고
+    // 내용을 남기면 스크립트 안의 텍스트가 본문에 섞여 들어오기 때문이다.
+    const withoutScriptsAndStyles = m[1]
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<[^>]*>/g, ' ')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&quot;/g, '"')
-      .replace(/&amp;/g, '&')
-      .replace(/&#39;/g, "'")
-      .replace(/\s+/g, ' ')
-      .trim()
+    // 나머지 태그 제거와 엔티티 디코딩은 naver.ts 의 단일 패스 디코더에 맡긴다.
+    // 여기서 별도의 엔티티 치환 목록을 두면 그쪽이 고쳐져도 이쪽은 낡은 채로 남는다.
+    const text = stripHtml(withoutScriptsAndStyles).replace(/\s+/g, ' ').trim()
     if (text) return text
   }
   return ''
