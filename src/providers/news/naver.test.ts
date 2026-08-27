@@ -22,6 +22,30 @@ describe('stripHtml', () => {
   it('작은따옴표 엔티티를 되돌린다', () => {
     expect(stripHtml('&#39;엑스코프리&#39;')).toBe("'엑스코프리'")
   })
+  it('이중 인코딩된 입력이 살아있는 태그를 되살리지 않는다', () => {
+    const out = stripHtml('&amp;lt;b&amp;gt; 태그')
+    expect(out).toBe('&lt;b&gt; 태그')
+    expect(out).not.toMatch(/[<>]/)
+  })
+  it('10진 숫자 엔티티를 디코딩한다', () => {
+    expect(stripHtml('&#8220;큰따옴표&#8221; 인용')).toBe('“큰따옴표” 인용')
+  })
+  it('16진 숫자 엔티티를 디코딩한다', () => {
+    expect(stripHtml('&#x27;작은따옴표&#x27;')).toBe("'작은따옴표'")
+  })
+  it('알 수 없는 이름 엔티티는 원문 그대로 남긴다', () => {
+    expect(stripHtml('A &foobar; B')).toBe('A &foobar; B')
+  })
+  it('기존에 통하던 명명 엔티티 동작은 그대로 유지된다', () => {
+    expect(stripHtml('&quot;글로벌 톱3&quot; &amp; 성장')).toBe('"글로벌 톱3" & 성장')
+    expect(stripHtml('&#39;엑스코프리&#39;')).toBe("'엑스코프리'")
+  })
+  it('범위를 벗어난 숫자 코드포인트에서 예외를 던지지 않는다', () => {
+    expect(() => stripHtml('&#99999999; 망가진 엔티티')).not.toThrow()
+    const out = stripHtml('&#99999999; 망가진 엔티티')
+    expect(out).toBe('&#99999999; 망가진 엔티티')
+    expect([...out].length).toBe([...'&#99999999; 망가진 엔티티'].length)
+  })
 })
 
 describe('searchNaverNews', () => {
