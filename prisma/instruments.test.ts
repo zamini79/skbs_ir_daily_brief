@@ -54,8 +54,14 @@ describe('newsAliases 일관성', () => {
   // 지수는 종종 좁은 자기 이름으로는 기사가 거의 안 잡혀 넓은 시황 검색어로 기사 풀을
   // 넓힌 뒤 별칭으로 좁힌다. 실측(2026-08-27)으로 확인됨: '뉴욕증시' 검색 결과 100건을
   // S&P500 별칭으로 필터링하면 실제로 관련 기사가 남는다 — 별칭이 검색어 자체를
-  // 포함하지 않아도 정상 동작이다. Task 15 fix round 2 리뷰에서 확인된 유일한 예외.
-  const DOCUMENTED_BROAD_QUERY_EXCEPTIONS = new Set(['S&P500'])
+  // 포함하지 않아도 정상 동작이다.
+  //
+  // 코스피200 헬스케어도 같은 성격의 예외다. 검색어가 '제약주' 이고 별칭이 '제약' 인데,
+  // '제약' 은 '제약주'·'제약株'(한자)·'제약사' 를 전부 포함하는 더 넓은 값이다.
+  // '제약주' 를 별칭에 그대로 넣으면 실측에서 통과한 「…제약株 불붙었다」 를 놓친다.
+  // 즉 별칭이 검색어 문자열을 담고 있지 않은 것이 의도된 결과다 — Vaxcyte류 오타가
+  // 아니다. 이 행이 왜 업종 검색어를 쓰는지는 instruments.ts 의 해당 행 주석 참고.
+  const DOCUMENTED_BROAD_QUERY_EXCEPTIONS = new Set(['S&P500', '코스피200 헬스케어'])
 
   it('모든 종목의 newsAliases는 비어있지 않다', () => {
     for (const i of INSTRUMENTS) {
@@ -68,5 +74,28 @@ describe('newsAliases 일관성', () => {
       if (DOCUMENTED_BROAD_QUERY_EXCEPTIONS.has(i.name)) continue
       expect(i.newsAliases, i.name).toContain(i.newsQuery)
     }
+  })
+
+  it('예외로 등록된 행은 실재하는 행이다 — 이름이 바뀌면 예외가 조용히 무력화된다', () => {
+    // 예외 집합은 이름 문자열로 맞춘다. 시드에서 name 을 바꾸면 예외가 아무 행에도
+    // 걸리지 않게 되는데, 그러면 위 테스트가 갑자기 실패하거나(운이 좋으면) 다른 행의
+    // 오타를 놓친다(운이 나쁘면). 그래서 예외가 실제 행을 가리키는지 함께 지킨다.
+    for (const name of DOCUMENTED_BROAD_QUERY_EXCEPTIONS) {
+      expect(INSTRUMENTS.some(i => i.name === name), name).toBe(true)
+    }
+  })
+
+  it('코스피200 헬스케어는 업종 검색어를 쓴다 — 값을 바꾸려면 다시 실측해야 한다', () => {
+    // 이 행만 자기 이름이 아니라 업종 단위로 찾는다(instruments.ts 주석 참고).
+    // '코스피200 헬스케어' 는 실측 0건이었다. 아래 두 값은 2026-08-27 실측으로
+    // 고른 것이고, 예외 등록 때문에 위의 포함 검사가 이 행을 건너뛰므로 여기서
+    // 직접 고정한다 — 그러지 않으면 이 행의 오타를 아무도 잡지 못한다.
+    const hc = INSTRUMENTS.find(i => i.name === '코스피200 헬스케어')!
+    expect(hc.newsQuery).toBe('제약주')
+    expect(hc.newsAliases).toBe('제약')
+    // 별칭이 검색어의 접두사라는 것이 이 예외의 근거다 — '제약' 이 '제약주' 와
+    // '제약株' 를 함께 잡는다. 관계가 끊기면(예: 별칭을 '바이오' 로 바꾸면)
+    // 이 예외를 유지할 근거가 사라진다.
+    expect(hc.newsQuery.startsWith(hc.newsAliases!)).toBe(true)
   })
 })
