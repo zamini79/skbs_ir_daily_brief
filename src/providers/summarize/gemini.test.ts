@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { extractJsonText, enforceLimit, summarize } from './gemini'
+import { extractJsonText, enforceLimit, summarize, MODEL_CHAIN, exhaustedModels } from './gemini'
 
 beforeEach(() => {
   process.env.GEMINI_API_KEY = 'test-key'
+  exhaustedModels.clear()
 })
 
 afterEach(() => vi.unstubAllGlobals())
@@ -115,5 +116,90 @@ describe('summarize', () => {
     } finally {
       process.env.GEMINI_API_KEY = saved
     }
+  })
+})
+
+describe('모델 폴백 체인', () => {
+  function quotaResponse() {
+    return new Response(JSON.stringify({ error: { status: 'RESOURCE_EXHAUSTED' } }), { status: 429 })
+  }
+  function okResponse() {
+    return new Response(JSON.stringify({
+      candidates: [{ content: { parts: [
+        { text: JSON.stringify({ numeric: '수치임', context: '배경임', implication: '시사점임' }), thoughtSignature: 'x' },
+      ] } }],
+    }), { status: 200 })
+  }
+
+  it('첫 모델이 429면 다음 모델로 넘어가 정상 응답을 돌려준다', async () => {
+    const calledUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calledUrls.push(url)
+      return url.includes(MODEL_CHAIN[0]) ? quotaResponse() : okResponse()
+    }))
+
+    const r = await summarize('제목', '본문')
+
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임' })
+    expect(calledUrls).toHaveLength(2)
+    expect(calledUrls[0]).toContain(MODEL_CHAIN[0])
+    expect(calledUrls[1]).toContain(MODEL_CHAIN[1])
+  })
+
+  it('쿼터 소진이 아닌 실패(세이프티 차단)는 체인을 넘기지 않는다', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      promptFeedback: { blockReason: 'SAFETY' },
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(summarize('제목', '본문')).rejects.toThrow(/SAFETY/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('모든 모델이 429면 시도한 모델 이름을 모두 담아 던진다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => quotaResponse()))
+
+    let error: unknown
+    try {
+      await summarize('제목', '본문')
+    } catch (e) {
+      error = e
+    }
+
+    expect(error).toBeInstanceOf(Error)
+    for (const model of MODEL_CHAIN) {
+      expect((error as Error).message).toContain(model)
+    }
+  })
+
+  it('이미 소진된 것으로 확인된 모델은 다음 호출에서 다시 두드리지 않는다', async () => {
+    const calledUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calledUrls.push(url)
+      return url.includes(MODEL_CHAIN[0]) ? quotaResponse() : okResponse()
+    }))
+
+    await summarize('제목1', '본문1')
+    const callsAfterFirst = calledUrls.length
+
+    await summarize('제목2', '본문2')
+
+    const firstModelHits = calledUrls.filter(u => u.includes(MODEL_CHAIN[0])).length
+    expect(firstModelHits).toBe(1)
+    expect(calledUrls).toHaveLength(callsAfterFirst + 1)
+    expect(calledUrls.at(-1)).toContain(MODEL_CHAIN[1])
+  })
+
+  it('첫 모델이 정상이면 체인을 건드리지 않는다 (회귀)', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toContain(MODEL_CHAIN[0])
+      return okResponse()
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await summarize('제목', '본문')
+
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
