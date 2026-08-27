@@ -50,4 +50,16 @@ describe('pLimit', () => {
     expect(results[0].status).toBe('rejected')
     expect(results[1]).toMatchObject({ status: 'fulfilled', value: 'ok' })
   })
+
+  it('동기 예외를 던지는 fn 이 와도 슬롯을 반납한다 — 큐가 조용히 멈추지 않는다', async () => {
+    // async 가 아닌 함수가 넘어오면 fn() 이 동기로 던진다. 슬롯을 되돌리지 않으면
+    // n=1 에서 뒤따르는 작업이 영영 시작되지 않고, 예외도 로그도 남지 않는다.
+    const limit = pLimit(1)
+    const results = await Promise.allSettled([
+      limit((() => { throw new Error('sync boom') }) as () => Promise<never>),
+      limit(async () => 'ok'),
+    ])
+    expect(results[0]).toMatchObject({ status: 'rejected' })
+    expect(results[1]).toMatchObject({ status: 'fulfilled', value: 'ok' })
+  })
 })
