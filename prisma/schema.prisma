@@ -49,7 +49,9 @@ model BriefRun {
   tradeDate  String
   /// 실행 당일 KST 날짜. 검수 화면 URL 키.
   runDate    String
-  status     String   // COLLECTING | READY | FAILED
+  status     String   // COLLECTING | READY | PARTIAL | FAILED
+  /// status가 PARTIAL/FAILED일 때 사람이 읽을 수 있는 사유(예: 요약 20건 실패, 할당량 소진).
+  statusDetail String? @db.Text
   startedAt  DateTime @default(now())
   finishedAt DateTime?
 
@@ -95,6 +97,9 @@ model NewsCandidate {
   clusterSize  Int
   /// 이 후보가 더 높은 순위(작은 rank) 후보와 같은 사건이면 그 rank. rank 1은 항상 null.
   sameEventAsRank Int?
+  /// 요약 실패 사유. 성공하거나 본문 부족으로 건너뛴 경우 null. 후보 자체는 지우지 않는다 —
+  /// 담당자가 제목만 보고 판단할 수 있게 남긴다.
+  summaryError String? @db.Text
 
   run        BriefRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
   instrument Instrument    @relation(fields: [instrumentId], references: [id])

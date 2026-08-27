@@ -1,7 +1,6 @@
 import { prisma } from '@/db/client'
 import { kstDateString } from '@/domain/date'
 import { changePct, ytdPct } from '@/domain/calc'
-import { charLength } from '@/domain/text'
 import { fetchFxToKrw } from '@/providers/fx/frankfurter'
 import { fetchAllQuotes, type QuoteTarget } from '@/providers/quote'
 import { fetchYearOpen } from '@/providers/quote/yearOpen'
@@ -11,14 +10,20 @@ import { topClusters, filterByTitleMention } from './cluster'
 import { summarize } from '@/providers/summarize/gemini'
 import { SUMMARY_VARIANTS } from '@/providers/summarize/prompt'
 import { pLimit } from './limit'
-import { resolveAliases, resolveFxRate, resolveMarketCap, computeSameEventAsRank } from './collectHelpers'
+import {
+  resolveAliases,
+  resolveFxRate,
+  resolveMarketCap,
+  computeSameEventAsRank,
+  createQuotaGuard,
+  attemptSummary,
+  computeRunStatus,
+} from './collectHelpers'
 
 /** Gemini 무료 티어 한도에 맞춘 동시 호출 수. 늘리면 429가 난다. */
 const SUMMARY_CONCURRENCY = 4
 const NEWS_CONCURRENCY = 5
 const TOP_N = 3
-/** 이보다 짧은 본문은 요약해도 의미가 없다 — 빈 프롬프트로 8초를 버리지 않는다. */
-const MIN_BODY_CHARS_FOR_SUMMARY = 20
 
 export async function runCollection(now: Date): Promise<{
   runId: string
@@ -27,6 +32,7 @@ export async function runCollection(now: Date): Promise<{
   candidatesCreated: number
   summariesGenerated: number
   summariesSkippedEmptyBody: number
+  summariesFailed: number
 }> {
   const runDate = kstDateString(now)
   const year = Number(runDate.slice(0, 4))
@@ -137,6 +143,11 @@ export async function runCollection(now: Date): Promise<{
   let candidatesCreated = 0
   let summariesGenerated = 0
   let summariesSkippedEmptyBody = 0
+  let summariesFailed = 0
+
+  // 이번 실행 전체가 공유하는 할당량 가드. 첫 429/RESOURCE_EXHAUSTED 이후로는
+  // 죽은 할당량에 나머지 후보를 계속 쏘지 않고 곧바로 실패로 기록한다.
+  const quotaGuard = createQuotaGuard()
 
   const sumLimit = pLimit(SUMMARY_CONCURRENCY)
   await Promise.all(
@@ -161,23 +172,38 @@ export async function runCollection(now: Date): Promise<{
             },
           })
           candidatesCreated++
-          try {
-            const body = await fetchArticleBody(c.representative)
-            if (charLength(body) < MIN_BODY_CHARS_FOR_SUMMARY) {
+
+          const body = await fetchArticleBody(c.representative)
+          const attempt = await attemptSummary({ title: c.representative.title, body }, quotaGuard, summarize)
+
+          switch (attempt.outcome) {
+            case 'skipped-empty-body':
               summariesSkippedEmptyBody++
               return
-            }
-            const s = await summarize(c.representative.title, body)
-            await prisma.newsSummary.createMany({
-              data: SUMMARY_VARIANTS.map(v => ({
-                candidateId: candidate.id,
-                variant: v.variant,
-                text: s[v.key],
-              })),
-            })
-            summariesGenerated++
-          } catch {
-            // 요약 실패는 후보를 지우지 않는다. 담당자가 제목만 보고 판단할 수 있다.
+            case 'generated':
+              await prisma.newsSummary.createMany({
+                data: SUMMARY_VARIANTS.map(v => ({
+                  candidateId: candidate.id,
+                  variant: v.variant,
+                  text: attempt.summary[v.key],
+                })),
+              })
+              summariesGenerated++
+              return
+            case 'failed':
+              summariesFailed++
+              await prisma.newsCandidate.update({
+                where: { id: candidate.id },
+                data: { summaryError: attempt.error },
+              })
+              return
+            case 'skipped-quota-exhausted':
+              summariesFailed++
+              await prisma.newsCandidate.update({
+                where: { id: candidate.id },
+                data: { summaryError: '할당량 소진 이후 요약을 건너뜀' },
+              })
+              return
           }
         }),
       )
@@ -193,10 +219,15 @@ export async function runCollection(now: Date): Promise<{
     })
   }
 
+  const status = computeRunStatus(summariesFailed)
   await prisma.briefRun.update({
     where: { id: run.id },
-    data: { status: 'READY', finishedAt: new Date() },
+    data: {
+      status,
+      statusDetail: status === 'PARTIAL' ? `요약 ${summariesFailed}건 실패(후보 ${candidatesCreated}건 중)` : null,
+      finishedAt: new Date(),
+    },
   })
 
-  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody }
+  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed }
 }

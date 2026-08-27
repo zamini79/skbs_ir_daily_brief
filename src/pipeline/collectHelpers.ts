@@ -1,5 +1,7 @@
 import { marketCapKrwTrillion } from '@/domain/calc'
+import { charLength } from '@/domain/text'
 import { tokenize, jaccard } from './cluster'
+import type { SummarySet } from '@/providers/summarize/gemini'
 
 /**
  * 뉴스 관련성 필터에 쓸 별칭 목록을 만든다. newsAliases 는 콤마 구분 문자열이다.
@@ -76,4 +78,61 @@ export function computeSameEventAsRank(
     out.set(tokensByRank[i].rank, matchRank)
   }
   return out
+}
+
+/** 이보다 짧은 본문은 요약해도 의미가 없다 — 빈 프롬프트로 8초를 버리지 않는다. */
+export const MIN_BODY_CHARS_FOR_SUMMARY = 20
+
+/**
+ * Gemini 에러 메시지가 할당량/속도 제한 소진을 뜻하는지 판별한다.
+ * gemini.ts 는 `gemini HTTP {status}: {본문}` 형태로 던지므로 상태 코드와
+ * 구글의 표준 사유 문자열을 함께 본다.
+ */
+export function isQuotaExhaustedMessage(message: string): boolean {
+  return /\b429\b|RESOURCE_EXHAUSTED/i.test(message)
+}
+
+/** 한 실행(run) 동안 공유하는, 할당량 소진 여부를 기억하는 상태. */
+export type QuotaGuard = { tripped: boolean }
+
+export function createQuotaGuard(): QuotaGuard {
+  return { tripped: false }
+}
+
+export type SummarizeAttempt =
+  | { outcome: 'generated'; summary: SummarySet }
+  | { outcome: 'skipped-empty-body' }
+  | { outcome: 'skipped-quota-exhausted' }
+  | { outcome: 'failed'; error: string }
+
+/**
+ * 후보 하나에 대해 요약을 시도한다.
+ * - 본문이 짧으면 호출하지 않는다(의도된 결정, 실패가 아니다).
+ * - 이미 이번 실행에서 할당량 소진이 감지됐으면(guard.tripped) 호출하지 않는다 —
+ *   죽은 할당량에 나머지를 전부 쏘고 매번 실패시키지 않는다. 재시도/백오프는 하지 않는다.
+ * - summarizeFn 이 던지면 실패로 기록하고, 메시지가 할당량 소진을 뜻하면 guard 를 트립시켜
+ *   이후 호출들이 스스로 건너뛰게 만든다.
+ */
+export async function attemptSummary(
+  args: { title: string; body: string },
+  guard: QuotaGuard,
+  summarizeFn: (title: string, body: string) => Promise<SummarySet>,
+): Promise<SummarizeAttempt> {
+  if (charLength(args.body) < MIN_BODY_CHARS_FOR_SUMMARY) return { outcome: 'skipped-empty-body' }
+  if (guard.tripped) return { outcome: 'skipped-quota-exhausted' }
+
+  try {
+    const summary = await summarizeFn(args.title, args.body)
+    return { outcome: 'generated', summary }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    if (isQuotaExhaustedMessage(message)) guard.tripped = true
+    return { outcome: 'failed', error: message }
+  }
+}
+
+/** 요약 실패가 하나라도 있으면 PARTIAL — "오늘 뉴스가 적었다"와 "요약기가 죽어있었다"를
+ * 검수 화면과 운영자가 구분할 수 있어야 한다. */
+export function computeRunStatus(summariesFailed: number): 'READY' | 'PARTIAL' {
+  return summariesFailed > 0 ? 'PARTIAL' : 'READY'
 }

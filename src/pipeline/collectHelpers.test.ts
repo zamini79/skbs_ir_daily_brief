@@ -1,5 +1,17 @@
-import { describe, it, expect } from 'vitest'
-import { resolveAliases, resolveFxRate, resolveMarketCap, computeSameEventAsRank } from './collectHelpers'
+import { describe, it, expect, vi } from 'vitest'
+import {
+  resolveAliases,
+  resolveFxRate,
+  resolveMarketCap,
+  computeSameEventAsRank,
+  isQuotaExhaustedMessage,
+  createQuotaGuard,
+  attemptSummary,
+  computeRunStatus,
+} from './collectHelpers'
+
+const LONG_BODY = 'x'.repeat(30)
+const okSummary = { numeric: 'n', context: 'c', implication: 'i' }
 
 describe('resolveAliases', () => {
   it('콤마로 구분된 별칭을 배열로 만든다', () => {
@@ -103,5 +115,101 @@ describe('computeSameEventAsRank', () => {
       { rank: 3, title: '셀트리온 램시마SC 짐펜트라 글로벌 톱3 확정' },
     ])
     expect(r.get(3)).toBe(1)
+  })
+})
+
+describe('isQuotaExhaustedMessage', () => {
+  it('429를 포함하면 참이다', () => {
+    expect(isQuotaExhaustedMessage('gemini HTTP 429: quota exceeded')).toBe(true)
+  })
+
+  it('RESOURCE_EXHAUSTED를 포함하면 참이다', () => {
+    expect(isQuotaExhaustedMessage('... "status": "RESOURCE_EXHAUSTED" ...')).toBe(true)
+  })
+
+  it('무관한 실패 메시지는 거짓이다', () => {
+    expect(isQuotaExhaustedMessage('gemini: candidates 가 비어있다')).toBe(false)
+  })
+
+  it('4290 처럼 429가 부분 문자열인 숫자는 걸리지 않는다', () => {
+    expect(isQuotaExhaustedMessage('gemini HTTP 4290: 알수없음')).toBe(false)
+  })
+})
+
+describe('attemptSummary', () => {
+  it('본문이 짧으면 summarizeFn을 호출하지 않고 건너뛴다', async () => {
+    const guard = createQuotaGuard()
+    const summarizeFn = vi.fn()
+    const r = await attemptSummary({ title: 't', body: '짧음' }, guard, summarizeFn)
+    expect(r).toEqual({ outcome: 'skipped-empty-body' })
+    expect(summarizeFn).not.toHaveBeenCalled()
+  })
+
+  it('성공하면 generated와 요약을 준다', async () => {
+    const guard = createQuotaGuard()
+    const summarizeFn = vi.fn().mockResolvedValue(okSummary)
+    const r = await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn)
+    expect(r).toEqual({ outcome: 'generated', summary: okSummary })
+  })
+
+  it('요약이 던지면 failed와 메시지를 남기고 후보는 지우지 않는다(후보 삭제는 이 함수 책임이 아니다)', async () => {
+    const guard = createQuotaGuard()
+    const summarizeFn = vi.fn().mockRejectedValue(new Error('gemini: 파싱 실패'))
+    const r = await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn)
+    expect(r).toEqual({ outcome: 'failed', error: 'gemini: 파싱 실패' })
+    expect(guard.tripped).toBe(false)
+  })
+
+  it('429 실패는 guard를 트립시킨다', async () => {
+    const guard = createQuotaGuard()
+    const summarizeFn = vi.fn().mockRejectedValue(new Error('gemini HTTP 429: RESOURCE_EXHAUSTED'))
+    await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn)
+    expect(guard.tripped).toBe(true)
+  })
+
+  it('guard가 이미 트립된 상태면 summarizeFn을 호출하지 않고 건너뛴다', async () => {
+    const guard = createQuotaGuard()
+    guard.tripped = true
+    const summarizeFn = vi.fn()
+    const r = await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn)
+    expect(r).toEqual({ outcome: 'skipped-quota-exhausted' })
+    expect(summarizeFn).not.toHaveBeenCalled()
+  })
+
+  it('연속 호출: 첫 429 이후로는 summarizeFn이 다시 호출되지 않는다', async () => {
+    const guard = createQuotaGuard()
+    const summarizeFn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('gemini HTTP 429: RESOURCE_EXHAUSTED'))
+      .mockResolvedValue(okSummary)
+
+    const r1 = await attemptSummary({ title: 'a', body: LONG_BODY }, guard, summarizeFn)
+    const r2 = await attemptSummary({ title: 'b', body: LONG_BODY }, guard, summarizeFn)
+    const r3 = await attemptSummary({ title: 'c', body: LONG_BODY }, guard, summarizeFn)
+
+    expect(r1.outcome).toBe('failed')
+    expect(r2).toEqual({ outcome: 'skipped-quota-exhausted' })
+    expect(r3).toEqual({ outcome: 'skipped-quota-exhausted' })
+    // 트립 이후에는 다시 불리지 않는다 — 죽은 할당량에 나머지를 쏘지 않는다.
+    expect(summarizeFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('빈 본문 건너뛰기는 quota 상태와 무관하다 — 이미 트립된 상태에서도 empty-body가 우선한다', async () => {
+    const guard = createQuotaGuard()
+    guard.tripped = true
+    const summarizeFn = vi.fn()
+    const r = await attemptSummary({ title: 't', body: '짧음' }, guard, summarizeFn)
+    expect(r).toEqual({ outcome: 'skipped-empty-body' })
+  })
+})
+
+describe('computeRunStatus', () => {
+  it('요약 실패가 하나라도 있으면 PARTIAL이다', () => {
+    expect(computeRunStatus(1)).toBe('PARTIAL')
+    expect(computeRunStatus(20)).toBe('PARTIAL')
+  })
+
+  it('요약 실패가 없으면 READY이다', () => {
+    expect(computeRunStatus(0)).toBe('READY')
   })
 })
