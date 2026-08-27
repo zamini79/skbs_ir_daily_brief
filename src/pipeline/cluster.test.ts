@@ -167,6 +167,33 @@ describe('filterByTitleMention', () => {
       const items = [item('그는 여전히 냉전이 끝나지 않았다론자 취급을 받는다')]
       expect(filterByTitleMention(items, LONZA_ALIASES)).toHaveLength(0)
     })
+
+    // H-2 회귀 재현: "다"로 끝나는 어절 뒤에 진짜 공백을 두고 별칭이 오는 정상
+    // 제목. filterByTitleMention이 매칭 전에 공백을 전부 지워버리면, 이 진짜
+    // 공백(어절 경계)이 "다"+"론자" 접미사 패턴과 구분되지 않아 통째로 걸러졌다.
+    // Lonza 전용 결함이 아니었다는 것도 함께 검증한다 — 화이자/셀트리온/모더나/
+    // 녹십자처럼 "다"로 끝나는 흔한 어절 뒤에 오는 다른 짧은 별칭도 실제로
+    // 걸렸었다(2026-08-27 실행에서 실측).
+    it('실제 Lonza 기사: "다" 로 끝나는 어절 뒤에 공백을 두고 와도 매칭한다', () => {
+      const items = [item('삼성바이오로직스 제쳤다 론자 1위 탈환')]
+      expect(filterByTitleMention(items, LONZA_ALIASES)).toHaveLength(1)
+    })
+    it('화이자: "다" 로 끝나는 어절 뒤에 공백을 두고 와도 매칭한다', () => {
+      const items = [item('영업이익 늘었다 화이자 3분기')]
+      expect(filterByTitleMention(items, ['화이자'])).toHaveLength(1)
+    })
+    it('셀트리온: "다" 로 끝나는 어절 뒤에 공백을 두고 와도 매칭한다', () => {
+      const items = [item('CDMO 시장 커진다 셀트리온도 참전')]
+      expect(filterByTitleMention(items, ['셀트리온'])).toHaveLength(1)
+    })
+    it('모더나: "다" 로 끝나는 어절 뒤에 공백을 두고 와도 매칭한다', () => {
+      const items = [item('백신 공급 확대한다 모더나와 계약')]
+      expect(filterByTitleMention(items, ['모더나'])).toHaveLength(1)
+    })
+    it('녹십자: "다" 로 끝나는 어절 뒤에 공백을 두고 와도 매칭한다', () => {
+      const items = [item('실적 개선됐다 녹십자, 흑자 전환')]
+      expect(filterByTitleMention(items, ['녹십자'])).toHaveLength(1)
+    })
   })
 
   // 다른 짧은 한글 별칭(머크, 삼바, 녹십자)이 이번 변경으로 회귀하지 않는지 확인한다.

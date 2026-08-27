@@ -44,8 +44,37 @@ function pickRepresentative(members: NewsItem[]): NewsItem {
 const QUOTE_CHARS = new Set(['"', "'", '`'])
 
 /**
+ * 공백을 전부 제거하면서("삼성 바이오" ↔ "삼성바이오" 매칭을 위해), 지워진 자리마다
+ * 원래 공백이 있었다는 사실을 boundary 배열에 남긴다. boundary[i] === true 는
+ * stripped[i] 가 원본에서 문자열 시작이거나 공백 바로 다음이었다는 뜻이다 —
+ * 즉 진짜 어절 경계였다는 뜻이고, 이 정보는 공백을 지우는 순간 사라진다.
+ *
+ * hasGenuineMention 이 이 정보 없이 지워진 문자열만 보고 앞쪽 경계를 판단하다가
+ * 자기가 없앤 경계를 근거로 오판했던 것이 이번 수정의 계기다(아래 hasGenuineMention
+ * 주석 참고).
+ */
+function stripWhitespaceWithBoundaries(s: string): { stripped: string; boundary: boolean[] } {
+  let stripped = ''
+  const boundary: boolean[] = []
+  let atBoundary = true // 문자열 시작은 항상 경계다
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (/\s/.test(ch)) {
+      atBoundary = true
+      continue
+    }
+    stripped += ch
+    boundary.push(atBoundary)
+    atBoundary = false
+  }
+  return { stripped, boundary }
+}
+
+/**
  * needle 이 haystack 안에서 "진짜 낱말"로 등장하는 자리가 있는지 본다(부분문자열
- * 포함이 아니라).
+ * 포함이 아니라). boundary 는 stripWhitespaceWithBoundaries 가 만든, haystack 과
+ * 같은 길이의 배열이다 — boundary[i] 는 haystack[i] 자리가 원본에서 실제 공백
+ * 뒤(또는 문자열 시작)였는지를 말해준다.
  *
  * 계기: Lonza 의 별칭 "론자" 가 "…없다'론자"(정청래는 '중도는 없다'론자 …) 같은
  * 정치 기사 제목에 걸렸다. "-론자"(-論者, "…라고 주장하는 사람")는 한국어 접미사로,
@@ -54,11 +83,21 @@ const QUOTE_CHARS = new Set(['"', "'", '`'])
  * 생긴다 — 단순 부분문자열 포함으로는 "다'론자"(주장하는 사람)와 "론자"(Lonza) 를
  * 구분할 수 없다.
  *
- * 검사(앞쪽 경계만): 매칭 시작 위치 바로 앞 문자에서 인용부호류(QUOTE_CHARS)를
- * 건너뛰고 실제 문자를 본다. 그 문자가 "다"이면 이 자리는 버리고 다음 등장 위치를
- * 계속 찾는다. **뒤쪽(trailing)은 검사하지 않는다** — 한국어 조사(는/은/이/가/을/를/
- * 와/과 등)가 공백 없이 바로 붙는 것은 정상이고 흔하다("론자는 …" 를 막아 버리면
- * 진짜 기사까지 떨어진다).
+ * 검사(앞쪽 경계만): 먼저 boundary[idx] 를 본다. true 면(원본에 진짜 공백이 있던
+ * 자리라면) 다른 검사 없이 바로 진짜 등장으로 인정한다 — 공백은 형태소가 아니라
+ * 어절 자체의 경계이므로, 그 앞 어절이 "다"로 끝나든 말든(예: "…제쳤다 론자 1위
+ * 탈환") 무관하다. **이 검사가 없으면 filterByTitleMention 이 공백을 지운 뒤에야
+ * hasGenuineMention 을 부르므로, "제쳤다"와 "론자" 사이에 있던 진짜 공백이 이미
+ * 사라진 상태로 넘어와 "다"+"론자" 접미사 패턴과 구분이 안 된다** — Lonza 전용이
+ * 아니라 "다"로 끝나는 모든 짧은 별칭(화이자/셀트리온/모더나/녹십자 등)이 걸리는
+ * 결함이었다.
+ * boundary[idx] 가 false 면(원본에서도 공백 없이 바로 붙어 있던 자리라면) 기존
+ * 규칙을 그대로 적용한다: 인용부호류(QUOTE_CHARS)를 건너뛰고 실제 문자를 본다.
+ * 그 문자가 "다"이면 이 자리는 버리고 다음 등장 위치를 계속 찾는다.
+ *
+ * **뒤쪽(trailing)은 검사하지 않는다** — 한국어 조사(는/은/이/가/을/를/와/과 등)가
+ * 공백 없이 바로 붙는 것은 정상이고 흔하다("론자는 …" 를 막아 버리면 진짜 기사까지
+ * 떨어진다).
  *
  * 완벽한 형태소 분석이 아니라는 한계가 있다 — 의도적이다(형태소 분석기를 끌어오는
  * 건 이 문제에 과하다). "다" 가 아닌 다른 종결어미(-란, -라는, -자는 등) 뒤에 붙는
@@ -67,11 +106,12 @@ const QUOTE_CHARS = new Set(['"', "'", '`'])
  * 미탐(정치 기사를 하나 더 후보로 보여주는 것, 담당자가 "싣지 않음"으로 처리하면
  * 그만인)보다 크기 때문이다.
  */
-function hasGenuineMention(haystack: string, needle: string): boolean {
+function hasGenuineMention(haystack: string, needle: string, boundary: boolean[]): boolean {
   let from = 0
   while (true) {
     const idx = haystack.indexOf(needle, from)
     if (idx === -1) return false
+    if (boundary[idx]) return true
     let before = idx - 1
     while (before >= 0 && QUOTE_CHARS.has(haystack[before])) before--
     if (before < 0 || haystack[before] !== '다') return true
@@ -88,13 +128,16 @@ function hasGenuineMention(haystack: string, needle: string): boolean {
  * 화면이 조용히 비는 것을 막기 위함이다.
  *
  * 부분문자열 포함이 아니라 hasGenuineMention 으로 판정한다 — 그 이유는 위 주석 참고.
+ * 제목의 공백은 stripWhitespaceWithBoundaries 로 지운다 — 그냥 replace(/\s+/g, '')
+ * 로 지우면 hasGenuineMention 이 원본에 있던 진짜 어절 경계를 볼 방법이 없어진다.
  */
 export function filterByTitleMention(items: NewsItem[], aliases: string[]): NewsItem[] {
   if (aliases.length === 0) return items
   const needles = aliases.map(a => a.replace(/\s+/g, '').toLowerCase())
   return items.filter(it => {
-    const haystack = it.title.replace(/\s+/g, '').toLowerCase()
-    return needles.some(n => hasGenuineMention(haystack, n))
+    const { stripped, boundary } = stripWhitespaceWithBoundaries(it.title)
+    const haystack = stripped.toLowerCase()
+    return needles.some(n => hasGenuineMention(haystack, n, boundary))
   })
 }
 
