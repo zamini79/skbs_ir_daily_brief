@@ -8,7 +8,10 @@ export function truncateAtSentence(text: string, max: number): string {
   if (charLength(text) <= max) return text
   const chars = [...text]
   const head = chars.slice(0, max).join('')
-  const lastStop = Math.max(head.lastIndexOf('.'), head.lastIndexOf('。'))
+  // Find sentence boundaries: . and 。, but only if the period is not flanked by digits
+  const matches = Array.from(head.matchAll(/(?<![0-9])[.。](?![0-9])/g))
+  const lastStop = matches.length > 0 ? matches[matches.length - 1].index! : -1
+  // If boundary is at index 0, return full head rather than a lone "." (better UX)
   if (lastStop > 0) return head.slice(0, lastStop + 1)
   return head
 }
