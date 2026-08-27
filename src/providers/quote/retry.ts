@@ -14,6 +14,9 @@
  *
  *  1. **무엇을 재시도할지 가린다.** 401·404 처럼 다시 불러도 같은 답이 오는 실패는
  *     수집 창만 갉아먹는다. 5xx(Cloudflare 52x 포함)·네트워크 오류·429 만 다시 부른다.
+ *     **단, 429 중에서도 월 한도 소진은 제외한다** — 기다려도 이번 달에는 풀리지
+ *     않으므로 이 규칙이 말하는 "다시 불러도 같은 답"에 정확히 해당한다.
+ *     분당 한도와 같은 상태 코드를 쓰므로 본문으로 가른다(QUOTA_EXHAUSTED_PATTERNS).
  *  2. **한도 초과와 순간 장애는 기다리는 시간이 다르다.** ytdBase.ts 가 이미
  *     같은 구분을 하고 있고(분당 크레딧 리셋 = 61초), 그 값을 그대로 쓴다.
  *     5xx 는 분 단위로 기다릴 이유가 없으므로 짧게 두 번만 더 부른다.
@@ -35,6 +38,32 @@ const RATE_LIMIT_RETRY_DELAY_MS = 61_000
 /** 순간 장애(5xx·네트워크)용 대기. 분 단위로 기다릴 이유가 없다. */
 const TRANSIENT_DELAYS_MS = [3_000, 15_000]
 
+/**
+ * **기다려도 풀리지 않는 한도 소진 신호.**
+ *
+ * 설계 규칙 1번("다시 불러도 같은 답이 오는 실패는 수집 창만 갉아먹는다")이 정확히
+ * 여기에 해당한다. 분당 한도는 61초 기다리면 풀리지만 **월 한도는 다음 달까지
+ * 풀리지 않는다.** 그런데 둘이 같은 429 를 쓴다 — 그게 함정이다.
+ *
+ * 실측(2026-08-27): 검증하느라 수집을 열두 번 넘게 돌려 marketstack 월 100회를
+ * 소진시켰다. 응답은 이랬다:
+ *
+ *     HTTP 429  {"error":{"code":"usage_limit_reached",
+ *                         "message":"Your monthly usage limit has been reached."}}
+ *
+ * 상태 코드만 보던 때는 `rate-limit` 으로 분류되어 61초를 기다린 뒤 확실히 실패할
+ * 호출을 한 번 더 했다. 20분 창에서 순수한 낭비다.
+ *
+ * **확인한 provider 의 신호만 넣는다.** twelvedata 의 `You have run out of API
+ * credits` 는 **분당** 크레딧이라 기다리면 실제로 풀린다 — 여기 넣으면 반대 방향으로
+ * 틀려서, 재시도 한 번이면 붙었을 미국 5행이 매일 그냥 빈다. 새 provider 를 넣기
+ * 전에 그 provider 가 분당인지 월간인지 **실제 응답으로 확인해라.**
+ */
+const QUOTA_EXHAUSTED_PATTERNS = [
+  /usage_limit_reached/i,        // marketstack 의 error.code (실측)
+  /monthly usage limit/i,        // 같은 응답의 사람 읽는 문구
+]
+
 /** 한 소스당 총 시도 횟수 상한(최초 1회 + 재시도 2회). */
 const MAX_ATTEMPTS = 3
 
@@ -54,6 +83,11 @@ const realSleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, 
 export function classifyQuoteFailure(error: unknown): QuoteFailureKind {
   const message = error instanceof Error ? error.message : String(error)
   const name = error instanceof Error ? error.name : ''
+
+  // **상태 코드보다 먼저 본다.** 한도 소진과 분당 속도 제한이 같은 429 를 쓰므로
+  // 상태 코드를 먼저 보면 소진을 영영 가려낼 수 없다(위 QUOTA_EXHAUSTED_PATTERNS 참고).
+  // 이 신호는 본문에만 있고, marketstack.ts 의 assertHttpOk 가 메시지에 실어 준다.
+  if (QUOTA_EXHAUSTED_PATTERNS.some(p => p.test(message))) return 'permanent'
 
   const http = /HTTP (\d{3})/.exec(message)
   if (http) {

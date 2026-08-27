@@ -18,6 +18,32 @@ describe('classifyQuoteFailure', () => {
       .toBe('rate-limit')
   })
 
+  it('월 한도 소진은 429 여도 재시도 대상이 아니다 (실측 2026-08-27)', () => {
+    // marketstack 은 월 한도 소진을 분당 속도 제한과 **같은 429** 로 알린다.
+    // 구분은 본문의 error.code 에만 있고, marketstack.ts 의 assertHttpOk 가 그걸
+    // 메시지에 실어 준다. 상태 코드를 먼저 보면 이 구분이 사라진다.
+    expect(classifyQuoteFailure(new Error(
+      'marketstack HTTP 429 (usage_limit_reached: Your monthly usage limit has been reached.)',
+    ))).toBe('permanent')
+  })
+
+  it('사람이 읽는 문구만 남아도 월 한도 소진으로 본다', () => {
+    expect(classifyQuoteFailure(new Error('marketstack: Your monthly usage limit has been reached.')))
+      .toBe('permanent')
+  })
+
+  it('twelvedata 의 크레딧 소진은 **분당** 이라 여전히 재시도 대상이다', () => {
+    // 여기를 뭉뚱그리면 반대 방향으로 틀린다 — 61초 뒤 재시도 한 번이면 붙었을
+    // 미국 5행이 매일 그냥 빈다.
+    expect(classifyQuoteFailure(new Error(
+      'twelvedata 오류 응답 (code 429): You have run out of API credits for the current minute.',
+    ))).toBe('rate-limit')
+  })
+
+  it('본문 단서가 없는 429 는 예전대로 분당 한도로 본다', () => {
+    expect(classifyQuoteFailure(new Error('marketstack HTTP 429'))).toBe('rate-limit')
+  })
+
   it('4290 을 429 로 읽지 않는다', () => {
     expect(classifyQuoteFailure(new Error('종가 4290 파싱 실패'))).toBe('permanent')
   })
@@ -89,6 +115,40 @@ describe('withQuoteRetry', () => {
     await expect(withQuoteRetry('t', fn, r.sleep)).rejects.toThrow('429')
     expect(fn).toHaveBeenCalledTimes(2)
     expect(r.waits).toEqual([61_000])
+  })
+
+  // ── 배선 확인 ─────────────────────────────────────────────────────────
+  // 분류 함수만 검증하면 withQuoteRetry 가 그 분류를 실제로 쓰는지는 못 본다.
+  // 아래 두 개는 **호출 횟수와 대기 시간을 직접 센다.**
+
+  it('월 한도 소진은 한 번만 부르고 기다리지 않는다 (실측 사유 그대로)', async () => {
+    const fn = vi.fn(async () => {
+      throw new Error(
+        'marketstack HTTP 429 (usage_limit_reached: Your monthly usage limit has been reached.)',
+      )
+    })
+    const r = recorder()
+    await expect(withQuoteRetry('marketstack', fn, r.sleep)).rejects.toThrow(/usage_limit_reached/)
+    expect(fn).toHaveBeenCalledTimes(1)   // 재시도 0회
+    expect(r.waits).toEqual([])           // 61초를 쓰지 않는다
+  })
+
+  it('같은 429 라도 분당 한도면 61초 뒤 한 번 더 부른다 — 둘이 갈리는지 본다', async () => {
+    const fn = vi.fn(async () => {
+      throw new Error('twelvedata 오류 응답 (code 429): You have run out of API credits')
+    })
+    const r = recorder()
+    await expect(withQuoteRetry('twelvedata', fn, r.sleep)).rejects.toThrow(/API credits/)
+    expect(fn).toHaveBeenCalledTimes(2)   // 재시도 1회
+    expect(r.waits).toEqual([61_000])
+  })
+
+  it('소진 사유는 재시도 분류에 덮이지 않고 그대로 던져진다', async () => {
+    // 담당자·운영자가 화면에서 봐야 하는 것은 "월 한도 소진"이라는 사실이다.
+    const reason =
+      'marketstack HTTP 429 (usage_limit_reached: Your monthly usage limit has been reached.)'
+    const fn = vi.fn(async () => { throw new Error(reason) })
+    await expect(withQuoteRetry('marketstack', fn, async () => {})).rejects.toThrow(reason)
   })
 
   it('재시도해도 소용없는 실패는 즉시 던진다 — 20분 창을 낭비하지 않는다', async () => {

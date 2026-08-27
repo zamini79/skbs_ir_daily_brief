@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { fetchMarketstackQuotes, fetchMarketstackYtdBase } from './marketstack'
+import { withQuoteRetry, classifyQuoteFailure } from './retry'
 
 beforeEach(() => { process.env.MARKETSTACK_API_KEY = 'test-key' })
 afterEach(() => vi.unstubAllGlobals())
@@ -39,6 +40,35 @@ describe('fetchMarketstackQuotes', () => {
   it('HTTP 오류 상태면 빈 맵 대신 예외를 던진다', async () => {
     stub({}, 503)
     await expect(fetchMarketstackQuotes(['GSK.L'])).rejects.toThrow(/marketstack HTTP 503/)
+  })
+
+  it('월 한도 소진(429)은 본문의 error.code 까지 사유에 싣는다 (실측 2026-08-27)', async () => {
+    // 실제로 받은 응답 그대로. 상태 코드만 실으면 retry.ts 가 분당 속도 제한과
+    // 구분하지 못해 61초를 기다렸다가 확실히 실패할 호출을 한 번 더 한다.
+    stub({ error: { code: 'usage_limit_reached', message: 'Your monthly usage limit has been reached.' } }, 429)
+    await expect(fetchMarketstackQuotes(['GSK.L'])).rejects.toThrow(
+      /marketstack HTTP 429 .*usage_limit_reached.*monthly usage limit/,
+    )
+  })
+
+  it('YTD 경로도 같은 사유를 싣는다', async () => {
+    stub({ error: { code: 'usage_limit_reached', message: 'Your monthly usage limit has been reached.' } }, 429)
+    await expect(fetchMarketstackYtdBase(['GSK.L'], 2026)).rejects.toThrow(/usage_limit_reached/)
+  })
+
+  it('본문이 JSON 이 아니어도 상태 코드 사유는 남는다 — 본문 파싱이 실패를 가리지 않는다', async () => {
+    // 5xx 는 프록시가 HTML 을 돌려주기도 한다. 그때 errorDetail 이 던지면
+    // 원래 사유(HTTP 502)가 통째로 사라진다.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>Bad Gateway</html>', { status: 502 })))
+    await expect(fetchMarketstackQuotes(['GSK.L'])).rejects.toThrow(/marketstack HTTP 502/)
+  })
+
+  it('사유에 API 키를 싣지 않는다', async () => {
+    // 본문이 요청 URL 을 되비추는 API 가 실제로 있다(gemini.ts 의 redactKey).
+    // 이 문자열은 QuoteSnapshot.errorMessage 로 DB 에 저장되고 화면에도 뜬다.
+    stub({ error: { code: 'invalid_access_key', message: 'bad key for access_key=test-key' } }, 401)
+    await expect(fetchMarketstackQuotes(['GSK.L'])).rejects.toThrow(/<redacted>/)
+    await expect(fetchMarketstackQuotes(['GSK.L'])).rejects.not.toThrow(/test-key/)
   })
 
   it('빈 목록이면 호출하지 않는다', async () => {
@@ -138,5 +168,50 @@ describe('fetchMarketstackYtdBase', () => {
   it('HTTP 오류 상태면 빈 맵 대신 예외를 던진다', async () => {
     stub({}, 503)
     await expect(fetchMarketstackYtdBase(['GSK.L'], 2026)).rejects.toThrow(/marketstack HTTP 503/)
+  })
+})
+
+describe('marketstack + retry.ts 배선 — 월 한도 소진이 실제로 재시도를 건너뛰는가', () => {
+  // 분류 함수만 따로 검증하면 두 모듈이 **같은 문자열로 이어져 있는지**는 못 본다.
+  // 여기서는 진짜 응답 본문을 stub 으로 물리고 fetch 호출 횟수를 직접 센다.
+  // (라이브 검증은 불가능하다 — 월 한도가 이미 소진돼 있고 일부러 더 쓰지 않는다.)
+  const EXHAUSTED = {
+    error: { code: 'usage_limit_reached', message: 'Your monthly usage limit has been reached.' },
+  }
+
+  it('월 한도 소진: fetch 를 한 번만 부르고 61초를 쓰지 않는다', async () => {
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify(EXHAUSTED), { status: 429 }))
+    vi.stubGlobal('fetch', fetchSpy)
+    const waits: number[] = []
+
+    await expect(
+      withQuoteRetry('marketstack', () => fetchMarketstackQuotes(['GSK.L']), async ms => { waits.push(ms) }),
+    ).rejects.toThrow(/usage_limit_reached/)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(waits).toEqual([])
+  })
+
+  it('본문 단서 없는 429 는 예전대로 61초 뒤 한 번 더 부른다 — 과잉 교정이 아니다', async () => {
+    // 이 짝이 없으면 "429 를 전부 permanent 로" 라는 구현도 위 테스트를 통과한다.
+    const fetchSpy = vi.fn(async () => new Response('{}', { status: 429 }))
+    vi.stubGlobal('fetch', fetchSpy)
+    const waits: number[] = []
+
+    await expect(
+      withQuoteRetry('marketstack', () => fetchMarketstackQuotes(['GSK.L']), async ms => { waits.push(ms) }),
+    ).rejects.toThrow(/HTTP 429/)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(waits).toEqual([61_000])
+  })
+
+  it('던져진 사유가 소진이라는 사실을 담고 있다 — 화면에 뜨는 문구다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(EXHAUSTED), { status: 429 })))
+    const err = await fetchMarketstackQuotes(['GSK.L']).then(() => null, (e: unknown) => e as Error)
+    expect(err).toBeInstanceOf(Error)
+    expect(err!.message).toContain('usage_limit_reached')
+    expect(err!.message).toContain('monthly usage limit')
+    expect(classifyQuoteFailure(err)).toBe('permanent')
   })
 })
