@@ -1,0 +1,32 @@
+import { describe, it, expect } from 'vitest'
+import { formatPrice, formatPrevDiff } from './format'
+
+describe('formatPrice', () => {
+  it('국내 종목을 샘플처럼 만든다', () => {
+    expect(formatPrice(37550, 'KRW', false)).toBe('KRW 37,550')
+  })
+  it('미국 종목은 소수 둘째 자리까지 만든다', () => {
+    expect(formatPrice(28.57, 'USD', false)).toBe('USD 28.57')
+  })
+  it('런던 펜스는 표시상 그대로 둔다', () => {
+    expect(formatPrice(1905.5, 'GBP', false)).toBe('GBP 1,905.5')
+  })
+  it('지수는 통화 없이 숫자만 만든다', () => {
+    expect(formatPrice(7677.28, 'USD', true)).toBe('7,677.28')
+  })
+})
+
+describe('formatPrevDiff', () => {
+  it('상승은 ▲ 를 붙인다', () => {
+    expect(formatPrevDiff(1597000, 1585000)).toBe('▲ 12,000')
+  })
+  it('하락은 ▼ 를 붙이고 절대값을 쓴다', () => {
+    expect(formatPrevDiff(37550, 38300)).toBe('▼ 750')
+  })
+  it('보합은 - 를 준다', () => {
+    expect(formatPrevDiff(100, 100)).toBe('-')
+  })
+  it('소수 차이를 유지한다', () => {
+    expect(formatPrevDiff(28.57, 27.97)).toBe('▲ 0.6')
+  })
+})
