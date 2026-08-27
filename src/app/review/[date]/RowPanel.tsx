@@ -136,8 +136,15 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
                 {c.summaryError && (
                   <p className="mt-1 text-xs text-red-600">요약 실패: {c.summaryError}</p>
                 )}
+                {/*
+                 * summaryError가 null인데 요약도 없는 경우 — 사유를 함부로 짐작해 말하지
+                 * 않는다("본문 부족" 등). 이 화면은 실패 사유 추적(summaryError/failure
+                 * counters)이 생기기 전에 수집된 실행에서만 나타나야 하는 레거시 경로다.
+                 * 그 이후 실행은 실패든 건너뜀이든 항상 summaryError를 남기므로 위
+                 * 분기로 간다.
+                 */}
                 {!c.summaryError && c.summaries.length === 0 && (
-                  <p className="mt-1 text-xs text-gray-400">요약 없음 (본문 부족으로 건너뜀)</p>
+                  <p className="mt-1 text-xs text-gray-400">요약 없음 (사유 미기록)</p>
                 )}
               </div>
             </div>
@@ -166,9 +173,10 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
               이 후보는 요약을 만들지 못했습니다 ({chosenCandidate.summaryError}). 제목만 보고 판단하세요.
             </p>
           )}
+          {/* 위 후보 목록의 주석과 같은 이유로 사유를 짐작해 말하지 않는다 — 레거시 경로. */}
           {!chosenCandidate.summaryError && chosenCandidate.summaries.length === 0 && (
             <p className="text-sm text-gray-500">
-              이 후보는 본문이 짧아 요약을 만들지 않았습니다. 제목만 보고 판단하세요.
+              이 후보는 요약이 없고, 사유가 기록되어 있지 않습니다. 제목만 보고 판단하세요.
             </p>
           )}
           {chosenCandidate.summaries.map(s => (

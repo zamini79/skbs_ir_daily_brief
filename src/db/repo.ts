@@ -2,16 +2,38 @@ import { prisma } from './client'
 import { changePct as calcChangePct } from '@/domain/calc'
 import type { Prisma } from '@prisma/client'
 
-export type RowState = 'NO_NEWS' | 'OMITTED' | 'PENDING' | 'SELECTED'
+export type RowState = 'NO_NEWS' | 'OMITTED' | 'PENDING' | 'SELECTED' | 'STALE_SELECTION'
 
 /**
  * 시스템이 후보를 못 만든 것(NO_NEWS)과 담당자가 뺀 것(OMITTED)은 다르다.
  * 출력 표에서는 둘 다 공란이지만 검수 화면에서는 구분해 보여야 한다.
+ *
+ * decision이 SELECTED인데 chosenCandidateId가 null이면, 담당자가 고른 뒤 재수집이
+ * 일어나 그 후보가 삭제되고 FK(onDelete: SetNull)가 참조를 null로 되돌린 것이다.
+ * decision 필드 자체는 저절로 되돌아가지 않으므로 여기서 잡아 SELECTED로 잘못
+ * 표시되지 않게 한다.
+ *
+ * collectHelpers.needsPendingRevert()를 그대로 쓰지 않고 chosenCandidateId만 본다.
+ * 그 함수는 chosenCandidateId나 chosenSummaryId 둘 중 하나만 null이어도 무효로
+ * 보는데, "후보는 골랐지만 그 후보에 애초에 요약이 없어(summaryError 없이 빈
+ * summaries) chosenSummaryId가 null인" 것은 무효화가 아니라 정상적으로 끝난
+ * 선택이다 — 2026-08-27 실행 기준 후보 26건 중 20건이 이 경우였다. 그 조건을
+ * 그대로 쓰면 그런 정상 선택 다수가 "선택 무효화됨"으로 잘못 표시된다. 재수집이
+ * 후보 자체를 지우면 chosenCandidateId와 chosenSummaryId가 항상 함께 null이
+ * 되므로(요약도 그 후보에 딸려 지워짐), chosenCandidateId 하나만 봐도 진짜
+ * 무효화 신호를 놓치지 않는다.
  */
-export function rowDisplayState(row: { candidateCount: number; decision: string }): RowState {
+export function rowDisplayState(row: {
+  candidateCount: number
+  decision: string
+  chosenCandidateId: string | null
+  chosenSummaryId: string | null
+}): RowState {
   if (row.candidateCount === 0) return 'NO_NEWS'
   if (row.decision === 'OMITTED') return 'OMITTED'
-  if (row.decision === 'SELECTED') return 'SELECTED'
+  if (row.decision === 'SELECTED') {
+    return row.chosenCandidateId === null ? 'STALE_SELECTION' : 'SELECTED'
+  }
   return 'PENDING'
 }
 
@@ -20,6 +42,7 @@ const ROW_STATE_LABEL: Record<RowState, string> = {
   OMITTED: '싣지 않음 (담당자 결정)',
   PENDING: '미검토',
   SELECTED: '선택 완료',
+  STALE_SELECTION: '선택 무효화됨 (재수집으로 초기화 — 다시 검토 필요)',
 }
 
 export function rowStateLabel(state: RowState): string {
@@ -250,7 +273,12 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
         manualClose,
         manualPrevClose,
       },
-      state: rowDisplayState({ candidateCount: mine.length, decision: sel?.decision ?? 'PENDING' }),
+      state: rowDisplayState({
+        candidateCount: mine.length,
+        decision: sel?.decision ?? 'PENDING',
+        chosenCandidateId: sel?.chosenCandidateId ?? null,
+        chosenSummaryId: sel?.chosenSummaryId ?? null,
+      }),
       display,
     }
   })

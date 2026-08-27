@@ -6,22 +6,26 @@ import { groupByCategory, rowStateLabel, type ClientRow, type RowState } from '@
 import { RowPanel } from './RowPanel'
 
 /**
- * 네 가지 행 상태를 한눈에 구분할 수 있도록 서로 다른 배경/배지 색을 준다.
+ * 다섯 가지 행 상태를 한눈에 구분할 수 있도록 서로 다른 배경/배지 색을 준다.
  * bg와 text를 항상 짝으로 명시한다 — text를 비워 상위(main)의 글자색 상속에
  * 맡기면, 페이지가 라이트로 고정돼 있어도 나중에 이 조각만 재사용될 때 다시
  * 깨질 수 있다.
+ * STALE_SELECTION은 PENDING(미검토)과 같은 급의 "다시 봐야 함"이지만 사유가
+ * 다르므로(담당자가 고른 뒤 재수집으로 무효화됨) amber와 겹치지 않는 rose를 쓴다.
  */
 const ROW_BG: Record<RowState, string> = {
   NO_NEWS: 'bg-gray-50 text-gray-500',
   OMITTED: 'bg-gray-100 text-gray-600',
   PENDING: 'bg-amber-50 text-gray-900',
   SELECTED: 'bg-white text-gray-900',
+  STALE_SELECTION: 'bg-rose-50 text-gray-900',
 }
 const BADGE_STYLE: Record<RowState, string> = {
   NO_NEWS: 'bg-gray-200 text-gray-500',
   OMITTED: 'bg-gray-300 text-gray-700',
   PENDING: 'bg-amber-200 text-amber-900',
   SELECTED: 'bg-emerald-200 text-emerald-900',
+  STALE_SELECTION: 'bg-rose-200 text-rose-900',
 }
 
 function pct(v: number | null): string {

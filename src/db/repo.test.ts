@@ -10,28 +10,52 @@ import {
 
 describe('rowDisplayState', () => {
   it('후보가 없으면 NO_NEWS 다', () => {
-    expect(rowDisplayState({ candidateCount: 0, decision: 'PENDING' })).toBe('NO_NEWS')
+    expect(
+      rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, chosenSummaryId: null }),
+    ).toBe('NO_NEWS')
   })
   it('후보가 없으면 담당자가 아직 안 봤어도 NO_NEWS 다', () => {
-    expect(rowDisplayState({ candidateCount: 0, decision: 'OMITTED' })).toBe('NO_NEWS')
+    expect(
+      rowDisplayState({ candidateCount: 0, decision: 'OMITTED', chosenCandidateId: null, chosenSummaryId: null }),
+    ).toBe('NO_NEWS')
   })
   it('담당자가 뺐으면 OMITTED 다', () => {
-    expect(rowDisplayState({ candidateCount: 3, decision: 'OMITTED' })).toBe('OMITTED')
+    expect(
+      rowDisplayState({ candidateCount: 3, decision: 'OMITTED', chosenCandidateId: null, chosenSummaryId: null }),
+    ).toBe('OMITTED')
   })
   it('아직 안 봤으면 PENDING 이다', () => {
-    expect(rowDisplayState({ candidateCount: 3, decision: 'PENDING' })).toBe('PENDING')
+    expect(
+      rowDisplayState({ candidateCount: 3, decision: 'PENDING', chosenCandidateId: null, chosenSummaryId: null }),
+    ).toBe('PENDING')
   })
   it('골랐으면 SELECTED 다', () => {
-    expect(rowDisplayState({ candidateCount: 3, decision: 'SELECTED' })).toBe('SELECTED')
+    expect(
+      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: 'c1', chosenSummaryId: 's1' }),
+    ).toBe('SELECTED')
+  })
+  it('SELECTED인데 재수집으로 chosenCandidateId가 null로 되돌아갔으면 STALE_SELECTION이다', () => {
+    expect(
+      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: null, chosenSummaryId: null }),
+    ).toBe('STALE_SELECTION')
+  })
+  it('후보는 고른 채로 유효한데 그 후보에 애초에 요약이 없어 chosenSummaryId만 null이면, 무효화가 아니라 정상 종결된 SELECTED다', () => {
+    // 재수집이 후보를 지운 것과 "고른 후보에 원래 요약이 없던 것"은 다르다. 후자를
+    // STALE_SELECTION으로 잘못 표시하면 안 된다 — 2026-08-27 실행에서 후보 26건
+    // 중 20건이 요약 없이 존재했으므로, 이 케이스는 드문 예외가 아니라 흔한 상황이다.
+    expect(
+      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: 'c1', chosenSummaryId: null }),
+    ).toBe('SELECTED')
   })
 })
 
 describe('rowStateLabel', () => {
-  it('네 가지 상태 문구가 스펙 표와 일치한다', () => {
+  it('다섯 가지 상태 문구가 스펙 표와 일치한다', () => {
     expect(rowStateLabel('NO_NEWS')).toBe('당일·D-1 기사 없음')
     expect(rowStateLabel('OMITTED')).toBe('싣지 않음 (담당자 결정)')
     expect(rowStateLabel('PENDING')).toBe('미검토')
     expect(rowStateLabel('SELECTED')).toBe('선택 완료')
+    expect(rowStateLabel('STALE_SELECTION')).toBe('선택 무효화됨 (재수집으로 초기화 — 다시 검토 필요)')
   })
 })
 
