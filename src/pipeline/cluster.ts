@@ -13,7 +13,7 @@ export function normalizeTitle(title: string): string {
     .trim()
 }
 
-function tokenize(title: string): string[] {
+export function tokenize(title: string): string[] {
   return normalizeTitle(title)
     .split(' ')
     .filter(t => [...t].length >= 2)

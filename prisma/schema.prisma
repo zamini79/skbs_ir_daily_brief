@@ -16,6 +16,8 @@ model Instrument {
   quoteSource   String  // naver-stock | naver-index | twelvedata | marketstack | manual
   quoteSymbol   String
   newsQuery     String
+  /// 관련성 필터용 콤마 구분 별칭 목록. 비어 있으면 파이프라인이 name 하나로 폴백한다.
+  newsAliases   String  @default("")
   isIndex       Boolean @default(false)
 
   /// 해외사 시총 계산용. 국내사는 네이버가 시총을 직접 주므로 null.
@@ -91,6 +93,8 @@ model NewsCandidate {
   publishedAt  DateTime
   /// 같은 사건을 다룬 매체 수. 이 값이 '빈도'다.
   clusterSize  Int
+  /// 이 후보가 더 높은 순위(작은 rank) 후보와 같은 사건이면 그 rank. rank 1은 항상 null.
+  sameEventAsRank Int?
 
   run        BriefRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
   instrument Instrument    @relation(fields: [instrumentId], references: [id])
