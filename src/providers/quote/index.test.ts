@@ -14,7 +14,9 @@ vi.mock('./marketstack', () => ({
 }))
 
 import { fetchAllQuotes } from './index'
-import { fetchNaverStock } from './naver'
+import { fetchNaverStock, fetchNaverDomesticIndex, fetchNaverWorldIndex } from './naver'
+import { fetchTwelveDataQuotes } from './twelvedata'
+import { fetchMarketstackQuotes } from './marketstack'
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -48,5 +50,54 @@ describe('fetchAllQuotes', () => {
   it('배치 소스에서 빠진 심볼은 Error 로 남긴다', async () => {
     const r = await fetchAllQuotes([{ id: 'x', quoteSource: 'twelvedata', quoteSymbol: 'NOPE' }])
     expect(r.get('x')).toBeInstanceOf(Error)
+  })
+
+  it('알 수 없는 quoteSource 는 Error 로 남기고 값이 사라지지 않는다', async () => {
+    const r = await fetchAllQuotes([{ id: 'typo', quoteSource: 'naver-stok', quoteSymbol: '207940' }])
+    expect(r.has('typo')).toBe(true)
+    expect(r.get('typo')).toBeInstanceOf(Error)
+    expect((r.get('typo') as Error).message).toContain('naver-stok')
+  })
+
+  it('naver-index 이고 심볼이 . 로 시작하면 해외지수 fetcher 를 부른다', async () => {
+    const r = await fetchAllQuotes([{ id: 'w', quoteSource: 'naver-index', quoteSymbol: '.INX' }])
+    expect((r.get('w') as any).close).toBe(7675)
+    expect(fetchNaverWorldIndex).toHaveBeenCalledWith('.INX')
+    expect(fetchNaverDomesticIndex).not.toHaveBeenCalled()
+  })
+
+  it('naver-index 이고 심볼이 . 로 시작하지 않으면 국내지수 fetcher 를 부른다', async () => {
+    const r = await fetchAllQuotes([{ id: 'k', quoteSource: 'naver-index', quoteSymbol: 'KOSPI' }])
+    expect((r.get('k') as any).close).toBe(6800)
+    expect(fetchNaverDomesticIndex).toHaveBeenCalledWith('KOSPI')
+    expect(fetchNaverWorldIndex).not.toHaveBeenCalled()
+  })
+
+  it('twelvedata 가 전체 실패하면 해당 배치의 모든 종목이 Error 이고 다른 그룹은 영향받지 않는다', async () => {
+    vi.mocked(fetchTwelveDataQuotes).mockRejectedValueOnce(new Error('td down'))
+    const r = await fetchAllQuotes([
+      { id: 'a', quoteSource: 'naver-stock', quoteSymbol: '207940' },
+      { id: 'b', quoteSource: 'twelvedata', quoteSymbol: 'PFE' },
+      { id: 'c', quoteSource: 'twelvedata', quoteSymbol: 'JNJ' },
+      { id: 'd', quoteSource: 'marketstack', quoteSymbol: 'GSK.L' },
+    ])
+    expect(r.get('b')).toBeInstanceOf(Error)
+    expect(r.get('c')).toBeInstanceOf(Error)
+    expect((r.get('a') as any).close).toBe(100)
+    expect((r.get('d') as any).close).toBeCloseTo(1890.5, 4)
+  })
+
+  it('marketstack 가 전체 실패하면 해당 배치의 모든 종목이 Error 이고 다른 그룹은 영향받지 않는다', async () => {
+    vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(new Error('ms down'))
+    const r = await fetchAllQuotes([
+      { id: 'a', quoteSource: 'naver-stock', quoteSymbol: '207940' },
+      { id: 'c', quoteSource: 'marketstack', quoteSymbol: 'GSK.L' },
+      { id: 'd', quoteSource: 'marketstack', quoteSymbol: 'AZN.L' },
+      { id: 'b', quoteSource: 'twelvedata', quoteSymbol: 'PFE' },
+    ])
+    expect(r.get('c')).toBeInstanceOf(Error)
+    expect(r.get('d')).toBeInstanceOf(Error)
+    expect((r.get('a') as any).close).toBe(100)
+    expect((r.get('b') as any).close).toBeCloseTo(28.3, 4)
   })
 })

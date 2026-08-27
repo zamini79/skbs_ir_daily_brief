@@ -20,6 +20,15 @@ export async function fetchAllQuotes(
   const td = instruments.filter(i => i.quoteSource === 'twelvedata')
   const ms = instruments.filter(i => i.quoteSource === 'marketstack')
 
+  // manual 은 의도적으로 결과에서 제외한다. 그 외 알려지지 않은 quoteSource 는
+  // 설정 오류이므로 manual 과 구분되도록 Error 로 남긴다(조용히 사라지면 안 됨).
+  const known = ['naver-stock', 'naver-index', 'twelvedata', 'marketstack', 'manual']
+  for (const i of instruments) {
+    if (!known.includes(i.quoteSource)) {
+      out.set(i.id, new Error(`알 수 없는 quoteSource: ${i.quoteSource}`))
+    }
+  }
+
   await Promise.all([
     // 개별 호출 소스
     ...perItem.map(async i => {
