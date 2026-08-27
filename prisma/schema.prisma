@@ -107,6 +107,10 @@ model NewsCandidate {
   run        BriefRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
   instrument Instrument    @relation(fields: [instrumentId], references: [id])
   summaries  NewsSummary[]
+  /// 이 후보를 골랐던 Selection들. 재실행으로 이 후보가 삭제되면 DB가 그쪽 FK를 null로
+  /// 되돌린다(onDelete: SetNull) — 검수자의 선택이 존재하지 않는 행을 조용히 가리키는
+  /// 일이 없도록.
+  chosenBy   Selection[]   @relation("ChosenCandidate")
 
   @@unique([runId, instrumentId, rank])
 }
@@ -118,6 +122,8 @@ model NewsSummary {
   text        String @db.Text
 
   candidate NewsCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  /// NewsCandidate.chosenBy 와 같은 이유로 존재한다.
+  chosenBy  Selection[]   @relation("ChosenSummary")
 
   @@unique([candidateId, variant])
 }
@@ -137,6 +143,11 @@ model Selection {
 
   run        BriefRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
   instrument Instrument @relation(fields: [instrumentId], references: [id])
+  /// 재실행으로 후보가 재생성되면 이전 후보 id는 사라진다. FK가 SetNull로 정리해
+  /// 죽은 참조가 아니라 명확한 null로 남긴다 — 이 값이 null로 바뀌면 파이프라인이
+  /// decision도 함께 PENDING으로 되돌린다(editedText는 검수자의 작업물이므로 보존).
+  chosenCandidate NewsCandidate? @relation("ChosenCandidate", fields: [chosenCandidateId], references: [id], onDelete: SetNull)
+  chosenSummary   NewsSummary?   @relation("ChosenSummary", fields: [chosenSummaryId], references: [id], onDelete: SetNull)
 
   @@unique([runId, instrumentId])
 }

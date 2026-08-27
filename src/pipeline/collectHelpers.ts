@@ -136,3 +136,36 @@ export async function attemptSummary(
 export function computeRunStatus(summariesFailed: number): 'READY' | 'PARTIAL' {
   return summariesFailed > 0 ? 'PARTIAL' : 'READY'
 }
+
+/**
+ * 항목 하나를 처리하다 예외가 나도 배치 전체(Promise.all이든 순차 for 루프든)를
+ * 막지 않는다. `worker` 가 성공 경로에서 이미 카운터를 올렸다면, 실패 시 그 증가를
+ * 되돌리는 건 이 함수의 책임이 아니다 — 이 함수는 오직 "예외가 이 항목 밖으로
+ * 새어나가지 않는다"만 보장한다. 호출자는 `ok`가 false일 때만 실패를 집계하면 된다.
+ */
+export async function isolate(worker: () => Promise<void>): Promise<{ ok: boolean }> {
+  try {
+    await worker()
+    return { ok: true }
+  } catch {
+    return { ok: false }
+  }
+}
+
+/**
+ * 재실행으로 NewsCandidate/NewsSummary가 삭제되면 FK(onDelete: SetNull)가
+ * Selection.chosenCandidateId/chosenSummaryId를 곧바로 null로 되돌린다. 하지만
+ * decision은 그 자체로는 되돌아가지 않는다 — decision이 여전히 SELECTED인데 참조가
+ * null이면, 존재하지 않는 후보를 가리키는 "완료된 선택"으로 보인다. 이 함수가 그
+ * 판정을 내린다. OMITTED는 애초에 후보를 참조하지 않는 정상 상태이므로 대상이 아니다.
+ */
+export function needsPendingRevert(selection: {
+  decision: string
+  chosenCandidateId: string | null
+  chosenSummaryId: string | null
+}): boolean {
+  return (
+    selection.decision === 'SELECTED' &&
+    (selection.chosenCandidateId === null || selection.chosenSummaryId === null)
+  )
+}

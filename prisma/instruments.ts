@@ -33,7 +33,12 @@ export const INSTRUMENTS: InstrumentSeed[] = [
   { category: '해외사', displayOrder: 11, name: 'Pfizer',   currency: 'USD', quoteSource: 'twelvedata', quoteSymbol: 'PFE',  newsQuery: '화이자', newsAliases: '화이자,Pfizer', sharesOutstanding: BigInt(5_694_180_000) },
   { category: '해외사', displayOrder: 12, name: 'Merck',    currency: 'USD', quoteSource: 'twelvedata', quoteSymbol: 'MRK',  newsQuery: '머크', newsAliases: '머크,Merck', sharesOutstanding: BigInt(2_464_760_000) },
   { category: '해외사', displayOrder: 13, name: 'Novavax',  currency: 'USD', quoteSource: 'twelvedata', quoteSymbol: 'NVAX', newsQuery: '노바백스', newsAliases: '노바백스,Novavax', sharesOutstanding: BigInt(164_620_000) },
-  { category: '해외사', displayOrder: 14, name: 'Vaxcyte',  currency: 'USD', quoteSource: 'twelvedata', quoteSymbol: 'PCVX', newsQuery: '박사이트', newsAliases: '백사이트,Vaxcyte', sharesOutstanding: BigInt(148_610_000) },
+  // Vaxcyte: newsQuery와 newsAliases가 서로 다른 오타였다(박사이트 vs 백사이트) — 별칭이
+  // 검색어를 포함하지 않으면 필터가 그 종목 뉴스를 전부 지워버린다. 실측(2026-08-27)으로
+  // 박사이트/백사이트/Vaxcyte/백스사이트 네 표기 전부 네이버 뉴스 검색 결과 0건을 확인했다:
+  // Vaxcyte는 한국어 언론 보도가 아예 없다. 그래서 "맞는 표기"를 찾는 대신 검색어와
+  // 별칭을 영문 표기 하나로 통일한다 — 이 종목 뉴스 칸이 비어 있는 건 버그가 아니다.
+  { category: '해외사', displayOrder: 14, name: 'Vaxcyte',  currency: 'USD', quoteSource: 'twelvedata', quoteSymbol: 'PCVX', newsQuery: 'Vaxcyte', newsAliases: 'Vaxcyte', sharesOutstanding: BigInt(148_610_000) },
   { category: '해외사', displayOrder: 15, name: 'Moderna',  currency: 'USD', quoteSource: 'twelvedata', quoteSymbol: 'MRNA', newsQuery: '모더나', newsAliases: '모더나,Moderna', sharesOutstanding: BigInt(398_840_000) },
 
   // 해외사 — 비미국 4종목은 marketstack. 거래소 약칭 접미사를 쓴다(MIC 접미사는 ADR 값이 온다).
@@ -43,6 +48,10 @@ export const INSTRUMENTS: InstrumentSeed[] = [
   { category: '해외사', displayOrder: 19, name: 'Wuxi',   currency: 'HKD', quoteSource: 'marketstack', quoteSymbol: '2269.HK', newsQuery: '우시바이오로직스', newsAliases: '우시바이오로직스,우시바이오,WuXi', sharesOutstanding: BigInt(4_140_750_000) },
 
   // Index
+  // S&P500: newsQuery('뉴욕증시')가 일부러 newsAliases에 없다 — 좁은 검색어로는 기사가
+  // 거의 안 잡혀서 넓은 시황 검색어로 기사 풀을 넓힌 뒤 별칭으로 좁힌다. 실측(2026-08-27):
+  // '뉴욕증시' 검색 100건을 이 별칭으로 필터링하면 실제로 S&P500 관련 기사가 남는다
+  // (예: "S&P500 선물, 엔비디아 실적 호조에 상승…美 국채금리↑"). Vaxcyte류 오타가 아니다.
   { category: 'Index', displayOrder: 20, name: 'S&P500',           currency: 'USD', quoteSource: 'naver-index', quoteSymbol: '.INX',  newsQuery: '뉴욕증시', newsAliases: 'S&P500,S&P 500,스탠더드앤드푸어스', isIndex: true },
   { category: 'Index', displayOrder: 21, name: 'Nasdaq',           currency: 'USD', quoteSource: 'naver-index', quoteSymbol: '.IXIC', newsQuery: '나스닥',   newsAliases: '나스닥,Nasdaq', isIndex: true },
   { category: 'Index', displayOrder: 22, name: 'KOSPI',            currency: 'KRW', quoteSource: 'naver-index', quoteSymbol: 'KOSPI', newsQuery: '코스피',   newsAliases: '코스피,KOSPI', isIndex: true },

@@ -18,6 +18,8 @@ import {
   createQuotaGuard,
   attemptSummary,
   computeRunStatus,
+  isolate,
+  needsPendingRevert,
 } from './collectHelpers'
 
 /** Gemini 무료 티어 한도에 맞춘 동시 호출 수. 늘리면 429가 난다. */
@@ -46,8 +48,24 @@ export async function runCollection(now: Date): Promise<{
   })
 
   // 이전 실행분을 지운다. Selection 은 남긴다(담당자 선택을 덮어쓰지 않는다).
+  // NewsCandidate 를 지우면 그 후보를 가리키던 Selection.chosenCandidateId/chosenSummaryId 는
+  // FK(onDelete: SetNull)에 의해 DB가 곧바로 null로 되돌린다 — 존재하지 않는 행을 가리키는
+  // 일은 없다. 다만 decision 은 그 자체로는 되돌아가지 않으므로 아래에서 명시적으로 되돌린다.
   await prisma.newsCandidate.deleteMany({ where: { runId: run.id } })
   await prisma.quoteSnapshot.deleteMany({ where: { runId: run.id } })
+
+  // 재실행으로 참조가 null이 됐는데 decision이 여전히 SELECTED면, 존재하지 않는 후보를
+  // 가리키는 "완료된 선택"처럼 보인다 — 검수자가 알아채길 기대하지 않고 PENDING으로
+  // 되돌린다. editedText는 건드리지 않는다(검수자의 작업물이므로 이 update의 data에
+  // 애초에 넣지 않는다 — 아래 { decision: 'PENDING' } 뿐이다).
+  const existingSelections = await prisma.selection.findMany({ where: { runId: run.id } })
+  const toRevert = existingSelections.filter(needsPendingRevert)
+  if (toRevert.length > 0) {
+    await prisma.selection.updateMany({
+      where: { id: { in: toRevert.map(s => s.id) } },
+      data: { decision: 'PENDING' },
+    })
+  }
 
   const targets: QuoteTarget[] = instruments.map(i => ({
     id: i.id, quoteSource: i.quoteSource, quoteSymbol: i.quoteSymbol,
@@ -80,47 +98,54 @@ export async function runCollection(now: Date): Promise<{
     (await prisma.yearOpenPrice.findMany({ where: { year } })).map(c => [c.instrumentId, Number(c.price)]),
   )
 
-  // 4) 시세 저장
+  // 4) 시세 저장. 종목 하나의 DB 쓰기가 실패해도(일시적 접속 장애 등) 나머지 22종목은
+  // 계속 저장돼야 한다 — try/catch로 격리하지 않으면 예외가 루프를 끊고 Step 7과 최종
+  // 상태 갱신까지 전부 건너뛴다.
   let ok = 0
   let failed = 0
   for (const inst of instruments) {
     const q = quotes.get(inst.id)
-    if (!q || q instanceof Error) {
-      failed++
+    const { ok: wrote } = await isolate(async () => {
+      if (!q || q instanceof Error) {
+        await prisma.quoteSnapshot.create({
+          data: {
+            runId: run.id, instrumentId: inst.id, sourceName: inst.quoteSource,
+            errorMessage: q instanceof Error ? q.message : '소스 없음(수기 입력 대상)',
+          },
+        })
+        failed++
+        return
+      }
+      const rate = resolveFxRate(inst.currency, fx)
+      const yearOpen = yearOpens.get(inst.id)
+      const cap = resolveMarketCap({
+        isIndex: inst.isIndex,
+        quoteMarketCap: q.marketCapKrwTrillion,
+        close: q.close,
+        shares: inst.sharesOutstanding === null ? null : Number(inst.sharesOutstanding),
+        fxRate: rate,
+        priceDivisor: inst.priceDivisorForMarketCap,
+      })
+
       await prisma.quoteSnapshot.create({
         data: {
-          runId: run.id, instrumentId: inst.id, sourceName: inst.quoteSource,
-          errorMessage: q instanceof Error ? q.message : '소스 없음(수기 입력 대상)',
+          runId: run.id,
+          instrumentId: inst.id,
+          close: q.close,
+          prevClose: q.prevClose,
+          changePct: changePct(q.close, q.prevClose),
+          ytdPct: yearOpen ? ytdPct(q.close, yearOpen) : null,
+          marketCapKrwTrillion: cap,
+          fxRate: rate,
+          asOf: q.asOf,
+          sourceName: inst.quoteSource,
         },
       })
-      continue
-    }
-    ok++
-    const rate = resolveFxRate(inst.currency, fx)
-    const yearOpen = yearOpens.get(inst.id)
-    const cap = resolveMarketCap({
-      isIndex: inst.isIndex,
-      quoteMarketCap: q.marketCapKrwTrillion,
-      close: q.close,
-      shares: inst.sharesOutstanding === null ? null : Number(inst.sharesOutstanding),
-      fxRate: rate,
-      priceDivisor: inst.priceDivisorForMarketCap,
+      ok++
     })
-
-    await prisma.quoteSnapshot.create({
-      data: {
-        runId: run.id,
-        instrumentId: inst.id,
-        close: q.close,
-        prevClose: q.prevClose,
-        changePct: changePct(q.close, q.prevClose),
-        ytdPct: yearOpen ? ytdPct(q.close, yearOpen) : null,
-        marketCapKrwTrillion: cap,
-        fxRate: rate,
-        asOf: q.asOf,
-        sourceName: inst.quoteSource,
-      },
-    })
+    // isolate가 예외를 삼켰다면(DB 쓰기 자체가 실패 등) worker 내부의 ok/failed 증가는
+    // 일어나지 않았다 — 여기서 이 종목만 실패로 집계하고 나머지는 계속 진행한다.
+    if (!wrote) failed++
   }
 
   // 5) 뉴스 수집 + 별칭 필터 + 클러스터링
@@ -158,29 +183,33 @@ export async function runCollection(now: Date): Promise<{
       return clusters.map((c, idx) =>
         sumLimit(async () => {
           const rank = idx + 1
-          const candidate = await prisma.newsCandidate.create({
-            data: {
-              runId: run.id,
-              instrumentId: inst.id,
-              rank,
-              title: c.representative.title,
-              url: c.representative.naverUrl ?? c.representative.url,
-              publisher: c.representative.publisher,
-              publishedAt: c.representative.publishedAt,
-              clusterSize: c.size,
-              sameEventAsRank: sameEventMap.get(rank) ?? null,
-            },
-          })
-          candidatesCreated++
+          // 이 후보 하나의 처리(생성/본문수집/요약/DB 기록) 중 어디서든 예기치 못한 오류가
+          // 나면 이 후보만 실패로 격리한다 — Promise.all 전체를 무너뜨려 Step 7과 최종
+          // 상태 갱신을 건너뛰게 하면 안 된다.
+          const { ok: handled } = await isolate(async () => {
+            const candidate = await prisma.newsCandidate.create({
+              data: {
+                runId: run.id,
+                instrumentId: inst.id,
+                rank,
+                title: c.representative.title,
+                url: c.representative.naverUrl ?? c.representative.url,
+                publisher: c.representative.publisher,
+                publishedAt: c.representative.publishedAt,
+                clusterSize: c.size,
+                sameEventAsRank: sameEventMap.get(rank) ?? null,
+              },
+            })
+            candidatesCreated++
 
-          const body = await fetchArticleBody(c.representative)
-          const attempt = await attemptSummary({ title: c.representative.title, body }, quotaGuard, summarize)
+            const body = await fetchArticleBody(c.representative)
+            const attempt = await attemptSummary({ title: c.representative.title, body }, quotaGuard, summarize)
 
-          switch (attempt.outcome) {
-            case 'skipped-empty-body':
+            if (attempt.outcome === 'skipped-empty-body') {
               summariesSkippedEmptyBody++
               return
-            case 'generated':
+            }
+            if (attempt.outcome === 'generated') {
               await prisma.newsSummary.createMany({
                 data: SUMMARY_VARIANTS.map(v => ({
                   candidateId: candidate.id,
@@ -194,21 +223,19 @@ export async function runCollection(now: Date): Promise<{
               })
               summariesGenerated++
               return
-            case 'failed':
-              summariesFailed++
-              await prisma.newsCandidate.update({
-                where: { id: candidate.id },
-                data: { summaryError: attempt.error },
-              })
-              return
-            case 'skipped-quota-exhausted':
-              summariesFailed++
-              await prisma.newsCandidate.update({
-                where: { id: candidate.id },
-                data: { summaryError: '할당량 소진 이후 요약을 건너뜀' },
-              })
-              return
-          }
+            }
+            // 'failed' | 'skipped-quota-exhausted'
+            const errorMessage =
+              attempt.outcome === 'failed' ? attempt.error : '할당량 소진 이후 요약을 건너뜀'
+            await prisma.newsCandidate.update({
+              where: { id: candidate.id },
+              data: { summaryError: errorMessage },
+            })
+            summariesFailed++
+          })
+          // isolate가 예외를 삼켰다면(예: newsCandidate.create 자체가 실패) worker 내부의
+          // summariesFailed 증가는 일어나지 않았다 — 여기서 집계한다.
+          if (!handled) summariesFailed++
         }),
       )
     }),

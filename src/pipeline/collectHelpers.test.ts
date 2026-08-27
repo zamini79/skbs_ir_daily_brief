@@ -8,6 +8,8 @@ import {
   createQuotaGuard,
   attemptSummary,
   computeRunStatus,
+  isolate,
+  needsPendingRevert,
 } from './collectHelpers'
 
 const LONG_BODY = 'x'.repeat(30)
@@ -211,5 +213,73 @@ describe('computeRunStatus', () => {
 
   it('요약 실패가 없으면 READY이다', () => {
     expect(computeRunStatus(0)).toBe('READY')
+  })
+})
+
+describe('isolate', () => {
+  it('worker가 성공하면 { ok: true }를 준다', async () => {
+    const r = await isolate(async () => {})
+    expect(r).toEqual({ ok: true })
+  })
+
+  it('worker가 던지면 예외를 밖으로 새어나가게 하지 않고 { ok: false }를 준다', async () => {
+    const r = await isolate(async () => {
+      throw new Error('DB 쓰기 실패')
+    })
+    expect(r).toEqual({ ok: false })
+  })
+
+  it('Promise.all로 묶인 여러 isolate 중 하나가 실패해도 나머지는 전부 완료된다', async () => {
+    const completed: number[] = []
+    const results = await Promise.all(
+      [1, 2, 3, 4, 5].map(n =>
+        isolate(async () => {
+          if (n === 3) throw new Error('후보 3만 실패')
+          completed.push(n)
+        }),
+      ),
+    )
+    expect(completed.sort()).toEqual([1, 2, 4, 5])
+    expect(results.map(r => r.ok)).toEqual([true, true, false, true, true])
+  })
+
+  it('순차 for 루프에서도 중간 실패가 나머지 반복을 막지 않는다 — 루프가 끝까지 간다', async () => {
+    const processed: number[] = []
+    let failedCount = 0
+    for (const n of [1, 2, 3, 4, 5]) {
+      const { ok } = await isolate(async () => {
+        if (n === 3) throw new Error('시세 쓰기 실패')
+        processed.push(n)
+      })
+      if (!ok) failedCount++
+    }
+    expect(processed).toEqual([1, 2, 4, 5])
+    expect(failedCount).toBe(1)
+  })
+})
+
+describe('needsPendingRevert', () => {
+  it('SELECTED인데 chosenCandidateId가 null이면 되돌려야 한다', () => {
+    expect(needsPendingRevert({ decision: 'SELECTED', chosenCandidateId: null, chosenSummaryId: 's1' })).toBe(true)
+  })
+
+  it('SELECTED인데 chosenSummaryId가 null이면 되돌려야 한다', () => {
+    expect(needsPendingRevert({ decision: 'SELECTED', chosenCandidateId: 'c1', chosenSummaryId: null })).toBe(true)
+  })
+
+  it('SELECTED인데 둘 다 null이면 되돌려야 한다', () => {
+    expect(needsPendingRevert({ decision: 'SELECTED', chosenCandidateId: null, chosenSummaryId: null })).toBe(true)
+  })
+
+  it('SELECTED이고 참조가 온전하면 되돌리지 않는다', () => {
+    expect(needsPendingRevert({ decision: 'SELECTED', chosenCandidateId: 'c1', chosenSummaryId: 's1' })).toBe(false)
+  })
+
+  it('PENDING은 참조가 null이어도 정상 상태다 — 되돌리지 않는다', () => {
+    expect(needsPendingRevert({ decision: 'PENDING', chosenCandidateId: null, chosenSummaryId: null })).toBe(false)
+  })
+
+  it('OMITTED는 애초에 후보를 참조하지 않는 정상 상태다 — 되돌리지 않는다', () => {
+    expect(needsPendingRevert({ decision: 'OMITTED', chosenCandidateId: null, chosenSummaryId: null })).toBe(false)
   })
 })

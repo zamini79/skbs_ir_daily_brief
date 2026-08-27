@@ -31,3 +31,24 @@ describe('INSTRUMENTS', () => {
     }
   })
 })
+
+describe('newsAliases 일관성', () => {
+  // 지수는 종종 좁은 자기 이름으로는 기사가 거의 안 잡혀 넓은 시황 검색어로 기사 풀을
+  // 넓힌 뒤 별칭으로 좁힌다. 실측(2026-08-27)으로 확인됨: '뉴욕증시' 검색 결과 100건을
+  // S&P500 별칭으로 필터링하면 실제로 관련 기사가 남는다 — 별칭이 검색어 자체를
+  // 포함하지 않아도 정상 동작이다. Task 15 fix round 2 리뷰에서 확인된 유일한 예외.
+  const DOCUMENTED_BROAD_QUERY_EXCEPTIONS = new Set(['S&P500'])
+
+  it('모든 종목의 newsAliases는 비어있지 않다', () => {
+    for (const i of INSTRUMENTS) {
+      expect(i.newsAliases?.trim().length ?? 0, i.name).toBeGreaterThan(0)
+    }
+  })
+
+  it('newsAliases는 newsQuery를 포함한다(문서화된 예외 제외) — Vaxcyte류 오타 재발을 막는다', () => {
+    for (const i of INSTRUMENTS) {
+      if (DOCUMENTED_BROAD_QUERY_EXCEPTIONS.has(i.name)) continue
+      expect(i.newsAliases, i.name).toContain(i.newsQuery)
+    }
+  })
+})
