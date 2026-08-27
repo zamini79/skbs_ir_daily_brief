@@ -1,0 +1,130 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Instrument {
+  id            String  @id @default(cuid())
+  category      String  // 국내사 | 해외사 | Index
+  displayOrder  Int
+  name          String
+  currency      String
+  quoteSource   String  // naver-stock | naver-index | twelvedata | marketstack | manual
+  quoteSymbol   String
+  newsQuery     String
+  isIndex       Boolean @default(false)
+
+  /// 해외사 시총 계산용. 국내사는 네이버가 시총을 직접 주므로 null.
+  sharesOutstanding      BigInt?
+  /// 런던 펜스 호가 보정. GSK=100, 그 외=1.
+  priceDivisorForMarketCap Int  @default(1)
+
+  quotes     QuoteSnapshot[]
+  candidates NewsCandidate[]
+  selections Selection[]
+  yearOpens  YearOpenPrice[]
+
+  @@unique([displayOrder])
+}
+
+model YearOpenPrice {
+  id           String     @id @default(cuid())
+  instrumentId String
+  year         Int
+  price        Decimal
+  instrument   Instrument @relation(fields: [instrumentId], references: [id])
+
+  @@unique([instrumentId, year])
+}
+
+model BriefRun {
+  id         String   @id @default(cuid())
+  /// 시세 기준일(직전 영업일). 뉴스 기준일과 다를 수 있다.
+  tradeDate  String
+  /// 실행 당일 KST 날짜. 검수 화면 URL 키.
+  runDate    String
+  status     String   // COLLECTING | READY | FAILED
+  startedAt  DateTime @default(now())
+  finishedAt DateTime?
+
+  quotes     QuoteSnapshot[]
+  candidates NewsCandidate[]
+  selections Selection[]
+
+  @@unique([runDate])
+}
+
+model QuoteSnapshot {
+  id           String   @id @default(cuid())
+  runId        String
+  instrumentId String
+  close        Decimal?
+  prevClose    Decimal?
+  changePct    Float?
+  ytdPct       Float?
+  marketCapKrwTrillion Decimal?
+  fxRate       Float?
+  /// 소스가 알려준 시세 기준일. 소스마다 다르므로 반드시 저장한다.
+  asOf         String?
+  sourceName   String
+  errorMessage String?  @db.Text
+  fetchedAt    DateTime @default(now())
+
+  run        BriefRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  instrument Instrument @relation(fields: [instrumentId], references: [id])
+
+  @@unique([runId, instrumentId])
+}
+
+model NewsCandidate {
+  id           String   @id @default(cuid())
+  runId        String
+  instrumentId String
+  rank         Int      // 1..3
+  title        String   @db.Text
+  url          String   @db.Text
+  publisher    String
+  publishedAt  DateTime
+  /// 같은 사건을 다룬 매체 수. 이 값이 '빈도'다.
+  clusterSize  Int
+
+  run        BriefRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  instrument Instrument    @relation(fields: [instrumentId], references: [id])
+  summaries  NewsSummary[]
+
+  @@unique([runId, instrumentId, rank])
+}
+
+model NewsSummary {
+  id          String @id @default(cuid())
+  candidateId String
+  variant     Int    // 1=수치 2=배경 3=시사점
+  text        String @db.Text
+
+  candidate NewsCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([candidateId, variant])
+}
+
+model Selection {
+  id           String   @id @default(cuid())
+  runId        String
+  instrumentId String
+  decision     String   @default("PENDING") // PENDING | SELECTED | OMITTED
+  chosenCandidateId String?
+  chosenSummaryId   String?
+  editedText   String?  @db.Text
+  /// 코스피200 헬스케어 전용 수기 입력.
+  manualClose     Decimal?
+  manualPrevClose Decimal?
+  updatedAt    DateTime @updatedAt
+
+  run        BriefRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  instrument Instrument @relation(fields: [instrumentId], references: [id])
+
+  @@unique([runId, instrumentId])
+}
