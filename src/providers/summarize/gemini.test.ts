@@ -202,4 +202,86 @@ describe('모델 폴백 체인', () => {
     expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  function unavailableResponse() {
+    return new Response(JSON.stringify({ error: { status: 'UNAVAILABLE' } }), { status: 503 })
+  }
+  function serverErrorResponse() {
+    return new Response(JSON.stringify({ error: { message: 'internal' } }), { status: 500 })
+  }
+
+  it('첫 모델이 503이면 다음 모델로 넘어가 정상 응답을 돌려준다', async () => {
+    const calledUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calledUrls.push(url)
+      return url.includes(MODEL_CHAIN[0]) ? unavailableResponse() : okResponse()
+    }))
+
+    const r = await summarize('제목', '본문')
+
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임' })
+    expect(calledUrls).toHaveLength(2)
+    expect(calledUrls[1]).toContain(MODEL_CHAIN[1])
+  })
+
+  it('첫 모델이 500이면 다음 모델로 넘어간다', async () => {
+    const calledUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calledUrls.push(url)
+      return url.includes(MODEL_CHAIN[0]) ? serverErrorResponse() : okResponse()
+    }))
+
+    const r = await summarize('제목', '본문')
+
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임' })
+    expect(calledUrls).toHaveLength(2)
+  })
+
+  it('503을 반환한 모델은 소진 기록되지 않는다 — 다음 호출에서 체인 맨 앞부터 다시 시도한다', async () => {
+    const fetchMock = vi.fn(async (url: string) => (
+      url.includes(MODEL_CHAIN[0]) ? unavailableResponse() : okResponse()
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await summarize('제목1', '본문1')
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(false)
+
+    fetchMock.mockClear()
+    await summarize('제목2', '본문2')
+
+    // 두 번째 호출도 첫 모델부터 다시 시도했다 — 소진 기록이 없으므로 건너뛰지 않는다.
+    expect(fetchMock.mock.calls[0][0]).toContain(MODEL_CHAIN[0])
+  })
+
+  it('세이프티 차단은 여전히 체인을 넘기지 않고 자기 메시지를 낸다', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      promptFeedback: { blockReason: 'SAFETY' },
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(summarize('제목', '본문')).rejects.toThrow(/SAFETY/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('429와 503이 섞여 전부 실패하면 에러 메시지가 두 범주를 구분한다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      url.includes(MODEL_CHAIN[0]) ? quotaResponse() : unavailableResponse()
+    )))
+
+    let error: unknown
+    try {
+      await summarize('제목', '본문')
+    } catch (e) {
+      error = e
+    }
+
+    expect(error).toBeInstanceOf(Error)
+    const message = (error as Error).message
+    expect(message).toContain('쿼터 소진')
+    expect(message).toContain(MODEL_CHAIN[0])
+    expect(message).toContain('일시적 이용 불가')
+    for (const model of MODEL_CHAIN.slice(1)) {
+      expect(message).toContain(model)
+    }
+  })
 })
