@@ -26,7 +26,8 @@ describe('marketCapKrwTrillion', () => {
     const v = marketCapKrwTrillion({
       close: 1_585_000, shares: 46_290_000, fxToKrw: 1, priceDivisor: 1,
     })
-    expect(v).toBeCloseTo(73.37, 1)
+    expect(v).not.toBeNull()
+    expect(v!).toBeCloseTo(73.37, 1)
   })
 
   it('런던 펜스 종목은 100으로 나눈다', () => {
@@ -34,8 +35,9 @@ describe('marketCapKrwTrillion', () => {
     const v = marketCapKrwTrillion({
       close: 1890.5, shares: 4_000_000_000, fxToKrw: 1885.7, priceDivisor: 100,
     })
-    expect(v).toBeGreaterThan(130)
-    expect(v).toBeLessThan(155)
+    expect(v).not.toBeNull()
+    expect(v!).toBeGreaterThan(130)
+    expect(v!).toBeLessThan(155)
   })
 
   it('보정을 빠뜨리면 100배가 된다는 것을 고정한다', () => {
@@ -45,7 +47,9 @@ describe('marketCapKrwTrillion', () => {
     const right = marketCapKrwTrillion({
       close: 1890.5, shares: 4_000_000_000, fxToKrw: 1885.7, priceDivisor: 100,
     })
-    expect(wrong / right).toBeCloseTo(100, 6)
+    expect(wrong).not.toBeNull()
+    expect(right).not.toBeNull()
+    expect(wrong! / right!).toBeCloseTo(100, 6)
   })
 
   it('주식수가 없으면 null 을 준다', () => {
