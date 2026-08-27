@@ -456,7 +456,7 @@ describe('resolveDisplayQuote', () => {
 })
 
 describe('marketCapBlankReason', () => {
-  const foreign = { isIndex: false, marketCapKrwTrillion: null, fxRate: null, close: 28.3 }
+  const foreign = { isIndex: false, currency: 'USD', marketCapKrwTrillion: null, fxRate: null, close: 28.3 }
 
   it('해외사 시총이 비고 환율도 없으면 환율 미확보로 단정한다', () => {
     expect(marketCapBlankReason(foreign)).toBe('FX_UNAVAILABLE')
@@ -466,13 +466,24 @@ describe('marketCapBlankReason', () => {
   it('국내 종목은 환율이 통째로 없어도 이유를 붙이지 않는다', () => {
     // resolveMarketCap 이 네이버 시총을 fxRate 검사보다 먼저 반환하므로 값이 차 있다.
     expect(marketCapBlankReason({
-      isIndex: false, marketCapKrwTrillion: 73.37, fxRate: null, close: 1_585_000,
+      isIndex: false, currency: 'KRW', marketCapKrwTrillion: 73.37, fxRate: null, close: 1_585_000,
+    })).toBeNull()
+  })
+
+  // 위 테스트는 네이버가 시총을 준 경우만 본다 — "값이 있으니 설명할 게 없다"에
+  // 걸려서, 통화를 보지 않는 구현도 그대로 통과한다. 진짜 위험한 조합은 이쪽이다:
+  // 네이버가 marketValue 를 빠뜨려(naver.ts:45,52) 시총이 null 인 국내 행 +
+  // 환율 조회 전체 실패로 fxRate 가 null. 통화를 보지 않으면 여기서 국내 행에
+  // 「환율 미확보」가 뜬다 — KRW 는 환율이 필요 없는 통화다.
+  it('국내 종목은 시총이 비고 환율도 없는 조합에서도 환율 탓을 하지 않는다', () => {
+    expect(marketCapBlankReason({
+      isIndex: false, currency: 'KRW', marketCapKrwTrillion: null, fxRate: null, close: 1_585_000,
     })).toBeNull()
   })
 
   it('지수는 시총 개념이 없으므로 이유를 붙이지 않는다', () => {
     expect(marketCapBlankReason({
-      isIndex: true, marketCapKrwTrillion: null, fxRate: null, close: 7675.7,
+      isIndex: true, currency: 'USD', marketCapKrwTrillion: null, fxRate: null, close: 7675.7,
     })).toBeNull()
   })
 

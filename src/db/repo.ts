@@ -252,17 +252,26 @@ export function resolveDisplayQuote(args: {
  * 환율은 실행별·통화별 사실이지만 "이 행의 시총이 왜 비었나"는 행별 질문이라
  * 행에 이미 있는 값으로 답하는 게 맞다.
  *
- * 국내 행으로 번지지 않는 이유: resolveMarketCap 은 quoteMarketCap(네이버가 직접 주는
- * 시총)을 fxRate 검사보다 **먼저** 반환한다. 그래서 환율이 통째로 실패해 KRW 조차
- * 없을 때도 국내 행은 시총이 채워지고 2번 조건에서 걸러진다.
+ * **KRW 행은 통화만 보고 먼저 제외한다.** 국내 종목의 시총은 네이버가 직접 주므로
+ * 보통은 값이 차 있어 2번 조건에서 걸러지지만, 그 논거는 quoteMarketCap 이 있을
+ * 때만 성립한다 — 네이버 `/integration` 응답에 `marketValue` 가 빠지거나 파싱이
+ * NaN 이면(naver.ts:45,52) resolveMarketCap 이 fxRate 검사까지 내려간다. 거기에
+ * 환율 조회가 통째로 실패해 fx 가 빈 객체면 resolveFxRate('KRW', {}) 가 null 이라
+ * 국내 행에 「환율 미확보」가 뜬다. KRW 는 환율이 필요 없는 통화다 — 화면이
+ * 존재하지 않는 원인을 지어내게 된다.
+ * (missingFxCurrencies 가 KRW 를 절대 담지 않는 것과 같은 이유다 —
+ * collectHelpers.ts 의 그 독스트링을 그대로 참조한다.)
  */
 export function marketCapBlankReason(row: {
   isIndex: boolean
+  /** Instrument.currency. KRW 면 환율을 쓰지 않으므로 환율 탓을 할 수 없다. */
+  currency: string
   marketCapKrwTrillion: number | null
   fxRate: number | null
   close: number | null
 }): 'FX_UNAVAILABLE' | null {
   if (row.isIndex) return null // 지수는 시가총액 개념이 없다. 공란이 정상이다.
+  if (row.currency === 'KRW') return null // 환율을 쓰지 않는 행. 환율 탓이라 말할 수 없다.
   if (row.marketCapKrwTrillion !== null) return null // 값이 있으니 설명할 게 없다.
   if (row.close === null) return null // 시세 자체가 실패한 행이다. 환율 탓이라 말할 수 없다.
   if (row.fxRate === null) return 'FX_UNAVAILABLE'
@@ -471,6 +480,7 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
       newsFetchError: fetched?.error ?? null,
       marketCapBlankReason: marketCapBlankReason({
         isIndex: inst.isIndex,
+        currency: inst.currency,
         marketCapKrwTrillion: toNum(q?.marketCapKrwTrillion),
         fxRate: q?.fxRate ?? null,
         close: quoteClose,
