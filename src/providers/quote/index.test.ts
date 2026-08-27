@@ -142,6 +142,53 @@ describe('fetchAllQuotes', () => {
     expect((r.get('d') as any).close).toBeCloseTo(1890.5, 4)
   })
 
+  it('일시적 실패(522)는 같은 소스를 한 번 더 불러 하루치 공란을 막는다', async () => {
+    // 실측: twelvedata 522 로 미국 5행이 통째로 비었고, 몇 분 뒤 손으로 부르니 정상이었다.
+    // 수집은 07:40 한 번뿐이라 재시도가 없으면 그 공란이 하루 종일 남는다.
+    vi.mocked(fetchTwelveDataQuotes).mockRejectedValueOnce(new Error('twelvedata HTTP 522'))
+    const r = await fetchAllQuotes(
+      [{ id: 'b', quoteSource: 'twelvedata', quoteSymbol: 'PFE' }],
+      { sleep: async () => {} },
+    )
+    expect((r.get('b') as any).close).toBeCloseTo(28.3, 4)
+    expect(fetchTwelveDataQuotes).toHaveBeenCalledTimes(2)
+  })
+
+  it('marketstack 429 도 같은 규칙으로 한 번 더 부른다', async () => {
+    vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(new Error('marketstack HTTP 429'))
+    const r = await fetchAllQuotes(
+      [{ id: 'c', quoteSource: 'marketstack', quoteSymbol: 'GSK.L' }],
+      { sleep: async () => {} },
+    )
+    expect((r.get('c') as any).close).toBeCloseTo(1890.5, 4)
+    expect(fetchMarketstackQuotes).toHaveBeenCalledTimes(2)
+  })
+
+  it('재시도해도 소용없는 실패(401)는 한 번만 부르고 사유를 남긴다', async () => {
+    vi.mocked(fetchNaverStock).mockRejectedValueOnce(new Error('[207940] HTTP 401'))
+    const r = await fetchAllQuotes(
+      [{ id: 'a', quoteSource: 'naver-stock', quoteSymbol: '207940' }],
+      { sleep: async () => {} },
+    )
+    expect(r.get('a')).toBeInstanceOf(Error)
+    expect((r.get('a') as Error).message).toContain('401')
+    expect(fetchNaverStock).toHaveBeenCalledTimes(1)
+  })
+
+  it('끝내 실패하면 사유가 그대로 남는다 — 재시도가 실패를 지우지 않는다', async () => {
+    vi.mocked(fetchTwelveDataQuotes)
+      .mockRejectedValueOnce(new Error('twelvedata HTTP 522'))
+      .mockRejectedValueOnce(new Error('twelvedata HTTP 522'))
+      .mockRejectedValueOnce(new Error('twelvedata HTTP 522'))
+    const r = await fetchAllQuotes(
+      [{ id: 'b', quoteSource: 'twelvedata', quoteSymbol: 'PFE' }],
+      { sleep: async () => {} },
+    )
+    expect(r.get('b')).toBeInstanceOf(Error)
+    expect((r.get('b') as Error).message).toContain('522')
+    expect(fetchTwelveDataQuotes).toHaveBeenCalledTimes(3)
+  })
+
   it('marketstack 가 전체 실패하면 해당 배치의 모든 종목이 Error 이고 다른 그룹은 영향받지 않는다', async () => {
     vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(new Error('ms down'))
     const r = await fetchAllQuotes([

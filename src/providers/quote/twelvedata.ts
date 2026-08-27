@@ -90,9 +90,12 @@ export async function fetchTwelveDataQuotes(symbols: string[]): Promise<TwelveDa
   // 그래서 루프 전에 감지해 배치 전체의 사유로 승격시킨다.
   const flat = json as TdQuote
   if (flat.status === 'error') {
-    const reason = flat.message ?? `twelvedata 오류 응답${flat.code ? ` (code ${flat.code})` : ''}`
-    for (const s of symbols) failures.set(s, reason)
-    return { quotes, failures }
+    // 심볼별 실패가 아니라 **배치 전체의 실패**다. marketstack 의 assertOk 와 같은
+    // 상황이므로 같은 방식으로 던진다 — 호출부(index.ts)의 catch 가 이 메시지를
+    // 그대로 배치 전 종목의 사유로 싣고, 재시도 판단(retry.ts)도 code 를 볼 수 있다.
+    // 던지지 않고 failures 로만 돌려주면 한도 초과가 재시도 대상에서 빠진다.
+    const code = flat.code ? ` (code ${flat.code})` : ''
+    throw new Error(`twelvedata 오류 응답${code}: ${flat.message ?? '사유 없음'}`)
   }
 
   for (const s of symbols) {

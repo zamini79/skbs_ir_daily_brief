@@ -64,20 +64,17 @@ describe('fetchTwelveDataQuotes', () => {
     expect(failures.get('MRK')).not.toBe(failures.get('PFE'))
   })
 
-  it('한도 초과(평면 오류 객체)를 배치 전 심볼의 사유로 승격시킨다', async () => {
+  it('한도 초과(평면 오류 객체)는 배치 전체의 실패로 던진다 — 심볼 루프에 흘리지 않는다', async () => {
     // 실측 형태: HTTP 200 + 심볼별 맵이 아니라 평면 객체.
     // 심볼 루프에 그대로 들어가면 5행 전부 "응답 없음"이 되어 원인이 사라진다.
+    // 던져야 (a) 호출부가 사유를 5종목에 그대로 싣고 (b) 재시도 판단이 429 를 본다.
     stub({
       code: 429,
       status: 'error',
       message: 'You have run out of API credits for the current minute.',
     })
-    const { quotes, failures } = await fetchTwelveDataQuotes(['PFE', 'MRK', 'NVAX', 'PCVX', 'MRNA'])
-    expect(quotes.size).toBe(0)
-    expect(failures.size).toBe(5)
-    for (const s of ['PFE', 'MRK', 'NVAX', 'PCVX', 'MRNA']) {
-      expect(failures.get(s)).toContain('API credits')
-    }
+    await expect(fetchTwelveDataQuotes(['PFE', 'MRK', 'NVAX', 'PCVX', 'MRNA']))
+      .rejects.toThrow(/429[\s\S]*API credits/)
   })
 
   it('빈 문자열 close 를 0 으로 통과시키지 않고 사유를 남긴다', async () => {
