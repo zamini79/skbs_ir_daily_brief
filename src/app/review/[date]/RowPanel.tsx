@@ -61,10 +61,24 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
 
   return (
     <div className="space-y-4 p-3">
+      {/*
+        * quoteSource === 'manual' 인 종목의 수기 입력 칸. 지금은 해당 종목이 없어
+        * 렌더되지 않지만(코스피200 헬스케어가 krx-index 로 옮겨갔다), 스펙 §11 이
+        * KRX 이용약관에 걸리면 그 1행을 수기 입력으로 되돌리라고 안내하므로 경로는
+        * 남겨 둔다(providers/quote/index.ts 의 manual 주석과 같은 이유다).
+        *
+        * 문구는 **왜** 자동 소스가 없는지 열거하지 않는다. 예전 문구는 "Naver 코드
+        * 없음, KRX 접근 차단, 공공데이터 API 지원 안 함"이라고 단언했는데, 막혔던
+        * 것은 KRX 웹사이트 내부 엔드포인트였고 KRX Open API 는 열려 있어서 지금
+        * 실제로 그것으로 수집한다 — 화면이 사실이 아닌 것을 단언하고 있었다.
+        * quoteSource 가 manual 이라는 사실 자체가 이미 조건을 다 말하므로, 어떤
+        * 소스가 왜 막혔는지는 코드가 주장할 일이 아니다(그 경위는 스펙 §3.3 의
+        * "폐기된 결론" 표에 기록으로 남아 있다).
+        */}
       {isManualSource && (
         <div className="flex flex-wrap items-center gap-3 rounded border border-blue-200 bg-blue-50 p-2 text-sm">
           <span className="font-medium text-blue-800">
-            수기 입력 (자동 소스 없음 — Naver 코드 없음, KRX 접근 차단, 공공데이터 API 지원 안 함)
+            수기 입력 (이 종목은 자동 시세 소스가 지정돼 있지 않습니다)
           </span>
           <label className="flex items-center gap-1">
             종가
