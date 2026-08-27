@@ -393,8 +393,18 @@ Index 행도 개별 종목과 동일하게 처리한다. 샘플에서 Nasdaq 칸
 | LLM | Gemini Flash (무료) | 유지 또는 온프레미스 모델로 교체 |
 | 시세(코스피200 헬스케어) | KRX Open API (무료, `KRX_AUTH_KEY`) | 유지. **이용약관 확인 필요** — 아래 참조 |
 
-이관 시 변경 지점은 `DATABASE_URL`, Prisma `provider`, 배포 스크립트, cron 등록 4곳이다.
-애플리케이션 코드는 변경하지 않는다.
+**애플리케이션 코드는 변경하지 않는다.** 그 목표는 유효하고, 실제로 그렇게 됐다
+(Provider 격리와 HTTP 트리거를 택한 이유가 이것이다).
+
+다만 초안이 적었던 "변경 지점 4곳(`DATABASE_URL`·Prisma `provider`·배포 스크립트·
+cron 등록)"은 **DB 쪽이 실제보다 가볍게 적혀 있다.** 구현 후 확인한 사실:
+`prisma/migrations/migration_lock.toml` 도 함께 바꿔야 하고, 기존 마이그레이션 8개는
+전부 Postgres 방언(`"큰따옴표 식별자"`, `TIMESTAMP(3)`, `DOUBLE PRECISION`,
+`"Table_pkey"`)이라 MariaDB 에서 실행되지 않아 **베이스라인 재작성이 필요하다.**
+절차는 `docs/운영.md` §3.2 에 있다 — 이관을 계획할 때는 이 절만 믿을 것.
+
+스키마 자체의 이식성은 문제가 없다(enum 미사용, `cuid()` 앱 생성, `@db.Text` 양쪽 호환,
+Postgres 전용 구문·확장·`::` 캐스팅·`ILIKE`·배열 타입 없음).
 
 **방화벽 아웃바운드 허용 대상**(전부 HTTPS/443). 전체 목록과 용도는 `docs/운영.md` §3.5에 있다.
 이번에 `data-dbg.krx.co.kr`(KRX Open API — 코스피200 헬스케어 시세·연초 기준가)가 추가됐다.
