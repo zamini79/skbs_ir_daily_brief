@@ -31,7 +31,8 @@ export async function fetchTwelveDataQuotes(symbols: string[]): Promise<Map<stri
   const out = new Map<string, RawQuote>()
   if (symbols.length === 0) return out
 
-  const key = process.env.TWELVEDATA_API_KEY ?? ''
+  const key = process.env.TWELVEDATA_API_KEY
+  if (!key) throw new Error('TWELVEDATA_API_KEY 없음')
 
   const url = `https://api.twelvedata.com/quote?symbol=${symbols.join(',')}&apikey=${key}`
   const res = await fetch(url)

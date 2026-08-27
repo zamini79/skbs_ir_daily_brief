@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { fetchTwelveDataQuotes } from './twelvedata'
 
+beforeEach(() => { process.env.TWELVEDATA_API_KEY = 'test-key' })
 afterEach(() => vi.unstubAllGlobals())
 
 function stub(payload: unknown) {
@@ -45,5 +46,23 @@ describe('fetchTwelveDataQuotes', () => {
     const m = await fetchTwelveDataQuotes([])
     expect(m.size).toBe(0)
     expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('API 키가 없으면 심볼이 있을 때 에러를 던진다', async () => {
+    delete process.env.TWELVEDATA_API_KEY
+    const stub = vi.fn()
+    vi.stubGlobal('fetch', stub)
+    await expect(fetchTwelveDataQuotes(['PFE'])).rejects.toThrow(/TWELVEDATA_API_KEY/)
+    expect(stub).not.toHaveBeenCalled()
+    // restore for later tests
+    process.env.TWELVEDATA_API_KEY = 'test-key'
+  })
+
+  it('API 키가 없어도 빈 목록이면 에러를 던지지 않는다', async () => {
+    delete process.env.TWELVEDATA_API_KEY
+    const m = await fetchTwelveDataQuotes([])
+    expect(m.size).toBe(0)
+    // restore for later tests
+    process.env.TWELVEDATA_API_KEY = 'test-key'
   })
 })
