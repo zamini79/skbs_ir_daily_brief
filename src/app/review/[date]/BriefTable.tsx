@@ -39,6 +39,24 @@ function pct(v: number | null): string {
 }
 
 /**
+ * 사용자 요청: 숫자 칸은 오른쪽 정렬, 글자 칸(구분/기업)은 가운데 정렬, 뉴스는 왼쪽 정렬.
+ * 헤더와 본문이 각자 정렬 클래스를 따로 들고 있으면 나중에 한쪽만 고치다 어긋나기
+ * 쉬우므로, 칼럼 순서에 맞춘 배열 하나를 두고 헤더/본문 모두 이 배열로 렌더한다.
+ * 숫자 칸에는 tabular-nums도 같이 건다 — 오른쪽 정렬의 목적이 자릿수를 세로로
+ * 맞추는 것인데 비례폭 숫자면 정렬해도 소수점이 안 맞는다.
+ */
+const COL_ALIGN = [
+  'text-center', // 구분
+  'text-center', // 기업
+  'text-right tabular-nums', // 주가
+  'text-right tabular-nums', // 전일대비
+  'text-right tabular-nums', // %
+  'text-right tabular-nums', // 연초대비
+  'text-right tabular-nums', // 시가총액(조원)
+  'text-left', // 뉴스
+] as const
+
+/**
  * 뉴스 칼럼 렌더러. newsColumnContent(순수 함수, repo.ts)가 정한 kind에 따라
  * 완전히 다른 모양을 그린다 — NO_NEWS('-')와 NEWS_FAILED(라벨), OMITTED('-'지만
  * 표시 붙음)와 NO_NEWS('-'만)가 같은 문자열로 수렴하면 안 된다는 것이 이번
@@ -135,15 +153,15 @@ export function BriefTable({ runDate, rows }: { runDate: string; rows: ClientRow
         <col />
       </colgroup>
       <thead>
-        <tr className="border-b border-gray-300 text-left text-xs text-gray-500">
-          <th className="px-2 py-1">구분</th>
-          <th className="px-2 py-1">기업</th>
-          <th className="px-2 py-1">주가</th>
-          <th className="px-2 py-1">전일대비</th>
-          <th className="px-2 py-1">%</th>
-          <th className="px-2 py-1">연초대비</th>
-          <th className="px-2 py-1">시가총액(조원)</th>
-          <th className="px-2 py-1">뉴스</th>
+        <tr className="border-b border-gray-300 text-xs text-gray-500">
+          <th className={`px-2 py-1 ${COL_ALIGN[0]}`}>구분</th>
+          <th className={`px-2 py-1 ${COL_ALIGN[1]}`}>기업</th>
+          <th className={`px-2 py-1 ${COL_ALIGN[2]}`}>주가</th>
+          <th className={`px-2 py-1 ${COL_ALIGN[3]}`}>전일대비</th>
+          <th className={`px-2 py-1 ${COL_ALIGN[4]}`}>%</th>
+          <th className={`px-2 py-1 ${COL_ALIGN[5]}`}>연초대비</th>
+          <th className={`px-2 py-1 ${COL_ALIGN[6]}`}>시가총액(조원)</th>
+          <th className={`px-2 py-1 ${COL_ALIGN[7]}`}>뉴스</th>
         </tr>
       </thead>
       <tbody>
@@ -162,9 +180,9 @@ export function BriefTable({ runDate, rows }: { runDate: string; rows: ClientRow
                     onClick={() => setOpenId(isOpen ? null : row.instrument.id)}
                     className={`cursor-pointer border-b border-gray-200 align-top ${ROW_BG[row.state]}`}
                   >
-                    <td className="px-2 py-1.5">{row.instrument.category}</td>
-                    <td className="px-2 py-1.5 font-medium">{row.instrument.name}</td>
-                    <td className="px-2 py-1.5">
+                    <td className={`px-2 py-1.5 ${COL_ALIGN[0]}`}>{row.instrument.category}</td>
+                    <td className={`px-2 py-1.5 font-medium ${COL_ALIGN[1]}`}>{row.instrument.name}</td>
+                    <td className={`px-2 py-1.5 ${COL_ALIGN[2]}`}>
                       {row.display.close !== null ? (
                         <>
                           {formatPrice(row.display.close, row.instrument.currency, row.instrument.isIndex)}
@@ -175,19 +193,23 @@ export function BriefTable({ runDate, rows }: { runDate: string; rows: ClientRow
                       ) : (
                         '-'
                       )}
+                      {/* text-align은 상속되므로 td의 text-right를 따로 반복하지 않아도
+                          이 보조 줄도 같이 오른쪽으로 맞춰진다. */}
                       {row.quote?.asOf && (
                         <div className="text-[10px] text-gray-400">기준 {row.quote.asOf}</div>
                       )}
                     </td>
                     {/* formatPrevDiff가 close/prevClose null 여부와 보합(0)을 각각 다른
                        문자열로 처리하므로 여기서 다시 분기하지 않는다. */}
-                    <td className="px-2 py-1.5">{formatPrevDiff(row.display.close, row.display.prevClose)}</td>
-                    <td className="px-2 py-1.5">{pct(row.display.changePct)}</td>
-                    <td className="px-2 py-1.5">{pct(row.quote?.ytdPct ?? null)}</td>
+                    <td className={`px-2 py-1.5 ${COL_ALIGN[3]}`}>
+                      {formatPrevDiff(row.display.close, row.display.prevClose)}
+                    </td>
+                    <td className={`px-2 py-1.5 ${COL_ALIGN[4]}`}>{pct(row.display.changePct)}</td>
+                    <td className={`px-2 py-1.5 ${COL_ALIGN[5]}`}>{pct(row.quote?.ytdPct ?? null)}</td>
                     {/* 시총 공란의 이유를 아는 경우에만 표시한다. 환율 미확보는 해외사에만
                         해당하고(국내는 네이버가 시총을 직접 준다), 지수와 "이유를 모르는
                         공란"에는 아무 표시도 하지 않는다 — marketCapBlankReason 참조. */}
-                    <td className="px-2 py-1.5">
+                    <td className={`px-2 py-1.5 ${COL_ALIGN[6]}`}>
                       {row.marketCapBlankReason === 'FX_UNAVAILABLE' ? (
                         <span
                           className="text-orange-700"
@@ -199,7 +221,7 @@ export function BriefTable({ runDate, rows }: { runDate: string; rows: ClientRow
                         formatMarketCap(row.quote?.marketCapKrwTrillion ?? null)
                       )}
                     </td>
-                    <td className="px-2 py-1.5">
+                    <td className={`px-2 py-1.5 ${COL_ALIGN[7]}`}>
                       <NewsCell row={row} />
                     </td>
                   </tr>
