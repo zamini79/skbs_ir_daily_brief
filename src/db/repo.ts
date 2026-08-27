@@ -132,7 +132,13 @@ function toNum(v: Prisma.Decimal | number | null | undefined): number | null {
   return Number(v)
 }
 
-export type ClientSummary = { id: string; variant: number; text: string }
+export type ClientSummary = {
+  id: string
+  variant: number
+  text: string
+  /** 모델이 만든 게 아니라 본문/스니펫에서 기계적으로 발췌한 대체 텍스트면 true. */
+  isFallback: boolean
+}
 
 export type ClientCandidate = {
   id: string
@@ -263,7 +269,7 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
         clusterSize: c.clusterSize,
         sameEventAsRank: c.sameEventAsRank,
         summaryError: c.summaryError,
-        summaries: c.summaries.map(s => ({ id: s.id, variant: s.variant, text: s.text })),
+        summaries: c.summaries.map(s => ({ id: s.id, variant: s.variant, text: s.text, isFallback: s.isFallback })),
       })),
       selection: {
         decision: sel?.decision ?? 'PENDING',

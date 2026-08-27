@@ -134,7 +134,10 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
                   {c.publisher} · {new Date(c.publishedAt).toLocaleString('ko-KR')} · {c.clusterSize}개 매체
                 </div>
                 {c.summaryError && (
-                  <p className="mt-1 text-xs text-red-600">요약 실패: {c.summaryError}</p>
+                  <p className="mt-1 text-xs text-red-600">
+                    요약 실패: {c.summaryError}
+                    {c.summaries.some(s => s.isFallback) && ' — 아래는 본문 발췌로 대체됨'}
+                  </p>
                 )}
                 {/*
                  * summaryError가 null인데 요약도 없는 경우 — 사유를 함부로 짐작해 말하지
@@ -168,9 +171,20 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
       {chosenCandidate && (
         <fieldset className="space-y-2 border-t border-gray-200 pt-3">
           <legend className="mb-1 text-xs font-semibold text-gray-500">요약 선택</legend>
-          {chosenCandidate.summaryError && chosenCandidate.summaries.length === 0 && (
+          {/*
+           * summaryError 가 있으면 모델 요약은 실패한 것이다 — summaries가 비어 있든
+           * (모델 실패 + 발췌 대체도 못 만든 경우) 채워져 있든(발췌 대체로 채운 경우)
+           * 항상 이 경고를 보여준다. summaries.length === 0 일 때만 보여주면, 발췌
+           * 대체 요약이 채워진 순간 이 경고가 조용히 사라져 검수자가 기계 발췌문을
+           * 모델 요약으로 착각하게 된다. 원인은 summaryError 문구를 그대로 보여줄 뿐
+           * 짐작해서 이름 붙이지 않는다.
+           */}
+          {chosenCandidate.summaryError && (
             <p className="text-sm text-red-600">
-              이 후보는 요약을 만들지 못했습니다 ({chosenCandidate.summaryError}). 제목만 보고 판단하세요.
+              모델 요약 실패: {chosenCandidate.summaryError}
+              {chosenCandidate.summaries.length > 0
+                ? ' — 아래는 모델이 아니라 본문에서 기계적으로 뽑아낸 발췌입니다. 그대로 싣지 말고 반드시 손보세요.'
+                : ' 제목만 보고 판단하세요.'}
             </p>
           )}
           {/* 위 후보 목록의 주석과 같은 이유로 사유를 짐작해 말하지 않는다 — 레거시 경로. */}
@@ -189,7 +203,17 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
                 className="mt-1"
               />
               <span>
-                <span className="mr-1 font-medium">{SUMMARY_LABEL[s.variant]}</span>
+                {s.isFallback ? (
+                  // variant 라벨("수치 중심" 등)은 기계 발췌에는 의미가 없다 — 있지도
+                  // 않은 관점을 주장하는 라벨이 되므로 붙이지 않고, 대신 발췌라는
+                  // 사실 자체를 먼저 보여준다. 정상 요약과 색을 다르게 해 한눈에
+                  // 구분되게 한다.
+                  <span className="mr-1 rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-medium text-orange-800">
+                    본문 발췌 (모델 요약 실패)
+                  </span>
+                ) : (
+                  <span className="mr-1 font-medium">{SUMMARY_LABEL[s.variant]}</span>
+                )}
                 {s.text}
               </span>
             </label>
