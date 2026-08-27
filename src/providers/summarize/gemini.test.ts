@@ -6,7 +6,10 @@ beforeEach(() => {
   exhaustedModels.clear()
 })
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
+})
 
 describe('extractJsonText', () => {
   it('thought 파트를 건너뛰고 text 를 고른다', () => {
@@ -67,7 +70,7 @@ describe('summarize', () => {
   it('3안을 돌려준다', async () => {
     stubOnce({ numeric: '수치임', context: '배경임', implication: '시사점임' })
     const r = await summarize('제목', '본문')
-    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임' })
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임', model: MODEL_CHAIN[0] })
   })
 
   it('100자를 넘긴 응답을 잘라서 돌려준다', async () => {
@@ -140,7 +143,7 @@ describe('모델 폴백 체인', () => {
 
     const r = await summarize('제목', '본문')
 
-    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임' })
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임', model: MODEL_CHAIN[1] })
     expect(calledUrls).toHaveLength(2)
     expect(calledUrls[0]).toContain(MODEL_CHAIN[0])
     expect(calledUrls[1]).toContain(MODEL_CHAIN[1])
@@ -199,7 +202,7 @@ describe('모델 폴백 체인', () => {
 
     const r = await summarize('제목', '본문')
 
-    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임' })
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임', model: MODEL_CHAIN[0] })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -219,7 +222,7 @@ describe('모델 폴백 체인', () => {
 
     const r = await summarize('제목', '본문')
 
-    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임' })
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임', model: MODEL_CHAIN[1] })
     expect(calledUrls).toHaveLength(2)
     expect(calledUrls[1]).toContain(MODEL_CHAIN[1])
   })
@@ -233,7 +236,7 @@ describe('모델 폴백 체인', () => {
 
     const r = await summarize('제목', '본문')
 
-    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임' })
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임', model: MODEL_CHAIN[1] })
     expect(calledUrls).toHaveLength(2)
   })
 
@@ -283,5 +286,65 @@ describe('모델 폴백 체인', () => {
     for (const model of MODEL_CHAIN.slice(1)) {
       expect(message).toContain(model)
     }
+  })
+})
+
+describe('쿼터 소진 기록의 KST 날짜 경계', () => {
+  function quotaResponse() {
+    return new Response(JSON.stringify({ error: { status: 'RESOURCE_EXHAUSTED' } }), { status: 429 })
+  }
+  function okResponse() {
+    return new Response(JSON.stringify({
+      candidates: [{ content: { parts: [
+        { text: JSON.stringify({ numeric: '수치임', context: '배경임', implication: '시사점임' }), thoughtSignature: 'x' },
+      ] } }],
+    }), { status: 200 })
+  }
+
+  it('날짜가 바뀌면 소진 기록이 초기화돼 그 모델을 다시 시도한다', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-27T00:00:00+09:00'))
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      url.includes(MODEL_CHAIN[0]) ? quotaResponse() : okResponse()
+    )))
+    await summarize('제목1', '본문1')
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(true)
+
+    // KST 자정을 넘어 다음 날로 — 실시간이 흐르길 기다리지 않고 시계를 직접 옮긴다.
+    vi.setSystemTime(new Date('2026-08-28T00:00:00+09:00'))
+    const day2Urls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      day2Urls.push(url)
+      return okResponse()
+    }))
+    await summarize('제목2', '본문2')
+
+    expect(day2Urls[0]).toContain(MODEL_CHAIN[0])
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(false)
+  })
+
+  it('같은 KST 날짜 안에서는 소진 기록이 초기화되지 않는다 (너무 이르게 리셋되지 않는지 확인)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-27T00:30:00+09:00'))
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      url.includes(MODEL_CHAIN[0]) ? quotaResponse() : okResponse()
+    )))
+    await summarize('제목1', '본문1')
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(true)
+
+    // 같은 KST 날짜(2026-08-27) 안의 다른 시각.
+    vi.setSystemTime(new Date('2026-08-27T23:30:00+09:00'))
+    const calledUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calledUrls.push(url)
+      return okResponse()
+    }))
+    await summarize('제목2', '본문2')
+
+    expect(calledUrls).toHaveLength(1)
+    expect(calledUrls[0]).toContain(MODEL_CHAIN[1])
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(true)
   })
 })

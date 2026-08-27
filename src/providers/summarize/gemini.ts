@@ -1,4 +1,5 @@
 import { charLength, truncateAtSentence } from '@/domain/text'
+import { kstDateString } from '@/domain/date'
 import { buildPrompt, MAX_SUMMARY_CHARS } from './prompt'
 
 /**
@@ -42,20 +43,62 @@ function endpointFor(model: string): string {
  */
 export const exhaustedModels = new Set<string>()
 
-/** 429, 또는 본문에 RESOURCE_EXHAUSTED 가 있으면 그 모델의 쿼터가 소진된
- * 것으로 본다 — 오늘 하루는 다시 시도해도 똑같이 실패하므로 exhaustedModels 에
- * 영구 기록한다. */
-function isQuotaExhausted(status: number, detail: string): boolean {
-  return status === 429 || detail.includes('RESOURCE_EXHAUSTED')
+/**
+ * exhaustedModels 가 마지막으로 리셋된 KST 날짜. summarize() 호출마다 오늘
+ * 날짜와 비교해서 다르면 소진 기록을 비운다.
+ *
+ * 지금은 Vercel(인스턴스가 짧게 산다)에서 돌지만, 원래 설계는 크론을 crontab 에
+ * 둔 상시 실행 서버로 옮기는 것이다(그래서 스케줄러가 코드가 아니라 crontab에
+ * 있다) — 그러면 이 모듈이 프로세스 재시작 없이 며칠이고 살아있는다. 리셋이
+ * 없으면 월요일 07:40 에 소진된 모델이 화요일에도, 수요일에도 계속 제외된 채로
+ * 남는다. 구글의 무료 티어 쿼터는 조용히 매일 리셋되는데 우리 쪽은 절대
+ * 리셋되지 않으면, 체인이 가장 약한 모델들로 조용히 저하된 채 영원히 머문다.
+ *
+ * 구글의 실제 리셋은 태평양 시간 자정 기준이지만, 여기서는 의도적으로 KST
+ * 자정을 쓴다. 이 시스템은 크론이 07:40 KST 한 번만 도는 구조이므로, KST
+ * 자정을 기준으로 하면 "리셋이 아직 유효한 소진 기록을 너무 이르게 지워버리는"
+ * 창이 하루에 최대 한 번을 넘지 않는다는 게 보장된다. UTC나 태평양 시간으로
+ * "고치면" 이 보장이 깨지니 바꾸지 말 것 — 절대 리셋하지 않는 것보다는
+ * 이쪽이 훨씬 낫다.
+ */
+let exhaustedModelsResetDate: string | null = null
+
+function resetExhaustedModelsIfNewDay(): void {
+  const today = kstDateString(new Date())
+  if (exhaustedModelsResetDate !== today) {
+    exhaustedModels.clear()
+    exhaustedModelsResetDate = today
+  }
 }
 
-/** 503/500, 또는 본문에 UNAVAILABLE 이 있으면 일시적 장애로 본다 — 이번
- * 호출만 다음 모델로 넘기고, 그 모델 자체는 소진된 것으로 기록하지 않는다. */
-function isTransientlyUnavailable(status: number, detail: string): boolean {
-  return status === 503 || status === 500 || detail.includes('UNAVAILABLE')
+type FailureClass = 'quota' | 'unavailable' | 'other'
+
+/**
+ * HTTP 실패를 분류한다. 상태 코드가 최우선(authoritative) 신호다 — 429/503/500
+ * 은 그 자체로 확정적이라서 본문은 보지 않는다. 본문 문자열(RESOURCE_EXHAUSTED/
+ * UNAVAILABLE)은 상태 코드가 이 셋 중 무엇도 아니어서 확정할 수 없을 때만
+ * 보조로 쓴다. 상태를 먼저 확정 짓지 않고 문자열만으로 판단하면, 예를 들어
+ * 503 응답 본문에 우연히 다른 문구가 섞여 들어와도 오분류할 위험이 있다.
+ * 순서를 이렇게 두면 구글이 문구를 바꿔도 최악의 경우 "놓칠" 뿐, 상태 코드가
+ * 이미 확정한 답을 문자열이 뒤집는 일은 없다.
+ */
+function classifyFailure(status: number, detail: string): FailureClass {
+  if (status === 429) return 'quota'
+  if (status === 503 || status === 500) return 'unavailable'
+  if (detail.includes('RESOURCE_EXHAUSTED')) return 'quota'
+  if (detail.includes('UNAVAILABLE')) return 'unavailable'
+  return 'other'
 }
 
-export type SummarySet = { numeric: string; context: string; implication: string }
+export type SummarySet = {
+  numeric: string
+  context: string
+  implication: string
+  /** 이 3안을 실제로 만들어낸 모델. 폴백 체인에서 몇 번째로 답한 모델인지
+   * 나중에 추적할 수 있도록 남긴다 — 예: gemini-3.1-flash-lite 는 100자
+   * 제한을 자주 넘겨서 truncateAtSentence 가 더 많이 개입한다. */
+  model: string
+}
 
 /**
  * Gemini 3.x 는 파트에 thoughtSignature 를 함께 실어 보낸다.
@@ -111,6 +154,8 @@ export async function summarize(title: string, body: string): Promise<SummarySet
     },
   }
 
+  resetExhaustedModelsIfNewDay()
+
   const candidates = MODEL_CHAIN.filter(m => !exhaustedModels.has(m))
   if (candidates.length === 0) {
     throw new Error(`gemini: 모든 모델의 쿼터가 소진됐다 (시도: ${MODEL_CHAIN.join(', ')})`)
@@ -130,13 +175,14 @@ export async function summarize(title: string, body: string): Promise<SummarySet
 
     if (!res.ok) {
       const detail = await res.text()
-      if (isQuotaExhausted(res.status, detail)) {
+      const failure = classifyFailure(res.status, detail)
+      if (failure === 'quota') {
         // 오늘치가 끝났다 — 영구 기록해서 이후 호출은 이 모델을 건너뛴다.
         exhaustedModels.add(model)
         skipped.push({ model, reason: 'quota' })
         continue
       }
-      if (isTransientlyUnavailable(res.status, detail)) {
+      if (failure === 'unavailable') {
         // 순간적인 과부하/서버 오류 — 이번만 다음 모델로 넘어간다. 기록하지
         // 않으므로 다음 summarize() 호출은 이 모델부터 다시 시도한다.
         skipped.push({ model, reason: 'unavailable' })
@@ -151,9 +197,12 @@ export async function summarize(title: string, body: string): Promise<SummarySet
     const payload = await res.json()
     const text = extractJsonText(payload)
 
-    let parsed: SummarySet
+    // Gemini 가 실제로 돌려주는 JSON 은 3안 필드뿐이다 — model 은 우리가 아는
+    // 값(위 for 루프의 model 변수)이지 응답 안에 들어있는 값이 아니므로,
+    // SummarySet(반환 타입)이 아니라 3안 필드만 있는 타입으로 파싱한다.
+    let parsed: { numeric: string; context: string; implication: string }
     try {
-      parsed = JSON.parse(text) as SummarySet
+      parsed = JSON.parse(text)
     } catch {
       const finishReason = (payload as any)?.candidates?.[0]?.finishReason
       const finishNote = finishReason && finishReason !== 'STOP' ? ` finishReason=${finishReason}.` : ''
@@ -166,6 +215,7 @@ export async function summarize(title: string, body: string): Promise<SummarySet
       numeric: enforceLimit(parsed.numeric ?? ''),
       context: enforceLimit(parsed.context ?? ''),
       implication: enforceLimit(parsed.implication ?? ''),
+      model,
     }
   }
 

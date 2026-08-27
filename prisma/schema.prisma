@@ -100,6 +100,9 @@ model NewsCandidate {
   /// 요약 실패 사유. 성공하거나 본문 부족으로 건너뛴 경우 null. 후보 자체는 지우지 않는다 —
   /// 담당자가 제목만 보고 판단할 수 있게 남긴다.
   summaryError String? @db.Text
+  /// 3안을 실제로 만들어낸 모델(예: gemini-3.6-flash). 폴백 체인 중 몇 번째
+  /// 모델이 응답했는지 나중에 추적한다. 실패했거나 아직 요약하지 않았으면 null.
+  summaryModel String?
 
   run        BriefRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
   instrument Instrument    @relation(fields: [instrumentId], references: [id])

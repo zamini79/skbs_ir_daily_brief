@@ -188,6 +188,10 @@ export async function runCollection(now: Date): Promise<{
                   text: attempt.summary[v.key],
                 })),
               })
+              await prisma.newsCandidate.update({
+                where: { id: candidate.id },
+                data: { summaryModel: attempt.summary.model },
+              })
               summariesGenerated++
               return
             case 'failed':
