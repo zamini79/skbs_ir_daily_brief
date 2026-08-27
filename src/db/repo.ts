@@ -1,0 +1,268 @@
+import { prisma } from './client'
+import { changePct as calcChangePct } from '@/domain/calc'
+import type { Prisma } from '@prisma/client'
+
+export type RowState = 'NO_NEWS' | 'OMITTED' | 'PENDING' | 'SELECTED'
+
+/**
+ * 시스템이 후보를 못 만든 것(NO_NEWS)과 담당자가 뺀 것(OMITTED)은 다르다.
+ * 출력 표에서는 둘 다 공란이지만 검수 화면에서는 구분해 보여야 한다.
+ */
+export function rowDisplayState(row: { candidateCount: number; decision: string }): RowState {
+  if (row.candidateCount === 0) return 'NO_NEWS'
+  if (row.decision === 'OMITTED') return 'OMITTED'
+  if (row.decision === 'SELECTED') return 'SELECTED'
+  return 'PENDING'
+}
+
+const ROW_STATE_LABEL: Record<RowState, string> = {
+  NO_NEWS: '당일·D-1 기사 없음',
+  OMITTED: '싣지 않음 (담당자 결정)',
+  PENDING: '미검토',
+  SELECTED: '선택 완료',
+}
+
+export function rowStateLabel(state: RowState): string {
+  return ROW_STATE_LABEL[state]
+}
+
+const RUN_STATUS_LABEL: Record<string, string> = {
+  COLLECTING: '수집 중',
+  READY: '준비 완료',
+  PARTIAL: '부분 완료',
+  FAILED: '실패',
+}
+
+/** 알려지지 않은 상태 문자열이 와도 화면이 깨지지 않도록 원문을 그대로 돌려준다. */
+export function runStatusLabel(status: string): string {
+  return RUN_STATUS_LABEL[status] ?? status
+}
+
+/** sameEventAsRank 배지 문구. rank 는 더 높은(작은 숫자) 후보의 순위다. */
+export function sameEventBadgeLabel(rank: number): string {
+  return `${rank}위와 같은 사건`
+}
+
+export type CategoryGroup<T> = { category: string; rows: T[] }
+
+/**
+ * displayOrder 로 이미 정렬된 rows 를 구분(국내사/해외사/Index)별로 묶는다.
+ * 인접한 같은 구분만 하나로 합친다 — 정렬이 깨졌을 때 조용히 잘못 묶지 않기 위함.
+ */
+export function groupByCategory<T extends { instrument: { category: string } }>(
+  rows: T[],
+): CategoryGroup<T>[] {
+  const groups: CategoryGroup<T>[] = []
+  for (const row of rows) {
+    const last = groups[groups.length - 1]
+    if (last && last.category === row.instrument.category) {
+      last.rows.push(row)
+    } else {
+      groups.push({ category: row.instrument.category, rows: [row] })
+    }
+  }
+  return groups
+}
+
+export type DisplayQuote = {
+  close: number | null
+  prevClose: number | null
+  changePct: number | null
+  /** 수기 입력값으로 대체된 것이면 true — 화면에 표시해 담당자가 알 수 있게 한다. */
+  isManual: boolean
+}
+
+/**
+ * 화면에 표시할 시세를 정한다.
+ * 자동 소스가 온전한 값을 줬으면(close/prevClose 둘 다 있으면) 그걸 쓴다.
+ * 아니면(코스피200 헬스케어처럼 소스가 아예 없거나, 있어도 이번에 실패했으면)
+ * 담당자 수기 입력값(Selection.manualClose/manualPrevClose)을 쓴다.
+ */
+export function resolveDisplayQuote(args: {
+  quoteClose: number | null
+  quotePrevClose: number | null
+  quoteChangePct: number | null
+  manualClose: number | null
+  manualPrevClose: number | null
+}): DisplayQuote {
+  if (args.quoteClose !== null && args.quotePrevClose !== null) {
+    return {
+      close: args.quoteClose,
+      prevClose: args.quotePrevClose,
+      changePct: args.quoteChangePct,
+      isManual: false,
+    }
+  }
+  if (args.manualClose !== null && args.manualPrevClose !== null) {
+    return {
+      close: args.manualClose,
+      prevClose: args.manualPrevClose,
+      changePct: calcChangePct(args.manualClose, args.manualPrevClose),
+      isManual: true,
+    }
+  }
+  return { close: null, prevClose: null, changePct: null, isManual: false }
+}
+
+function toNum(v: Prisma.Decimal | number | null | undefined): number | null {
+  if (v === null || v === undefined) return null
+  return Number(v)
+}
+
+export type ClientSummary = { id: string; variant: number; text: string }
+
+export type ClientCandidate = {
+  id: string
+  rank: number
+  title: string
+  url: string
+  publisher: string
+  publishedAt: string
+  clusterSize: number
+  sameEventAsRank: number | null
+  summaryError: string | null
+  summaries: ClientSummary[]
+}
+
+export type ClientSelection = {
+  decision: string
+  chosenCandidateId: string | null
+  chosenSummaryId: string | null
+  editedText: string | null
+  manualClose: number | null
+  manualPrevClose: number | null
+}
+
+export type ClientQuote = {
+  close: number | null
+  prevClose: number | null
+  changePct: number | null
+  ytdPct: number | null
+  marketCapKrwTrillion: number | null
+  asOf: string | null
+  errorMessage: string | null
+} | null
+
+export type ClientInstrument = {
+  id: string
+  category: string
+  displayOrder: number
+  name: string
+  currency: string
+  isIndex: boolean
+  quoteSource: string
+}
+
+export type ClientRow = {
+  instrument: ClientInstrument
+  quote: ClientQuote
+  candidates: ClientCandidate[]
+  selection: ClientSelection
+  state: RowState
+  display: DisplayQuote
+}
+
+export type ClientRun = {
+  id: string
+  runDate: string
+  tradeDate: string
+  status: string
+  statusDetail: string | null
+}
+
+/**
+ * 검수 화면 한 페이지에 필요한 모든 데이터를 만든다.
+ * DB 값(Decimal/Date)을 그대로 클라이언트 컴포넌트로 넘기면 RSC 직렬화 경계에서
+ * 깨지므로, 여기서 전부 숫자/문자열로 변환해 돌려준다.
+ */
+export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; rows: ClientRow[] } | null> {
+  const run = await prisma.briefRun.findUnique({ where: { runDate } })
+  if (!run) return null
+
+  const instruments = await prisma.instrument.findMany({ orderBy: { displayOrder: 'asc' } })
+  const quotes = await prisma.quoteSnapshot.findMany({ where: { runId: run.id } })
+  const candidates = await prisma.newsCandidate.findMany({
+    where: { runId: run.id },
+    include: { summaries: { orderBy: { variant: 'asc' } } },
+    orderBy: { rank: 'asc' },
+  })
+  const selections = await prisma.selection.findMany({ where: { runId: run.id } })
+
+  const quoteBy = new Map(quotes.map(q => [q.instrumentId, q]))
+  const selBy = new Map(selections.map(s => [s.instrumentId, s]))
+
+  const rows: ClientRow[] = instruments.map(inst => {
+    const q = quoteBy.get(inst.id) ?? null
+    const mine = candidates.filter(c => c.instrumentId === inst.id)
+    const sel = selBy.get(inst.id) ?? null
+
+    const quoteClose = toNum(q?.close)
+    const quotePrevClose = toNum(q?.prevClose)
+    const manualClose = toNum(sel?.manualClose)
+    const manualPrevClose = toNum(sel?.manualPrevClose)
+
+    const display = resolveDisplayQuote({
+      quoteClose,
+      quotePrevClose,
+      quoteChangePct: q?.changePct ?? null,
+      manualClose,
+      manualPrevClose,
+    })
+
+    return {
+      instrument: {
+        id: inst.id,
+        category: inst.category,
+        displayOrder: inst.displayOrder,
+        name: inst.name,
+        currency: inst.currency,
+        isIndex: inst.isIndex,
+        quoteSource: inst.quoteSource,
+      },
+      quote: q
+        ? {
+            close: quoteClose,
+            prevClose: quotePrevClose,
+            changePct: q.changePct,
+            ytdPct: q.ytdPct,
+            marketCapKrwTrillion: toNum(q.marketCapKrwTrillion),
+            asOf: q.asOf,
+            errorMessage: q.errorMessage,
+          }
+        : null,
+      candidates: mine.map(c => ({
+        id: c.id,
+        rank: c.rank,
+        title: c.title,
+        url: c.url,
+        publisher: c.publisher,
+        publishedAt: c.publishedAt.toISOString(),
+        clusterSize: c.clusterSize,
+        sameEventAsRank: c.sameEventAsRank,
+        summaryError: c.summaryError,
+        summaries: c.summaries.map(s => ({ id: s.id, variant: s.variant, text: s.text })),
+      })),
+      selection: {
+        decision: sel?.decision ?? 'PENDING',
+        chosenCandidateId: sel?.chosenCandidateId ?? null,
+        chosenSummaryId: sel?.chosenSummaryId ?? null,
+        editedText: sel?.editedText ?? null,
+        manualClose,
+        manualPrevClose,
+      },
+      state: rowDisplayState({ candidateCount: mine.length, decision: sel?.decision ?? 'PENDING' }),
+      display,
+    }
+  })
+
+  return {
+    run: {
+      id: run.id,
+      runDate: run.runDate,
+      tradeDate: run.tradeDate,
+      status: run.status,
+      statusDetail: run.statusDetail,
+    },
+    rows,
+  }
+}
