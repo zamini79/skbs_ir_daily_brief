@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { runCollection } from '@/pipeline/collect'
 
 /**
@@ -16,13 +17,35 @@ import { runCollection } from '@/pipeline/collect'
 export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
+/**
+ * 시크릿 비교. `!==` 는 첫 다른 바이트에서 즉시 끝나므로 원리상 응답 시간이
+ * "몇 글자까지 맞았는지"를 흘린다. 지금은 인증 없는 1단계 설계에 수집만
+ * 트리거하는 엔드포인트라 실질 위험이 낮지만, 사내 이관 후에는 이 시크릿이
+ * 유일한 보호 장치가 된다(3부).
+ *
+ * 길이가 다르면 timingSafeEqual 이 던지므로, 먼저 길이를 비교하는 대신
+ * **SHA-256 다이제스트(항상 32바이트)를 비교한다** — 길이 자체도 흘리지 않는다.
+ */
+function secretMatches(provided: string | null, expected: string): boolean {
+  if (provided === null) return false
+  const digest = (v: string): Buffer => createHash('sha256').update(v, 'utf8').digest()
+  return timingSafeEqual(digest(provided), digest(expected))
+}
+
+/** `Authorization: Bearer <token>` 에서 토큰만 꺼낸다. 접두사 검사는 시크릿과
+ * 무관하므로 타이밍에 영향을 주지 않는다. */
+function bearerToken(header: string | null): string | null {
+  if (header === null || !header.startsWith('Bearer ')) return null
+  return header.slice('Bearer '.length)
+}
+
 export async function POST(request: Request): Promise<Response> {
   const expected = process.env.CRON_SECRET
   if (!expected) {
     // 시크릿이 서버에 설정되지 않았다면 열어두지 않고 무조건 막는다(fail closed).
     return Response.json({ error: 'CRON_SECRET 미설정' }, { status: 500 })
   }
-  if (request.headers.get('x-cron-secret') !== expected) {
+  if (!secretMatches(request.headers.get('x-cron-secret'), expected)) {
     return Response.json({ error: 'unauthorized' }, { status: 401 })
   }
 
@@ -45,7 +68,7 @@ export async function GET(request: Request): Promise<Response> {
   if (!expected) {
     return Response.json({ error: 'CRON_SECRET 미설정' }, { status: 500 })
   }
-  if (request.headers.get('authorization') !== `Bearer ${expected}`) {
+  if (!secretMatches(bearerToken(request.headers.get('authorization')), expected)) {
     return Response.json({ error: 'unauthorized' }, { status: 401 })
   }
 
