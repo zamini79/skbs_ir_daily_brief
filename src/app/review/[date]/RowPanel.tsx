@@ -99,7 +99,7 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
         {row.candidates.map(c => (
           <label
             key={c.id}
-            className={`block cursor-pointer rounded border p-2 text-sm ${
+            className={`block cursor-pointer rounded border p-2 text-sm text-gray-900 ${
               row.selection.chosenCandidateId === c.id
                 ? 'border-emerald-400 bg-emerald-50'
                 : 'border-gray-200 bg-white'
@@ -144,7 +144,7 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
           </label>
         ))}
         <label
-          className={`flex items-center gap-2 rounded border p-2 text-sm ${
+          className={`flex items-center gap-2 rounded border p-2 text-sm text-gray-900 ${
             row.selection.decision === 'OMITTED' ? 'border-gray-400 bg-gray-100' : 'border-gray-200 bg-white'
           }`}
         >

@@ -5,12 +5,17 @@ import { formatPrice, formatPrevDiff } from '@/domain/format'
 import { groupByCategory, rowStateLabel, type ClientRow, type RowState } from '@/db/repo'
 import { RowPanel } from './RowPanel'
 
-/** 네 가지 행 상태를 한눈에 구분할 수 있도록 서로 다른 배경/배지 색을 준다. */
+/**
+ * 네 가지 행 상태를 한눈에 구분할 수 있도록 서로 다른 배경/배지 색을 준다.
+ * bg와 text를 항상 짝으로 명시한다 — text를 비워 상위(main)의 글자색 상속에
+ * 맡기면, 페이지가 라이트로 고정돼 있어도 나중에 이 조각만 재사용될 때 다시
+ * 깨질 수 있다.
+ */
 const ROW_BG: Record<RowState, string> = {
-  NO_NEWS: 'bg-gray-50 text-gray-400',
-  OMITTED: 'bg-gray-100 text-gray-500',
-  PENDING: 'bg-amber-50',
-  SELECTED: 'bg-white',
+  NO_NEWS: 'bg-gray-50 text-gray-500',
+  OMITTED: 'bg-gray-100 text-gray-600',
+  PENDING: 'bg-amber-50 text-gray-900',
+  SELECTED: 'bg-white text-gray-900',
 }
 const BADGE_STYLE: Record<RowState, string> = {
   NO_NEWS: 'bg-gray-200 text-gray-500',
