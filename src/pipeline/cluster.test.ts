@@ -173,6 +173,33 @@ describe('filterByTitleMention', () => {
       expect(filterByTitleMention(items, LONZA_ALIASES)).toHaveLength(1)
     })
 
+    // ── 둥근 따옴표(‘ ’ “ ”) ──────────────────────────────────────────────
+    // QUOTE_CHARS 가 곧은 따옴표만 담고 있던 동안, 아래 제목이 Lonza 행 1순위로
+    // 그대로 올라왔다(2026-08-27 실측). 위 픽스처가 전부 곧은 따옴표라서 테스트가
+    // 이걸 못 잡았다 — 한국 언론 제목은 둥근 따옴표를 훨씬 많이 쓴다.
+    it('실패 재현 3(실측): 둥근 따옴표를 사이에 둔 "다" + 론자도 매칭하지 않는다', () => {
+      const items = [item('김민석 “정청래 ‘중도는 없다’론자”…정청래 “마이크 독재”')]
+      expect(filterByTitleMention(items, LONZA_ALIASES)).toHaveLength(0)
+    })
+
+    it('둥근 따옴표 여닫기가 겹쳐 있어도 그 뒤의 "다"를 본다', () => {
+      // ’ 와 ” 가 연달아 오는 경우. 인용부호를 전부 건너뛴 자리가 '다' 여야 버린다.
+      const items = [item('그는 “‘냉전은 끝나지 않았다’”론자로 분류된다')]
+      expect(filterByTitleMention(items, LONZA_ALIASES)).toHaveLength(0)
+    })
+
+    // 둥근 따옴표를 무조건 건너뛰는 구현이 정상 제목까지 떨어뜨리지 않는지 —
+    // 이 함수는 이미 두 번 "통과만 하는 테스트"에 가려졌으므로 양성 픽스처를 함께 둔다.
+    it('둥근 따옴표로 감싼 진짜 Lonza 기사는 그대로 매칭한다', () => {
+      const items = [item('세계 1위 CDMO ‘론자’, 美 바이오의약품 공장 12억 달러에 인수')]
+      expect(filterByTitleMention(items, LONZA_ALIASES)).toHaveLength(1)
+    })
+
+    it('제목 다른 곳에 둥근 따옴표가 있어도 진짜 Lonza 기사는 매칭한다', () => {
+      const items = [item('론자, 캡슐·건기식 원료 사업 3.2조원에 매각…‘순수 CDMO 기업’ 전환')]
+      expect(filterByTitleMention(items, LONZA_ALIASES)).toHaveLength(1)
+    })
+
     it('앞이 인용부호 없이 곧바로 "다"여도(중간에 따옴표가 없어도) 버린다', () => {
       // "있다론자" — 인용부호가 아예 없는 경우도 같은 규칙으로 잡혀야 한다.
       const items = [item('그는 여전히 냉전이 끝나지 않았다론자 취급을 받는다')]
