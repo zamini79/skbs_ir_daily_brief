@@ -59,21 +59,27 @@ export function filterByTitleMention(items: NewsItem[], aliases: string[]): News
 /**
  * 제목 유사도로 묶은 뒤 묶음 크기(=보도 빈도) 상위 topN 개를 반환한다.
  * 탐욕적 클러스터링이다. 기사 100건 규모에서는 충분하고 결과가 안정적이다.
+ *
+ * 새 기사는 묶음의 창설 멤버가 아니라 "모든" 멤버와 비교한다. 창설 멤버하고만
+ * 비교하면 A~B, B~C 는 임계값을 넘는데 A~C 는 못 넘는 전이적 유사도 상황에서
+ * 도착 순서에 따라 같은 사건이 두 묶음으로 쪼개질 수 있다 — 묶음 크기(=보도
+ * 빈도)가 실제보다 적게 표시되는 결과로 이어진다.
  */
 export function topClusters(
   items: NewsItem[],
   topN: number,
 ): Array<{ representative: NewsItem; size: number }> {
-  const clusters: Array<{ tokens: string[]; members: NewsItem[] }> = []
+  const clusters: Array<{ members: NewsItem[]; memberTokens: string[][] }> = []
 
   for (const it of items) {
     const tokens = tokenize(it.title)
     if (tokens.length === 0) continue
-    const hit = clusters.find(c => jaccard(c.tokens, tokens) >= THRESHOLD)
+    const hit = clusters.find(c => c.memberTokens.some(t => jaccard(t, tokens) >= THRESHOLD))
     if (hit) {
       hit.members.push(it)
+      hit.memberTokens.push(tokens)
     } else {
-      clusters.push({ tokens, members: [it] })
+      clusters.push({ members: [it], memberTokens: [tokens] })
     }
   }
 

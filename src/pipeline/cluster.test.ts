@@ -128,3 +128,46 @@ describe('filterByTitleMention', () => {
     expect(r[0].title).toBe('코스피, 금리 인상에 흔들렸지만 6900선대 강세')
   })
 })
+
+describe('topClusters — 전이적 유사도 (모든 멤버와 비교)', () => {
+  // 토큰 집합을 의도적으로 구성한다:
+  //   A = {aa, bb, cc}
+  //   B = {bb, cc, dd}
+  //   C = {cc, dd, ee}
+  // J(A,B) = |{bb,cc}| / |{aa,bb,cc,dd}|       = 2/4 = 0.5  (임계값 이상 → 유사)
+  // J(B,C) = |{cc,dd}| / |{bb,cc,dd,ee}|       = 2/4 = 0.5  (임계값 이상 → 유사)
+  // J(A,C) = |{cc}|     / |{aa,bb,cc,dd,ee}|   = 1/5 = 0.2  (임계값 미만 → 비유사)
+  // 창설 멤버(A)하고만 비교하면 C 는 새 묶음이 되어 버린다. 모든 멤버와 비교해야
+  // B 를 매개로 A-B-C 가 하나의 사건으로 묶인다.
+  const A = 'aa bb cc'
+  const B = 'bb cc dd'
+  const C = 'cc dd ee'
+
+  it('A, B, C 순서로 들어와도 하나의 묶음이 된다', () => {
+    const items = [item(A), item(B), item(C)]
+    const r = topClusters(items, 3)
+    expect(r).toHaveLength(1)
+    expect(r[0].size).toBe(3)
+  })
+
+  it('C, B, A 역순으로 들어와도 하나의 묶음이 된다 (순서에 무관하다)', () => {
+    const items = [item(C), item(B), item(A)]
+    const r = topClusters(items, 3)
+    expect(r).toHaveLength(1)
+    expect(r[0].size).toBe(3)
+  })
+
+  it('서로 무관한 두 제목은 여전히 별개의 묶음이 된다', () => {
+    const items = [item('ff gg hh'), item('ii jj kk')]
+    const r = topClusters(items, 3)
+    expect(r).toHaveLength(2)
+    expect(r[0].size).toBe(1)
+    expect(r[1].size).toBe(1)
+  })
+
+  it('병합 후 묶음 크기는 실제 멤버 수와 같다 (검토자에게 보이는 숫자)', () => {
+    const items = [item(A), item(B), item(C)]
+    const r = topClusters(items, 3)
+    expect(r[0].size).toBe(3)
+  })
+})
