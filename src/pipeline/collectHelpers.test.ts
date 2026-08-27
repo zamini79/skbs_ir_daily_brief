@@ -5,6 +5,7 @@ import {
   missingFxCurrencies,
   resolveFxRate,
   currencyMismatchReason,
+  normalizeAsOf,
   resolveMarketCap,
   computeSameEventAsRank,
   isQuotaExhaustedMessage,
@@ -136,6 +137,20 @@ describe('currencyMismatchReason', () => {
     // 멀쩡한 행이 매일 실패로 뜬다.
     expect(currencyMismatchReason('EUR', '')).toBeNull()
     expect(currencyMismatchReason('EUR', '   ')).toBeNull()
+  })
+})
+
+describe('normalizeAsOf', () => {
+  it('날짜가 있으면 그대로 둔다', () => {
+    expect(normalizeAsOf('2026-08-26')).toBe('2026-08-26')
+  })
+
+  it('빈 문자열·공백은 null 이다 — 화면이 "미상"이라고 말할 수 있게', () => {
+    // ''를 그대로 저장하면 화면의 falsy 검사가 기준일 줄을 통째로 지워버린다.
+    // 그러면 담당자는 표시된 가격을 오늘 종가로 읽는다.
+    expect(normalizeAsOf('')).toBeNull()
+    expect(normalizeAsOf('   ')).toBeNull()
+    expect(normalizeAsOf(undefined)).toBeNull()
   })
 })
 

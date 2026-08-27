@@ -240,9 +240,18 @@ export function BriefTable({ runDate, rows }: { runDate: string; rows: ClientRow
                         '-'
                       )}
                       {/* text-align은 상속되므로 td의 text-right를 따로 반복하지 않아도
-                          이 보조 줄도 같이 오른쪽으로 맞춰진다. */}
-                      {row.quote?.asOf && (
-                        <div className="text-[10px] text-gray-400">기준 {row.quote.asOf}</div>
+                          이 보조 줄도 같이 오른쪽으로 맞춰진다.
+
+                          값이 보이는 행에는 **항상** 기준일 줄을 그린다. 예전에는
+                          asOf 가 falsy 면 줄 자체가 사라졌는데, 소스가 기준일을 주지
+                          않으면(twelvedata 의 datetime 누락, 네이버 파싱 실패) 그
+                          공백이 "오늘 종가"로 읽힌다 — 해외 종목은 전일 종가일 수
+                          있고, 스펙 §3.2·§13.2 는 담당자가 그 지연을 판단할 수 있도록
+                          기준일 노출을 요구한다. 모르면 모른다고 말한다. */}
+                      {row.display.close !== null && (
+                        <div className="text-[10px] text-gray-400">
+                          {row.quote?.asOf ? `기준 ${row.quote.asOf}` : '기준일 미상'}
+                        </div>
                       )}
                     </td>
                     {/* formatPrevDiff가 close/prevClose null 여부와 보합(0)을 각각 다른

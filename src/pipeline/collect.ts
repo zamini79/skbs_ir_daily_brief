@@ -15,6 +15,7 @@ import {
   missingFxCurrencies,
   resolveFxRate,
   currencyMismatchReason,
+  normalizeAsOf,
   resolveMarketCap,
   computeSameEventAsRank,
   createQuotaGuard,
@@ -270,7 +271,7 @@ export async function runCollection(now: Date): Promise<{
           ytdPct: ytdBase ? ytdPct(q.close, ytdBase) : null,
           marketCapKrwTrillion: cap,
           fxRate: rate,
-          asOf: q.asOf,
+          asOf: normalizeAsOf(q.asOf),
           sourceName: inst.quoteSource,
         },
       })

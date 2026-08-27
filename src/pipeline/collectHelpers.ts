@@ -88,6 +88,21 @@ export function currencyMismatchReason(expected: string, actual: string): string
 }
 
 /**
+ * 소스가 준 시세 기준일을 저장 가능한 형태로 만든다. 빈 문자열은 null 이다.
+ *
+ * twelvedata 는 `datetime` 이 없으면 `''` 를, 네이버 파서는 날짜를 못 읽으면 `''` 를
+ * 준다. 그 `''` 를 그대로 저장하면 화면의 `{row.quote?.asOf && …}` 가 falsy 로 보고
+ * **「기준 YYYY-MM-DD」 줄을 아예 그리지 않는다** — 기준일이 조용히 사라진다.
+ * 스펙 §3.2 주의 2·§13.2 는 국제 시장의 지연(해외 종목은 전일 종가일 수 있다)을
+ * 담당자가 판단할 수 있도록 기준일 노출을 요구한다. 없으면 없다고 말해야지,
+ * 줄 자체가 사라지면 담당자는 오늘 종가라고 읽는다.
+ */
+export function normalizeAsOf(raw: string | null | undefined): string | null {
+  const t = (raw ?? '').trim()
+  return t === '' ? null : t
+}
+
+/**
  * 시가총액(조원)을 계산한다.
  * - 지수는 시가총액 개념이 없다 → null.
  * - 소스(네이버 국내주식)가 시총을 직접 준 경우 환율과 무관하게 그 값을 쓴다.
