@@ -91,15 +91,30 @@ function NewsCell({ row }: { row: ClientRow }) {
   }
 
   // content.kind === 'article'
+  // isFallback 배지는 RowPanel의 "본문 발췌 (모델 요약 실패)"와 같은 사실을
+  // 알려야 하므로 같은 orange를 쓴다(패널과 시각 언어를 맞춘다). "미확정"(amber)과
+  // "발췌"(orange)는 서로 다른 질문에 대한 답이다 — 하나는 확정 여부, 하나는
+  // 출처(모델 vs 기계 발췌) — 이므로 하나로 합쳐 문구를 늘리지 않고 나란히 놓인
+  // 두 개의 작은 pill로 유지한다. 색이 다르므로 나란히 있어도 같은 신호로
+  // 뭉쳐 보이지 않는다(ROW_BG 주석의 amber/orange 구분 원칙과 같다).
+  const fallbackBadge = content.isFallback && (
+    <span className="inline-block rounded bg-orange-200 px-1.5 py-0.5 text-[10px] font-semibold text-orange-900">
+      본문 발췌
+    </span>
+  )
+
   if (!content.confirmed) {
     // PENDING 미리보기 — confirmed 확정본과 절대 같아 보이면 안 된다. 기울임체 +
     // amber 색 + "미확정" 태그 세 겹으로 표시한다. 이 중 하나만 놓쳐도(예: 태그를
     // 잘라내는 리팩터링) 나머지 두 신호가 남아 있도록 일부러 중복시켰다.
     return (
       <div className="py-0.5">
-        <span className="mb-0.5 inline-block rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
-          미확정 · 1순위 후보
-        </span>
+        <div className="mb-0.5 flex flex-wrap items-center gap-1">
+          <span className="inline-block rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
+            미확정 · 1순위 후보
+          </span>
+          {fallbackBadge}
+        </div>
         <a
           href={content.url}
           target="_blank"
@@ -116,6 +131,7 @@ function NewsCell({ row }: { row: ClientRow }) {
 
   return (
     <div className="py-0.5">
+      {fallbackBadge && <div className="mb-0.5">{fallbackBadge}</div>}
       <a
         href={content.url}
         target="_blank"

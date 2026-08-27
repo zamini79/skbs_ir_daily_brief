@@ -113,9 +113,15 @@ export function summaryErrorShortLabel(raw: string): string {
  * 없었다"(NO_NEWS)이고 하나는 "담당자가 뺐다"(OMITTED)라서, 별도 kind로
  * 구조적으로 갈라 둔다. NEWS_FAILED("못 찾아봤다")도 이 둘과 절대 같은 문자열로
  * 수렴하면 안 된다 — 'label' kind로 완전히 다른 값을 돌려준다.
+ *
+ * 'article'의 isFallback은 표시 중인 summary가 모델 요약이 아니라 본문에서
+ * 기계적으로 뽑아낸 대체 텍스트(NewsSummary.isFallback)라는 뜻이다. 이 칼럼이
+ * 검수자가 표만 보고 메일 초안을 판단하는 화면이 됐으므로, 발췌본을 모델
+ * 요약과 구분 없이 보여주면 검수자가 다듬지 않은 발췌를 그대로 실을 수 있다 —
+ * RowPanel의 "본문 발췌 (모델 요약 실패)" 배지와 같은 사실을 표에서도 알려야 한다.
  */
 export type NewsColumnContent =
-  | { kind: 'article'; confirmed: boolean; title: string; url: string; summary: string | null }
+  | { kind: 'article'; confirmed: boolean; title: string; url: string; summary: string | null; isFallback: boolean }
   | { kind: 'omitted' }
   | { kind: 'none' }
   | { kind: 'label'; text: string }
@@ -145,15 +151,33 @@ export function newsColumnContent(row: {
       const chosenSummary = cand.summaries.find(s => s.id === row.chosenSummaryId)
       // editedText가 있으면 그것이 최종 산출물이다 — 요약 원문이 남아 있어도 우선한다.
       const summary = row.editedText ?? chosenSummary?.text ?? null
-      return { kind: 'article', confirmed: true, title: cand.title, url: cand.url, summary }
+      // isFallback은 editedText 유무와 무관하게 chosenSummary 레코드 자체의 값이다.
+      // editedText는 담당자가 손을 댔다는 뜻이지 발췌 출신이라는 사실을 지우지
+      // 않는다 — draft가 원문 발췌를 그대로 두고 blur만 한 것일 수도 있으므로,
+      // 표는 "손봤다고 주장"이 아니라 "원본이 발췌였다"는 사실을 계속 보여준다.
+      return {
+        kind: 'article',
+        confirmed: true,
+        title: cand.title,
+        url: cand.url,
+        summary,
+        isFallback: chosenSummary?.isFallback ?? false,
+      }
     }
     case 'PENDING': {
       // candidateCount === 0이면 rowDisplayState가 PENDING을 주지 않으므로
       // (NO_NEWS/NEWS_FAILED로 먼저 빠진다) 여기서는 후보가 항상 최소 1건 있다.
       const cand = row.candidates.find(c => c.rank === 1) ?? row.candidates[0]
       if (!cand) return { kind: 'none' }
-      const summary = cand.summaries.find(s => s.variant === 1)?.text ?? null
-      return { kind: 'article', confirmed: false, title: cand.title, url: cand.url, summary }
+      const previewSummary = cand.summaries.find(s => s.variant === 1)
+      return {
+        kind: 'article',
+        confirmed: false,
+        title: cand.title,
+        url: cand.url,
+        summary: previewSummary?.text ?? null,
+        isFallback: previewSummary?.isFallback ?? false,
+      }
     }
   }
 }

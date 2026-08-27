@@ -183,6 +183,7 @@ describe('newsColumnContent', () => {
       title: '제목A',
       url: 'https://example.com/a',
       summary: '담당자가 고친 요약',
+      isFallback: false,
     })
   })
 
@@ -217,7 +218,33 @@ describe('newsColumnContent', () => {
       title: '요약 없는 제목',
       url: cand.url,
       summary: null,
+      isFallback: false,
     })
+  })
+
+  it('SELECTED가 발췌 요약(isFallback)을 가리키면 결과도 isFallback: true 다 — editedText 유무와 무관하다', () => {
+    const cand = candidate({
+      id: 'c1',
+      title: '발췌 기사',
+      summaries: [{ id: 's1', variant: 1, text: '본문에서 뽑은 문장', isFallback: true }],
+    })
+    const withoutEdit = newsColumnContent({
+      state: 'SELECTED',
+      candidates: [cand],
+      chosenCandidateId: 'c1',
+      chosenSummaryId: 's1',
+      editedText: null,
+    })
+    const withEdit = newsColumnContent({
+      state: 'SELECTED',
+      candidates: [cand],
+      chosenCandidateId: 'c1',
+      chosenSummaryId: 's1',
+      editedText: '담당자가 손본 텍스트',
+    })
+    expect((withoutEdit as { isFallback: boolean }).isFallback).toBe(true)
+    // editedText는 표시 텍스트만 바꿀 뿐, 원본이 발췌였다는 사실 자체는 지우지 않는다.
+    expect((withEdit as { isFallback: boolean }).isFallback).toBe(true)
   })
 
   it('PENDING은 1순위 후보의 ①안 요약을 미리보기로 보여주되 confirmed: false 다', () => {
@@ -245,7 +272,25 @@ describe('newsColumnContent', () => {
       title: '1순위 제목',
       url: 'https://example.com/rank1',
       summary: '①안 요약',
+      isFallback: false,
     })
+  })
+
+  it('PENDING 미리보기가 발췌 요약(①안)을 가리키면 isFallback: true 다', () => {
+    const rank1 = candidate({
+      id: 'c1',
+      rank: 1,
+      title: '1순위 제목',
+      summaries: [{ id: 's1', variant: 1, text: '본문에서 뽑은 문장', isFallback: true }],
+    })
+    const result = newsColumnContent({
+      state: 'PENDING',
+      candidates: [rank1],
+      chosenCandidateId: null,
+      chosenSummaryId: null,
+      editedText: null,
+    })
+    expect((result as { isFallback: boolean }).isFallback).toBe(true)
   })
 
   it('PENDING 미리보기는 SELECTED 확정본과 confirmed 플래그가 다르다 — 화면이 절대 같아 보이면 안 된다', () => {
@@ -289,6 +334,7 @@ describe('newsColumnContent', () => {
       title: '요약 없는 1순위',
       url: cand.url,
       summary: null,
+      isFallback: false,
     })
   })
 
