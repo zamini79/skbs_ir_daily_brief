@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeTitle, jaccard, topClusters } from './cluster'
+import { normalizeTitle, jaccard, topClusters, filterByTitleMention } from './cluster'
 import type { NewsItem } from '@/providers/news/types'
 
 function item(title: string, opts: Partial<NewsItem> = {}): NewsItem {
@@ -69,5 +69,62 @@ describe('topClusters', () => {
     ]
     const r = topClusters(items, 3)
     expect(r[0].representative.naverUrl).toContain('n.news.naver.com')
+  })
+})
+
+describe('filterByTitleMention', () => {
+  it('제목에 회사명이 있으면 남기고 없으면 뺀다', () => {
+    const items = [
+      item('삼성바이오로직스 파업 끝나나'),
+      item('엔비디아 훈풍…코스피 7000선'),
+    ]
+    const r = filterByTitleMention(items, ['삼성바이오로직스'])
+    expect(r).toHaveLength(1)
+    expect(r[0].title).toBe('삼성바이오로직스 파업 끝나나')
+  })
+
+  it('공백 유무와 무관하게 매칭한다', () => {
+    const items = [item('삼성 바이오 특허 등록')]
+    const r = filterByTitleMention(items, ['삼성바이오'])
+    expect(r).toHaveLength(1)
+  })
+
+  it('대소문자를 구분하지 않는다', () => {
+    const items = [item('gsk 백신 부문 실적 발표')]
+    const r = filterByTitleMention(items, ['GSK'])
+    expect(r).toHaveLength(1)
+  })
+
+  it('여러 별칭 중 두번째만 맞아도 남긴다', () => {
+    const items = [item('유바이오로직스 백신 임상 결과 발표')]
+    const r = filterByTitleMention(items, ['잘못된별칭', '유바이오로직스'])
+    expect(r).toHaveLength(1)
+  })
+
+  it('별칭이 비어 있으면 원본을 그대로 준다', () => {
+    const items = [item('아무 상관 없는 기사')]
+    expect(filterByTitleMention(items, [])).toEqual(items)
+  })
+
+  it('실제 실패 재현: 회사 기사 하나와 코스피 시황 기사들 중 회사 기사만 남는다', () => {
+    const items = [
+      item('삼성바이오로직스 파업 추석 전에 끝나나'),
+      item('엔비디아 훈풍…코스피 7000선 돌파'),
+      item('코스피, 금리 인상에 흔들렸지만 6900선대 강세'),
+      item('엔비디아 효과…코스피 2%대 상승'),
+    ]
+    const r = filterByTitleMention(items, ['삼성바이오로직스'])
+    expect(r).toHaveLength(1)
+    expect(r[0].title).toBe('삼성바이오로직스 파업 추석 전에 끝나나')
+  })
+
+  it('인덱스 케이스: 별칭이 코스피면 코스피 시황 기사도 남는다', () => {
+    const items = [
+      item('코스피, 금리 인상에 흔들렸지만 6900선대 강세'),
+      item('삼성바이오로직스 파업 추석 전에 끝나나'),
+    ]
+    const r = filterByTitleMention(items, ['코스피'])
+    expect(r).toHaveLength(1)
+    expect(r[0].title).toBe('코스피, 금리 인상에 흔들렸지만 6900선대 강세')
   })
 })

@@ -40,6 +40,23 @@ function pickRepresentative(members: NewsItem[]): NewsItem {
 }
 
 /**
+ * 제목에 별칭이 하나라도 등장하는 기사만 남긴다.
+ * 공백은 양쪽 모두 제거하고("삼성 바이오" ↔ "삼성바이오"), 대소문자를 구분하지 않는다.
+ * (GSK, Sanofi 같은 라틴 문자 별칭 대응). 클러스터링과는 별개의 전처리 단계로 분리해
+ * 두 함수를 각각 독립적으로 테스트할 수 있게 한다.
+ * aliases 가 비어 있으면 필터링하지 않고 원본을 그대로 반환한다 — 설정 누락으로
+ * 화면이 조용히 비는 것을 막기 위함이다.
+ */
+export function filterByTitleMention(items: NewsItem[], aliases: string[]): NewsItem[] {
+  if (aliases.length === 0) return items
+  const needles = aliases.map(a => a.replace(/\s+/g, '').toLowerCase())
+  return items.filter(it => {
+    const haystack = it.title.replace(/\s+/g, '').toLowerCase()
+    return needles.some(n => haystack.includes(n))
+  })
+}
+
+/**
  * 제목 유사도로 묶은 뒤 묶음 크기(=보도 빈도) 상위 topN 개를 반환한다.
  * 탐욕적 클러스터링이다. 기사 100건 규모에서는 충분하고 결과가 안정적이다.
  */
