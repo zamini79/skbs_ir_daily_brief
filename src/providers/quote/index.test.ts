@@ -6,7 +6,10 @@ vi.mock('./naver', () => ({
   fetchNaverWorldIndex: vi.fn(async () => ({ close: 7675, prevClose: 7677, currency: 'USD', asOf: '2026-08-26' })),
 }))
 vi.mock('./twelvedata', () => ({
-  fetchTwelveDataQuotes: vi.fn(async () => new Map([['PFE', { close: 28.3, prevClose: 28.57, currency: 'USD', asOf: '2026-08-26' }]])),
+  fetchTwelveDataQuotes: vi.fn(async () => ({
+    quotes: new Map([['PFE', { close: 28.3, prevClose: 28.57, currency: 'USD', asOf: '2026-08-26' }]]),
+    failures: new Map(),
+  })),
 }))
 vi.mock('./krx', () => ({
   fetchKrxIndexQuote: vi.fn(async () => ({ close: 2173.53, prevClose: 2108.2, currency: 'KRW', asOf: '2026-08-26' })),
@@ -75,6 +78,33 @@ describe('fetchAllQuotes', () => {
   it('배치 소스에서 빠진 심볼은 Error 로 남긴다', async () => {
     const r = await fetchAllQuotes([{ id: 'x', quoteSource: 'twelvedata', quoteSymbol: 'NOPE' }])
     expect(r.get('x')).toBeInstanceOf(Error)
+  })
+
+  it('twelvedata 가 준 실패 사유를 "응답 없음"으로 뭉개지 않고 그대로 싣는다', async () => {
+    // 한도 초과와 심볼 오타가 화면에서 같은 문장이 되면 안 된다.
+    vi.mocked(fetchTwelveDataQuotes).mockResolvedValueOnce({
+      quotes: new Map(),
+      failures: new Map([
+        ['PFE', 'You have run out of API credits for the current minute.'],
+        ['WXIBY', 'symbol not found'],
+      ]),
+    })
+    const r = await fetchAllQuotes([
+      { id: 'p', quoteSource: 'twelvedata', quoteSymbol: 'PFE' },
+      { id: 'w', quoteSource: 'twelvedata', quoteSymbol: 'WXIBY' },
+    ])
+    expect((r.get('p') as Error).message).toContain('API credits')
+    expect((r.get('w') as Error).message).toContain('symbol not found')
+    expect((r.get('p') as Error).message).not.toBe((r.get('w') as Error).message)
+  })
+
+  it('사유가 없는 심볼만 "응답 없음"으로 남는다', async () => {
+    vi.mocked(fetchTwelveDataQuotes).mockResolvedValueOnce({
+      quotes: new Map(),
+      failures: new Map(),
+    })
+    const r = await fetchAllQuotes([{ id: 'x', quoteSource: 'twelvedata', quoteSymbol: 'NOPE' }])
+    expect((r.get('x') as Error).message).toBe('twelvedata: NOPE 응답 없음')
   })
 
   it('알 수 없는 quoteSource 는 Error 로 남기고 값이 사라지지 않는다', async () => {

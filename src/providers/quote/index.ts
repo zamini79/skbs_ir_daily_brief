@@ -57,10 +57,18 @@ export async function fetchAllQuotes(
     (async () => {
       if (td.length === 0) return
       try {
-        const m = await fetchTwelveDataQuotes(td.map(i => i.quoteSymbol))
+        const { quotes, failures } = await fetchTwelveDataQuotes(td.map(i => i.quoteSymbol))
         for (const i of td) {
-          const q = m.get(i.quoteSymbol)
-          out.set(i.id, q ?? new Error(`twelvedata: ${i.quoteSymbol} 응답 없음`))
+          const q = quotes.get(i.quoteSymbol)
+          if (q) {
+            out.set(i.id, q)
+            continue
+          }
+          // provider 가 사유를 줬으면 그것을 그대로 싣는다. 여기서 '응답 없음'으로
+          // 뭉개면 한도 초과(내일이면 낫는다)와 심볼 오타(고쳐야 한다)가 화면에서
+          // 같은 문장이 된다. 사유가 없을 때만 관찰한 사실("응답 없음")을 적는다.
+          const reason = failures.get(i.quoteSymbol) ?? '응답 없음'
+          out.set(i.id, new Error(`twelvedata: ${i.quoteSymbol} ${reason}`))
         }
       } catch (e) {
         for (const i of td) out.set(i.id, e instanceof Error ? e : new Error(String(e)))
