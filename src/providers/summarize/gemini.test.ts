@@ -26,6 +26,19 @@ describe('extractJsonText', () => {
   it('text 파트가 없으면 던진다', () => {
     expect(() => extractJsonText({ candidates: [{ content: { parts: [] } }] })).toThrow()
   })
+  it('promptFeedback.blockReason 이 있으면 차단 이유를 담아 던진다', () => {
+    const payload = { promptFeedback: { blockReason: 'SAFETY' } }
+    expect(() => extractJsonText(payload)).toThrow(/SAFETY/)
+  })
+  it('candidates 가 비어있으면 그 사실을 담아 던진다', () => {
+    expect(() => extractJsonText({ candidates: [] })).toThrow(/candidates/)
+  })
+  it('파트가 모두 thought 뿐이면 그 사실을 담아 던진다 (blockReason/candidates 메시지와는 다르다)', () => {
+    const payload = {
+      candidates: [{ content: { parts: [{ text: '생각중...', thought: true }] } }],
+    }
+    expect(() => extractJsonText(payload)).toThrow(/thought/)
+  })
 })
 
 describe('enforceLimit', () => {
@@ -60,6 +73,38 @@ describe('summarize', () => {
     stubOnce({ numeric: '가'.repeat(180), context: '배경임', implication: '시사점임' })
     const r = await summarize('제목', '본문')
     expect([...r.numeric].length).toBeLessThanOrEqual(100)
+  })
+
+  it('JSON이 아닌 응답이면 기사 제목과 원문 일부를 담아 던진다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: '죄송합니다, 요약할 수 없습니다', thoughtSignature: 'x' }] } }],
+    }), { status: 200 })))
+    let error: unknown
+    try {
+      await summarize('셀트리온 실적 발표', '본문')
+    } catch (e) {
+      error = e
+    }
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('셀트리온 실적 발표')
+    expect((error as Error).message).toContain('죄송합니다')
+  })
+
+  it('finishReason 이 MAX_TOKENS 인 잘린 응답이면 에러 메시지에 남긴다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      candidates: [{
+        finishReason: 'MAX_TOKENS',
+        content: { parts: [{ text: '{"numeric":"수치임", "context":"배경', thoughtSignature: 'x' }] },
+      }],
+    }), { status: 200 })))
+    let error: unknown
+    try {
+      await summarize('제목', '본문')
+    } catch (e) {
+      error = e
+    }
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('MAX_TOKENS')
   })
 
   it('키가 없으면 던진다', async () => {

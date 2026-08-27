@@ -10,13 +10,29 @@ export type SummarySet = { numeric: string; context: string; implication: string
 /**
  * Gemini 3.x 는 파트에 thoughtSignature 를 함께 실어 보낸다.
  * parts[0].text 를 그대로 쓰면 빈 응답처럼 보인다.
+ *
+ * 07:40 무인 크론에서 실패할 때 원인을 바로 알 수 있도록, "text 파트 없음"을
+ * 뭉뚱그려 던지지 않고 페이로드가 실제로 어떤 모양인지에 따라 메시지를 구분한다:
+ * 세이프티 차단 / candidates 없음 / 파트는 있는데 전부 thought 뿐인 경우.
  */
 export function extractJsonText(payload: unknown): string {
-  const parts = (payload as any)?.candidates?.[0]?.content?.parts ?? []
-  for (const p of parts) {
-    if (typeof p?.text === 'string' && !p.thought) return p.text
+  const p = payload as any
+
+  const blockReason = p?.promptFeedback?.blockReason
+  if (blockReason) {
+    throw new Error(`gemini: 응답이 차단됐다 (blockReason=${blockReason})`)
   }
-  throw new Error('gemini: text 파트를 찾지 못했다')
+
+  const candidates = p?.candidates
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    throw new Error('gemini: candidates 가 비어있다')
+  }
+
+  const parts = candidates[0]?.content?.parts ?? []
+  for (const part of parts) {
+    if (typeof part?.text === 'string' && !part.thought) return part.text
+  }
+  throw new Error('gemini: 모든 파트가 thought 뿐이거나 text 가 없다')
 }
 
 export function enforceLimit(s: string): string {
@@ -56,7 +72,20 @@ export async function summarize(title: string, body: string): Promise<SummarySet
     throw new Error(`gemini HTTP ${res.status}: ${detail.slice(0, 200)}`)
   }
 
-  const parsed = JSON.parse(extractJsonText(await res.json())) as SummarySet
+  const payload = await res.json()
+  const text = extractJsonText(payload)
+
+  let parsed: SummarySet
+  try {
+    parsed = JSON.parse(text) as SummarySet
+  } catch {
+    const finishReason = (payload as any)?.candidates?.[0]?.finishReason
+    const finishNote = finishReason && finishReason !== 'STOP' ? ` finishReason=${finishReason}.` : ''
+    throw new Error(
+      `gemini: "${title}" 요약 응답이 JSON이 아니다.${finishNote} 원문: ${text.slice(0, 200)}`,
+    )
+  }
+
   return {
     numeric: enforceLimit(parsed.numeric ?? ''),
     context: enforceLimit(parsed.context ?? ''),
