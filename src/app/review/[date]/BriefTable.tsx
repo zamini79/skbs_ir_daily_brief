@@ -1,7 +1,7 @@
 'use client'
 
 import { Fragment, useState } from 'react'
-import { formatPrice, formatPrevDiff } from '@/domain/format'
+import { formatPrice, formatPrevDiff, formatMarketCap } from '@/domain/format'
 import { groupByCategory, rowStateLabel, type ClientRow, type RowState } from '@/db/repo'
 import { RowPanel } from './RowPanel'
 
@@ -95,11 +95,7 @@ export function BriefTable({ runDate, rows }: { runDate: string; rows: ClientRow
                     <td className="px-2 py-1.5">{formatPrevDiff(row.display.close, row.display.prevClose)}</td>
                     <td className="px-2 py-1.5">{pct(row.display.changePct)}</td>
                     <td className="px-2 py-1.5">{pct(row.quote?.ytdPct ?? null)}</td>
-                    <td className="px-2 py-1.5">
-                      {row.quote?.marketCapKrwTrillion != null
-                        ? row.quote.marketCapKrwTrillion.toFixed(1)
-                        : '-'}
-                    </td>
+                    <td className="px-2 py-1.5">{formatMarketCap(row.quote?.marketCapKrwTrillion ?? null)}</td>
                     <td className="px-2 py-1.5">
                       <span className={`rounded px-2 py-0.5 text-xs ${BADGE_STYLE[row.state]}`}>
                         {rowStateLabel(row.state)}

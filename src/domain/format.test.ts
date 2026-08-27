@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatPrice, formatPrevDiff } from './format'
+import { formatPrice, formatPrevDiff, formatMarketCap } from './format'
 
 describe('formatPrice', () => {
   it('국내 종목을 샘플처럼 만든다', () => {
@@ -56,5 +56,23 @@ describe('formatPrevDiff', () => {
     expect(formatPrice(28.57, 'USD', false)).toBe('USD 28.57')
     expect(formatPrice(1905.5, 'GBP', false)).toBe('GBP 1,905.5')
     expect(formatPrice(7677.28, 'USD', true)).toBe('7,677.28')
+  })
+})
+
+describe('formatMarketCap', () => {
+  it('소수 셋째 자리에서 반올림해 둘째 자리까지 보여준다 (실제 값)', () => {
+    // 2026-08-27 실행에서 실제로 DB에 들어 있던 값
+    expect(formatMarketCap(3.0068)).toBe('3.01')
+    expect(formatMarketCap(73.3712)).toBe('73.37')
+    expect(formatMarketCap(0.3245)).toBe('0.32')
+  })
+  it('정확히 정수인 값이어도 소수 둘째 자리까지 0으로 채운다', () => {
+    expect(formatMarketCap(3)).toBe('3.00')
+  })
+  it('null이면 - 를 준다 (코스피200 헬스케어처럼 시가총액 개념이 없는 지수)', () => {
+    expect(formatMarketCap(null)).toBe('-')
+  })
+  it('0은 -와 구분된다 — 값이 0인 것과 값이 없는 것은 다른 사실이다', () => {
+    expect(formatMarketCap(0)).toBe('0.00')
   })
 })
