@@ -4,7 +4,7 @@ IR팀의 아침 브리프 작성을 자동화한다. 매 평일 07:40(KST)에 �
 지수 4, 총 23행의 시세와 뉴스를 수집하고 기사별 요약 3안을 미리 만들어 둔다.
 08:00에 담당자가 `/review/<YYYY-MM-DD>` 검수 화면에서 뉴스와 요약을 확정한다.
 
-- 시세: 네이버(국내·지수) · Twelve Data(미국) · marketstack(비미국) · KRX Open API(코스피200 헬스케어) · Frankfurter(환율)
+- 시세: 네이버(국내·지수·Wuxi) · Twelve Data(미국) · LSE(GSK) · SIX(Lonza) · marketstack(Sanofi + 비미국 4종목의 연초 기준가) · KRX Open API(코스피200 헬스케어) · Frankfurter(환율)
 - 뉴스: 네이버 검색 API → 제목 유사도 클러스터링 → 상위 3건
 - 요약: Gemini (모델 폴백 체인, 실패 시 본문 발췌로 대체)
 - 스택: Next.js 16 (App Router) · React 19 · Prisma 6 · PostgreSQL · Tailwind 4 · Vitest

@@ -42,7 +42,7 @@ Index(4): S&P500, Nasdaq, KOSPI, 코스피200 헬스케어
 | S&P500 / Nasdaq | `api.stock.naver.com/index/{.INX\|.IXIC}/basic` | 실측 완료 |
 | 코스피200 헬스케어 | KRX Open API `data-dbg.krx.co.kr/svc/apis/idx/kospi_dd_trd` | 실측 완료 — §3.3 참조 |
 | 해외 미국 5종목 | Twelve Data (무료) | 실측 완료 — `previous_close`가 샘플 엑셀과 일치 |
-| 해외 비미국 4종목 | marketstack (무료) | 실측 완료 — 4종목 전부 현지 통화로 확보 |
+| 해외 비미국 4종목 | **소스 4개로 분리** — LSE / SIX / 네이버 / marketstack | 실측 완료 — §3.2 참조. marketstack 한도 때문에 3종목을 이관했다 |
 | 환율 | `api.frankfurter.dev/v1/latest` | 실측 완료 — 무키, ECB 기준 |
 | 뉴스 | 네이버 검색 API (`openapi.naver.com/v1/search/news.json`) | 키 보유 |
 | 요약 | **Gemini 3.6 Flash** (무료 티어) | 실측 완료 — 3안 99/87/89자, 관점 구분 양호 |
@@ -55,11 +55,17 @@ Index(4): S&P500, Nasdaq, KOSPI, 코스피200 헬스케어
   연초대비 계산 불가. 국제 거래소 대부분 미지원. ToS의 professional-use 금지 조항.
 - **네이버 해외주식**: 공개 API 경로 없음. 런던·파리·취리히 미지원.
 
-### 3.2 해외 비미국 4종목 — 해결 (marketstack 무료)
+### 3.2 해외 비미국 4종목 — 소스 4개로 분리 (marketstack 한도 회피)
 
 Twelve Data 무료 플랜은 비미국 상장을 전부 차단하므로 marketstack을 병용한다.
 심볼 형식이 관건이었다. MIC 접미사(`GSK.XLON`)는 뉴욕 ADR 가격을 XLON 라벨로
 잘못 반환했고, **거래소 약칭 접미사**가 정확했다.
+
+> 아래 표는 **그 최초 조사의 기록이다(2026-08-27).** 지금 매일 도는 시세는 이 중
+> 사노피 한 종목만 marketstack 을 쓴다(호출량 절 참조). 표를 남겨 두는 이유는
+> 두 가지다: **① 비미국 4종목의 값이 샘플 엑셀과 맞는지 실제로 대조했다는 기록**이고,
+> **② MIC 접미사 함정**은 marketstack 을 다시 쓸 때 똑같이 되풀이될 문제다.
+> 사노피 심볼(`SAN.PA`)과 네 종목 전부의 **연초 기준가 심볼**이 지금도 이 표를 따른다.
 
 | 종목 | 심볼 | 실측 종가 | 샘플 엑셀 | 판정 |
 |---|---|---|---|---|
@@ -79,9 +85,81 @@ HTTPS는 무료 플랜에서 정상 동작한다(v2 실측). HTTP 전용이라�
 **주의 2 — 국제 시장 데이터에 지연이 있다.** 실측 시 미국(AAPL)은 08-26 종가였으나
 `GSK.L`은 08-24였다. 최신 영업일이 아닐 수 있으므로 응답의 `date`를 반드시 저장하고,
 검수 화면에 시세 기준일을 함께 표시해 담당자가 판단할 수 있게 한다.
+(거래소 직접 조회로 옮긴 3종목은 이 지연이 없어졌다 — 2026-08-28 실측에서 셋 다
+전영업일 종가였다. 그래도 기준일 저장·노출 규칙은 그대로 유지한다. 소스가 무엇이든
+거래일이 국내와 다를 수 있다는 사실은 변하지 않는다.)
 
-**호출량**: 4종목을 콤마로 묶어 하루 1회 = 월 22회. 무료 한도 월 100회 안에 들어온다.
-연초 종가는 연 1회 조회 후 캐시하므로 무시할 수준이다.
+**호출량 — 초안의 「월 22회」는 틀렸다. 실제로는 월 88회였다.**
+
+marketstack 무료 플랜은 **호출 수가 아니라 심볼 수**로 센다(그들의 FAQ: 요청에 티커
+5개가 들어 있으면 5회가 소비된다). 4종목을 콤마로 묶어도 한 번에 4회가 빠져나가므로
+4종목 × 22거래일 = **월 88회**이고 한도는 100이다. 마진이 사흘치뿐이라 재시도 한 번,
+수동 재수집 한 번이면 넘긴다. **2026-08-27 에 실제로 소진됐다**:
+
+    HTTP 429  {"error":{"code":"usage_limit_reached",
+                        "message":"Your monthly usage limit has been reached."}}
+
+**이후 한도 문제로 3종목을 이관했다(2026-08-28).** 매일 도는 시세만 각 거래소가 자기
+화면에 쓰는 무료 엔드포인트로 옮기고, **연 1회짜리 연초 기준가는 네 종목 모두
+marketstack 에 남긴다**(연 1회 조회 후 `YtdBasePrice` 캐시).
+
+| 종목 | 시세 소스 | 심볼 | marketstack 소비 |
+|---|---|---|---|
+| GSK | **LSE 공식 엔드포인트** `api.londonstockexchange.com` | `GSK` | 0 |
+| Sanofi | marketstack (그대로) | `SAN.PA` | 월 22 |
+| Lonza | **SIX 공식 엔드포인트** `www.six-group.com/fqs` | `LONN` | 0 |
+| Wuxi | **네이버**(이미 쓰는 소스) `api.stock.naver.com/stock/2269.HK/basic` | `2269.HK` | 0 |
+
+결과: 월 88회 → **월 22회 + 연 3~4회.** 마진 78.
+
+**심볼 표기가 소스마다 다르다**(`GSK.L`→`GSK`, `LONN.SW`→`LONN`, `2269.HK` 는 그대로).
+연초 기준가는 여전히 marketstack 이므로 `src/providers/quote/ytdBase.ts` 의
+`MARKETSTACK_YTD_SUFFIX` 가 조회 직전에 접미사를 되붙인다. **여기가 이 구성에서 가장
+조용히 깨지기 쉬운 지점이다** — 되붙이지 않으면 marketstack 이 오류가 아니라 빈 응답을
+주고 연초대비 칸만 사유 없이 빈다.
+
+**사노피를 남긴 이유.** 유로넥스트의 ajax 응답이 암호화된 블롭(`ct:`)이라 직접 쓸 수 없다.
+FT(`markets.ft.com`) HTML 스크래핑은 동작하지만 파싱이 깨지기 쉽다 — 한도 문제가 이미
+해결되는데 취약한 의존을 하나 더 만들 이유가 없다. **사노피용 새 소스를 만들지 마라.**
+
+**새 엔드포인트 실측 (2026-08-27 조사, 2026-08-28 재확인. 전부 키 불필요).**
+
+    GET https://api.londonstockexchange.com/api/gw/lse/instruments/alldata/GSK
+    → currency "GBX", lastclose 1852, netchange -47.5, percentualchange -2.500658…,
+      lastclosedate "2026-08-27T15:35:27.000"
+
+- **전일 종가는 그대로 오지 않는다. `lastclose - netchange` 로 구한다** → 1899.5.
+  검산: −47.5 / 1899.5 = −2.5007% 로 `percentualchange` 와 일치한다.
+  `previousclose`·`closeprice`·`tradingdate` 는 **null 이다. 쓰면 안 된다.**
+  `previousreferenceprice`(1899.5)도 오지만 배당락 조정 기준가일 수 있어 쓰지 않는다.
+- 통화가 **GBX(펜스)**로 온다 — 주의 1 그대로다. 표시는 펜스, 시총만 100 으로 나눈다.
+
+    GET https://www.six-group.com/fqs/ref.json
+        ?select=ClosingPrice,PreviousClosingPrice,MarketDate,Currency&where=ValorSymbol=LONN
+    → colNames ["ClosingPrice","PreviousClosingPrice","MarketDate","Currency"],
+      rowData [[588.4, 587.8, 20260827, "CHF"]], totalRows 1, delayMinutes 15
+
+- **`rowData` 는 값만 담은 배열이다. 위치가 아니라 `colNames` 로 인덱스를 찾는다** —
+  select 순서가 바뀌면 종가와 전일 종가가 조용히 뒤바뀐다.
+- `totalRows` 가 1 이 아니면 실패로 다룬다(없는 심볼은 오류가 아니라 `totalRows: 0`).
+- 없는 필드명을 select 하면 **HTML 오류 본문**이 온다
+  (`Invalid name 'ClosingDate' in select parameter`, 실측 HTTP 400). JSON 파싱 실패도 실패로 다룬다.
+  `ClosingDate`·`LastTradedDateTime` 은 없는 이름이다 — `MarketDate` 를 쓴다.
+- 15분 지연은 무관하다(07:40 KST 실행 시 취리히는 이미 마감). 값 교차 검증: SIX 588.4 = FT 588.40.
+
+    GET https://api.stock.naver.com/stock/2269.HK/basic
+    → closePrice "50.500", compareToPreviousClosePrice "-0.250",
+      currencyType.code "HKD", localTradedAt "2026-08-27T16:00:00+08:00"
+
+- **값이 문자열이다.** 기존 네이버 파서와 같은 규칙으로 숫자화한다.
+  전일 종가 = `closePrice - compareToPreviousClosePrice`.
+- `asOf` 는 `localTradedAt` 앞 10자다. **`new Date()` 로 파싱하지 않는다** —
+  타임존이 KST 로 옮겨지며 날짜가 밀린다.
+- `GSK.L`·`SAN.PA`·`LONN.SW` 는 네이버에 없다(HTTP 409 `Not Exist Master`).
+  접미사 없는 `GSK`·`SAN` 은 **미국 ADR 이라 값이 다르다. 쓰면 안 된다.**
+
+**등락률은 네 소스 중 어느 것에서도 받아 쓰지 않는다.** 전 종목을 `domain/calc.ts` 의
+`changePct` 로 계산한다 — 소스별 반올림 규칙이 다르면 그 행만 끝자리가 어긋난다.
 
 무료 한도 요약(다른 소스): Twelve Data 일 800회·분당 8크레딧, **KRX Open API 일 10,000회**,
 네이버 검색 API 일 25,000회. KRX 실사용은 하루 1~2회(휴장일이면 거래일을 찾느라 최대 10회)
@@ -186,8 +264,10 @@ HTTP·인증 오류는 휴장과 구분해 즉시 던진다(401 을 휴장처럼
 **수정주가는 문제가 아니었다.** 표본 2개로 규칙을 단정하지 말 것.
 
 소스: 국내는 `api.finance.naver.com/siseJson.naver`의 전년 12월 마지막 거래일 종가,
-미국은 Twelve Data `time_series`, 비미국은 marketstack `/eod`. 모두 전년 12월 하순 창을
-조회해 마지막 거래일의 종가를 취한다. 연 1회 호출 후 캐시하므로 한도에 영향이 없다.
+미국은 Twelve Data `time_series`, 비미국 4종목은 **매일 도는 시세 소스와 무관하게 전부**
+marketstack `/eod`(§3.2). 모두 전년 12월 하순 창을 조회해 마지막 거래일의 종가를 취한다.
+연 1회 호출 후 캐시하므로 한도에 영향이 없다 — 이관 후 marketstack 소비가 연 3~4회로
+떨어진 것이 이 캐시 덕분이다.
 
 ## 4. 아키텍처
 
@@ -197,7 +277,8 @@ HTTP·인증 오류는 휴장과 구분해 즉시 던진다(401 을 휴장처럼
     src/
       domain/          순수 함수. 등락률·YTD·조원환산·표시 포맷. DB/네트워크 무관
       providers/
-        quote/         QuoteProvider  ─ naver.ts, twelvedata.ts, marketstack.ts, krx.ts
+        quote/         QuoteProvider  ─ naver.ts, twelvedata.ts, marketstack.ts, krx.ts,
+                                        lse.ts, six.ts
         news/          NewsProvider   ─ naver.ts
         summarize/     Summarizer     ─ gemini.ts  (후일 ollama.ts)
         fx/            FxProvider     ─ frankfurter.ts
@@ -433,6 +514,7 @@ Index 행도 개별 종목과 동일하게 처리한다. 샘플에서 Nasdaq 칸
 | 스케줄 | Vercel Cron | crontab + curl |
 | LLM | Gemini Flash (무료) | 유지 또는 온프레미스 모델로 교체 |
 | 시세(코스피200 헬스케어) | KRX Open API (무료, `KRX_AUTH_KEY`) | 유지. **이용약관 확인 필요** — 아래 참조 |
+| 시세(GSK·Lonza) | LSE·SIX 공식 엔드포인트 (무료, 키 없음) | 유지. 방화벽 허용만 추가하면 된다 |
 
 **애플리케이션 코드는 변경하지 않는다.** 그 목표는 유효하고, 실제로 그렇게 됐다
 (Provider 격리와 HTTP 트리거를 택한 이유가 이것이다).
@@ -448,7 +530,8 @@ cron 등록)"은 **DB 쪽이 실제보다 가볍게 적혀 있다.** 구현 후 
 Postgres 전용 구문·확장·`::` 캐스팅·`ILIKE`·배열 타입 없음).
 
 **방화벽 아웃바운드 허용 대상**(전부 HTTPS/443). 전체 목록과 용도는 `docs/운영.md` §3.5에 있다.
-이번에 `data-dbg.krx.co.kr`(KRX Open API — 코스피200 헬스케어 시세·연초 기준가)가 추가됐다.
+`data-dbg.krx.co.kr`(KRX Open API — 코스피200 헬스케어 시세·연초 기준가)에 더해
+`api.londonstockexchange.com`(GSK 시세)와 `www.six-group.com`(Lonza 시세)가 추가됐다(§3.2).
 
 **KRX 이용약관 주의.** KRX Open API 약관에는 상업적 이익 추구를 금지하는 조항이 있다.
 사내 IR 보고용 내부 활용은 데이터 재판매가 아니지만, **사내 이관 전에 법무·준법 확인을
@@ -473,13 +556,22 @@ Postgres 전용 구문·확장·`::` 캐스팅·`ILIKE`·배열 타입 없음).
    KRX 가 따로 제공하는 Open API 가 아니었다.
    남은 조건: `KRX_AUTH_KEY` 환경 변수와 `data-dbg.krx.co.kr` 아웃바운드 허용,
    그리고 사내 이관 전 KRX 이용약관 확인(§11).
-2. **marketstack 국제 시장 데이터 지연** — 해결됐으나(§3.2) 미국 대비 1~2영업일
-   늦은 종가가 올 수 있다. 응답의 `date`를 저장하고 검수 화면에 기준일을 노출한다.
-3. **런던 펜스 호가 보정** — `GSK.L`은 GBX인데 `price_currency`가 `GBP`로 온다.
-   시총 계산에서 100으로 나누지 않으면 100배 오차가 난다(§3.2).
-   `Instrument.priceDivisorForMarketCap`으로 처리하고 테스트로 고정한다.
-4. **네이버 비공개 엔드포인트 의존** — 국내 시세·지수는 공식 API가 아니다.
-   스키마 변경 시 즉시 깨진다. Provider 격리로 수정 범위를 한 파일에 가둔다.
+2. **국제 시장 데이터 지연** — 해결됐으나(§3.2) 미국 대비 1~2영업일 늦은 종가가
+   올 수 있다(marketstack 에서 관측했다. 거래소 직접 조회로 옮긴 3종목은 2026-08-28
+   실측에서 전영업일 종가였다). 소스와 무관하게 응답의 기준일을 저장하고 검수 화면에
+   노출한다.
+3. **런던 펜스 호가 보정** — LSE 는 통화를 `GBX` 로 알려 주고 marketstack 은 같은
+   가격에 `GBP` 라벨을 붙였다. **소스가 무엇이든 가격 단위는 펜스다.** 시총 계산에서
+   100으로 나누지 않으면 100배 오차가 난다(§3.2). `Instrument.priceDivisorForMarketCap`
+   으로 처리하고 테스트로 고정한다 — **시세 소스를 옮길 때 이 값이 함께 사라지기 쉽다.**
+4. **비공개 엔드포인트 의존(네이버·LSE·SIX)** — 국내 시세·지수(`m.stock.naver.com`,
+   `api.stock.naver.com`)는 공식 API가 아니다. **2026-08-28 이관으로 같은 성격의 의존이
+   셋 늘었다**: GSK(`api.londonstockexchange.com`), Lonza(`www.six-group.com/fqs`),
+   Wuxi(네이버 해외주식). 셋 다 각 사이트가 **자기 화면에 쓰는** 엔드포인트이지
+   문서화된 공개 API가 아니다 — 예고 없이 바뀔 수 있다(§3.2).
+   스키마 변경 시 즉시 깨진다. Provider 격리로 수정 범위를 한 파일에 가둔다:
+   `naver.ts` / `lse.ts` / `six.ts`. 깨지면 그 행만 실패로 뜨고(사유가 화면에 남는다)
+   다른 행은 영향이 없다 — 소스를 넷으로 쪼갠 부수 효과다.
 6. **뉴스 본문 크롤링 안정성** — 원 언론사 링크는 구조가 제각각이다.
    네이버뉴스 링크 우선, 실패 시 description 폴백으로 완화한다.
 
