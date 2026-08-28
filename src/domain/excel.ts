@@ -100,7 +100,19 @@ export function excelNewsCells(row: {
     return { title: content.title, summary: content.summary ?? '' }
   }
 
-  // kind: 'none'(기사 없음) | 'omitted'(담당자가 뺌) | 'label'(조회 실패 등)
+  // 조회 실패는 `-` 로 내보내면 안 된다. 이 파일은 전 임원에게 메일로 나가는 최종
+  // 산출물이고, 거기서 `-` 는 **"오늘 이 회사 뉴스가 없었다"는 사실 주장**이다.
+  // 실제로는 검색을 못 해서 모르는 것이다 — 담당자가 직접 찾아봐야 하는 행이,
+  // 아무것도 할 일이 없는 행과 파일에서 똑같이 보이면 안 된다. 화면에서 없앤
+  // 거짓말을 파일에서 되살리지 않는다(repo.ts 의 NEWS_FAILED 주석과 같은 이유).
+  //
+  // STALE_SELECTION 도 kind:'label' 이지만 여기 오지 않는다 —
+  // isUnconfirmedForExport 가 위에서 공란으로 걸러낸다(미확정이지 부재가 아니다).
+  if (content.kind === 'label') return { title: content.text, summary: '' }
+
+  // kind: 'none'(기사 없음) | 'omitted'(담당자가 뺌). 둘 다 "실을 것이 없다"로
+  // 결정된 상태라 원본 엑셀과 같이 `-` 다. 화면에서는 「싣지 않음」 태그로 갈리지만,
+  // 최종 산출물에서는 결과가 같다 — 왜 비었는지는 메일 받는 사람의 관심사가 아니다.
   return { title: DASH, summary: '' }
 }
 
