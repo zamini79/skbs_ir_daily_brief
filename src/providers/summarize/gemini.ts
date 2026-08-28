@@ -1,6 +1,7 @@
 import { charLength, truncateAtSentence } from '@/domain/text'
 import { kstDateString } from '@/domain/date'
 import { buildPrompt, MAX_SUMMARY_CHARS } from './prompt'
+import { isTransientNetworkError } from '../transientNetwork'
 
 /**
  * 요약 모델 폴백 체인.
@@ -104,8 +105,8 @@ export const MODEL_CHAIN_ENTRIES: readonly ChainEntry[] = [
       '형제 모델 gemma-4-26b-a4b-it 을 배제한 것과 기준이 다르지 않다 — 그쪽은 실패가 ' +
       '**조용해서** 쓰레기가 정상 요약처럼 화면에 오른다(EXCLUDED_MODELS 참고). ' +
       '앞으로 옮기지 마라: 실패율이 이만큼인 모델이 앞에 오면 평상시 폴백이 늘어난다. ' +
-      '알려진 개선 여지 — 파싱 전에 코드펜스를 벗겨내면 이 4회는 되살아난다. 다만 그건 ' +
-      '체인 전체의 파싱 경로를 바꾸는 별도 결정이라 여기서 하지 않았다.',
+      '코드펜스는 이제 복구한다(stripCodeFence) — 정상 파싱이 실패했을 때만 도는 ' +
+      '경로라 앞의 7개는 지나가지 않고, 복구하면 경고 로그가 남는다.',
   },
 ] as const
 
@@ -186,17 +187,20 @@ function resetExhaustedModelsIfNewDay(): void {
   }
 }
 
-type FailureClass = 'quota' | 'unavailable' | 'other'
-
 /**
- * HTTP 실패를 분류한다. 상태 코드가 최우선(authoritative) 신호다 — 429/503/500
- * 은 그 자체로 확정적이라서 본문은 보지 않는다. 본문 문자열(RESOURCE_EXHAUSTED/
- * UNAVAILABLE)은 상태 코드가 이 셋 중 무엇도 아니어서 확정할 수 없을 때만
- * 보조로 쓴다. 상태를 먼저 확정 짓지 않고 문자열만으로 판단하면, 예를 들어
- * 503 응답 본문에 우연히 다른 문구가 섞여 들어와도 오분류할 위험이 있다.
- * 순서를 이렇게 두면 구글이 문구를 바꿔도 최악의 경우 "놓칠" 뿐, 상태 코드가
- * 이미 확정한 답을 문자열이 뒤집는 일은 없다.
+ * 체인을 어떻게 다룰지 정하는 실패 분류.
+ *
+ *  - `quota`       그 모델의 하루치가 끝났다 → 소진 기록 + 다음 모델
+ *  - `unavailable` 구글 쪽 일시적 장애(503/500) → 기록 없이 다음 모델
+ *  - `no-response` **응답 자체가 없었다**(타임아웃·네트워크) → 기록 없이 다음 모델
+ *  - `other`       세이프티 차단·인증 오류 등 → 던진다(다른 모델로 가려지면 안 된다)
+ *
+ * `unavailable` 과 `no-response` 는 체인에서 하는 일이 같지만 **구분해서 남긴다.**
+ * 전부 실패했을 때 "구글이 503 을 줬다"와 "우리가 응답을 못 받았다"는 운영자가
+ * 볼 곳이 다르다 — 전자는 기다리는 문제고 후자는 네트워크·타임아웃 설정 문제다.
  */
+type FailureClass = 'quota' | 'unavailable' | 'no-response' | 'other'
+
 /**
  * 외부 응답 문자열에서 API 키를 지운다. 키는 쿼리스트링(`?key=...`)으로 나가므로
  * 오류 본문이 요청 URL 을 되비추면 키가 그대로 딸려 온다. 이 문자열은
@@ -214,12 +218,71 @@ export function redactKey(text: string, key: string): string {
   return out
 }
 
-function classifyFailure(status: number, detail: string): FailureClass {
+/**
+ * **응답을 받았을 때**의 실패를 분류한다. 상태 코드가 최우선(authoritative)
+ * 신호다 — 429/503/500 은 그 자체로 확정적이라서 본문은 보지 않는다. 본문
+ * 문자열(RESOURCE_EXHAUSTED/UNAVAILABLE)은 상태 코드가 이 셋 중 무엇도 아니어서
+ * 확정할 수 없을 때만 보조로 쓴다. 상태를 먼저 확정 짓지 않고 문자열만으로
+ * 판단하면, 예를 들어 503 응답 본문에 우연히 다른 문구가 섞여 들어와도 오분류할
+ * 위험이 있다. 순서를 이렇게 두면 구글이 문구를 바꿔도 최악의 경우 "놓칠" 뿐,
+ * 상태 코드가 이미 확정한 답을 문자열이 뒤집는 일은 없다.
+ */
+export function classifyFailure(status: number, detail: string): FailureClass {
   if (status === 429) return 'quota'
   if (status === 503 || status === 500) return 'unavailable'
   if (detail.includes('RESOURCE_EXHAUSTED')) return 'quota'
   if (detail.includes('UNAVAILABLE')) return 'unavailable'
   return 'other'
+}
+
+/**
+ * **`fetch` 가 던졌을 때**(응답 자체가 없을 때)의 실패를 분류한다.
+ *
+ * 예전에는 이 경로가 아예 없었다 — `fetch` 가 던지면 예외가 for 루프 밖으로
+ * 그대로 새어나가 **체인 전체가 거기서 끝났다.** 3번 모델에서 타임아웃 한 번이
+ * 나면 남은 5개를 시도조차 못 하고 그 후보가 발췌 폴백으로 떨어졌다. 체인이
+ * 8개로 길어지면서 그 손실이 커졌다.
+ *
+ * 타임아웃은 기능적으로 503 과 같다(그 모델이 지금 응답을 못 준다). 그래서
+ * 503 과 같은 규칙으로 다룬다 — **다음 모델로 넘어가되 소진으로 기록하지
+ * 않는다.** 순간적인 결함 한 번으로 멀쩡한 모델을 남은 실행 내내 제외시키면
+ * 안 되기 때문이다(exhaustedModels 주석과 같은 근거).
+ *
+ * 판정 기준은 시세 경로와 **한 벌을 공유한다**(`../transientNetwork`).
+ * 일시적 네트워크 장애가 아닌 예외는 `other` 다 — 던져야 진단이 가려지지 않는다.
+ */
+function classifyThrownFailure(error: unknown): FailureClass {
+  return isTransientNetworkError(error) ? 'no-response' : 'other'
+}
+
+/**
+ * 모델이 JSON 을 ```` ```…``` ```` 코드펜스로 감싸 보냈으면 그 안쪽을 꺼낸다.
+ * 감싸지 않았으면 `null`.
+ *
+ * **평상시 경로가 아니다.** 호출부는 정상 `JSON.parse` 를 먼저 시도하고, 그것이
+ * 실패했을 때만 이 함수를 부른다. 그래서 규약을 지키는 모델(체인의 gemini 7개)은
+ * 이 코드를 한 번도 지나가지 않는다 — 위험은 규약을 어기는 모델 자리에만 남는다.
+ *
+ * 실측(2026-08-28, `gemma-4-31b-it`): `responseMimeType` 이 `application/json`
+ * 인데도 응답이 이렇게 왔다.
+ *
+ *     ' {\n  "numeric": "…",\n  "context": "…"\n}\n```'
+ *
+ * **여는 펜스 없이 닫는 펜스만 붙는다**(실측 표본 3개 모두). 여는 펜스가 함께
+ * 오는 형태(```` ```json ```` 포함)도 같이 처리하지만, 실제로 본 것은 닫는 펜스뿐인
+ * 쪽이다. 그래서 "여는 펜스가 있어야만 벗긴다"로 만들면 실제 실패를 못 잡는다.
+ *
+ * 벗겨낸 뒤에도 파싱에 실패하면 호출부가 **그대로 실패시킨다.** 무리해서 건져내지
+ * 않는다 — 깨진 응답을 억지로 살리면 그게 정상 요약처럼 화면에 오른다.
+ */
+export function stripCodeFence(text: string): string | null {
+  if (!text.includes('```')) return null
+  const inner = text
+    .replace(/^\s*```[A-Za-z0-9_+-]*[ \t]*\r?\n?/, '')
+    .replace(/\r?\n?[ \t]*```[ \t]*$/, '')
+    .trim()
+  if (inner === '' || inner === text.trim()) return null
+  return inner
 }
 
 export type SummarySet = {
@@ -306,15 +369,25 @@ export async function summarize(title: string, body: string): Promise<SummarySet
 
   // 이번 summarize() 호출 안에서 건너뛴 모델과 사유를 기록해 둔다. 전부
   // 실패하면 "무엇이 왜 실패했는지"를 07:40 무인 실행에서도 알 수 있어야 한다.
-  const skipped: Array<{ model: string; reason: 'quota' | 'unavailable' }> = []
+  const skipped: Array<{ model: string; reason: 'quota' | 'unavailable' | 'no-response' }> = []
 
   for (const model of candidates) {
-    const res = await fetch(`${endpointFor(model)}?key=${key}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
-      signal: AbortSignal.timeout(60_000),
-    })
+    let res: Response
+    try {
+      res = await fetch(`${endpointFor(model)}?key=${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+        signal: AbortSignal.timeout(60_000),
+      })
+    } catch (e) {
+      // 응답 자체가 없었다. 예전에는 이 예외가 루프 밖으로 새어나가 체인 전체를
+      // 여기서 끝냈다 — 남은 모델을 시도조차 못 했다.
+      if (classifyThrownFailure(e) !== 'no-response') throw e
+      // 타임아웃·네트워크 오류는 503 과 같은 규칙이다: 기록하지 않고 다음 모델로.
+      skipped.push({ model, reason: 'no-response' })
+      continue
+    }
 
     if (!res.ok) {
       // 오류 본문에는 요청 URL 이 되비쳐 오는 경우가 있고, 그 URL 에는 `?key=` 가 붙어
@@ -350,11 +423,31 @@ export async function summarize(title: string, body: string): Promise<SummarySet
     try {
       parsed = JSON.parse(text)
     } catch {
-      const finishReason = (payload as any)?.candidates?.[0]?.finishReason
-      const finishNote = finishReason && finishReason !== 'STOP' ? ` finishReason=${finishReason}.` : ''
-      throw new Error(
-        `gemini: "${title}" 요약 응답이 JSON이 아니다.${finishNote} 원문: ${text.slice(0, 200)}`,
+      // 정상 파싱이 실패했을 때**만** 코드펜스를 의심한다. 규약을 지키는 모델은
+      // 위에서 이미 끝났으므로 이 아래를 지나가지 않는다.
+      const unfenced = stripCodeFence(text)
+      let recovered: { numeric: string; context: string } | null = null
+      if (unfenced !== null) {
+        try {
+          recovered = JSON.parse(unfenced)
+        } catch {
+          recovered = null // 벗겨도 안 되면 그대로 실패다. 무리해서 건져내지 않는다.
+        }
+      }
+      if (recovered === null) {
+        const finishReason = (payload as any)?.candidates?.[0]?.finishReason
+        const finishNote = finishReason && finishReason !== 'STOP' ? ` finishReason=${finishReason}.` : ''
+        throw new Error(
+          `gemini: "${title}" 요약 응답이 JSON이 아니다.${finishNote} 원문: ${text.slice(0, 200)}`,
+        )
+      }
+      // **조용히 고쳐주지 않는다.** 어느 모델이 규약을 어기는지가 로그에 남아야
+      // 다음 사람이 안다 — 안 남기면 그 모델은 계속 그래도 아무도 모른다.
+      // 기사 제목은 싣지 않는다(로그 규칙: providers 전반). 모델 이름이면 충분하다.
+      console.warn(
+        `[gemini] ${model}: responseMimeType 이 application/json 인데 응답을 코드펜스로 감쌌다. 벗겨내고 파싱했다.`,
       )
+      parsed = recovered
     }
 
     return {
@@ -364,10 +457,15 @@ export async function summarize(title: string, body: string): Promise<SummarySet
     }
   }
 
+  // 사유를 범주별로 갈라 적는다. 07:40 무인 실행에서 운영자가 볼 곳이 서로 다르다:
+  // 쿼터는 기다리는 문제, 503 은 구글 쪽 문제, 응답 없음은 우리 쪽 네트워크·타임아웃
+  // 문제다. 전부 타임아웃인 날에 "쿼터가 소진됐다"고 말하면 엉뚱한 데를 보게 된다.
   const quotaExhausted = skipped.filter(s => s.reason === 'quota').map(s => s.model)
   const unavailable = skipped.filter(s => s.reason === 'unavailable').map(s => s.model)
+  const noResponse = skipped.filter(s => s.reason === 'no-response').map(s => s.model)
   const detailParts: string[] = []
   if (quotaExhausted.length > 0) detailParts.push(`쿼터 소진: ${quotaExhausted.join(', ')}`)
   if (unavailable.length > 0) detailParts.push(`일시적 이용 불가: ${unavailable.join(', ')}`)
+  if (noResponse.length > 0) detailParts.push(`응답 없음(타임아웃·네트워크): ${noResponse.join(', ')}`)
   throw new Error(`gemini: 모든 모델이 실패했다 (${detailParts.join(' / ')})`)
 }

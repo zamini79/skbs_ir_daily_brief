@@ -28,6 +28,8 @@
  * 느린 정상"으로 보인다 — 매일 3번씩 재시도로 겨우 붙는 상태를 운영자가 알아야 한다.
  */
 
+import { isTransientNetworkError } from '../transientNetwork'
+
 /** 재시도 판단용 실패 분류. */
 export type QuoteFailureKind = 'rate-limit' | 'transient' | 'permanent'
 
@@ -82,7 +84,6 @@ const realSleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, 
  */
 export function classifyQuoteFailure(error: unknown): QuoteFailureKind {
   const message = error instanceof Error ? error.message : String(error)
-  const name = error instanceof Error ? error.name : ''
 
   // **상태 코드보다 먼저 본다.** 한도 소진과 분당 속도 제한이 같은 429 를 쓰므로
   // 상태 코드를 먼저 보면 소진을 영영 가려낼 수 없다(위 QUOTA_EXHAUSTED_PATTERNS 참고).
@@ -103,8 +104,9 @@ export function classifyQuoteFailure(error: unknown): QuoteFailureKind {
   if (/\b429\b/.test(message)) return 'rate-limit'
 
   // fetch 자체가 던진 경우 — 응답이 없었으므로 상태 코드도 없다.
-  if (name === 'TimeoutError' || name === 'AbortError') return 'transient'
-  if (/fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up/i.test(message)) return 'transient'
+  // 판정은 요약 경로(summarize/gemini.ts)와 **같은 한 벌**을 쓴다. 목록이 갈라지면
+  // "시세는 재시도하는데 요약은 안 하는" 상태가 조용히 생긴다.
+  if (isTransientNetworkError(error)) return 'transient'
 
   return 'permanent'
 }

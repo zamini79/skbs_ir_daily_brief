@@ -6,6 +6,8 @@ import {
   MODEL_CHAIN,
   MODEL_CHAIN_ENTRIES,
   EXCLUDED_MODELS,
+  stripCodeFence,
+  classifyFailure,
   exhaustedModels,
   redactKey,
 } from './gemini'
@@ -489,5 +491,221 @@ describe('체인 순서 정책', () => {
   it('체인이 넓어졌다 — 확장 전 5개보다 많다', () => {
     // 파트 A 의 목적 자체(모델별 일일 한도를 합산해 발췌 폴백을 줄인다)를 지킨다.
     expect(MODEL_CHAIN.length).toBeGreaterThan(5)
+  })
+})
+
+describe('stripCodeFence', () => {
+  const JSON_BODY = '{"numeric":"수치임","context":"배경임"}'
+
+  it('실측 형태 — 여는 펜스 없이 닫는 펜스만 붙은 응답을 벗긴다', () => {
+    // gemma-4-31b-it 이 실제로 이렇게 보냈다(2026-08-28, 표본 3개 모두 이 형태).
+    const raw = ' {\n  "numeric": "수치임",\n  "context": "배경임"\n}\n```'
+    const inner = stripCodeFence(raw)
+    expect(inner).not.toBeNull()
+    expect(JSON.parse(inner!)).toEqual({ numeric: '수치임', context: '배경임' })
+  })
+
+  it('여닫는 펜스가 모두 있는 형태도 벗긴다', () => {
+    expect(JSON.parse(stripCodeFence('```\n' + JSON_BODY + '\n```')!)).toEqual({
+      numeric: '수치임', context: '배경임',
+    })
+  })
+
+  it('언어 태그가 붙은 펜스(```json)도 벗긴다', () => {
+    expect(JSON.parse(stripCodeFence('```json\n' + JSON_BODY + '\n```')!)).toEqual({
+      numeric: '수치임', context: '배경임',
+    })
+  })
+
+  it('펜스가 없으면 null 이다 — 평상시 경로를 건드리지 않는다', () => {
+    expect(stripCodeFence(JSON_BODY)).toBeNull()
+    expect(stripCodeFence('죄송합니다, 요약할 수 없습니다')).toBeNull()
+  })
+
+  it('펜스만 있고 안이 비면 null 이다', () => {
+    expect(stripCodeFence('```\n\n```')).toBeNull()
+  })
+})
+
+describe('코드펜스 복구 (정상 파싱이 실패했을 때만)', () => {
+  function respond(text: string) {
+    return new Response(JSON.stringify({
+      candidates: [{ finishReason: 'STOP', content: { parts: [{ text }] } }],
+    }), { status: 200 })
+  }
+
+  it('펜스로 감싼 응답을 벗겨내고 요약을 돌려준다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      respond(' {\n  "numeric": "수치임",\n  "context": "배경임"\n}\n```')))
+
+    const r = await summarize('제목', '본문')
+
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[0] })
+  })
+
+  it('언어 태그가 붙은 펜스도 복구한다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      respond('```json\n{"numeric":"수치임","context":"배경임"}\n```')))
+
+    expect(await summarize('제목', '본문')).toEqual({
+      numeric: '수치임', context: '배경임', model: MODEL_CHAIN[0],
+    })
+  })
+
+  it('복구했으면 어느 모델이 규약을 어겼는지 경고 로그를 남긴다', async () => {
+    // 조용히 고쳐주면 그 모델이 계속 그래도 아무도 모른다.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      respond('```json\n{"numeric":"수치임","context":"배경임"}\n```')))
+
+    await summarize('제목', '본문')
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain(MODEL_CHAIN[0])
+    warn.mockRestore()
+  })
+
+  it('펜스는 있는데 안쪽이 깨져 있으면 지금처럼 실패한다 — 무리해서 건져내지 않는다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      respond('```json\n{"numeric":"수치임", "context":\n```')))
+
+    await expect(summarize('제목', '본문')).rejects.toThrow(/JSON이 아니다/)
+  })
+
+  it('펜스가 아닌 이유로 깨진 응답은 예전 그대로 실패한다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => respond('죄송합니다, 요약할 수 없습니다')))
+
+    await expect(summarize('제목', '본문')).rejects.toThrow(/JSON이 아니다/)
+  })
+
+  it('정상 JSON 은 복구 경로를 지나가지 않는다 (경고 로그 없음)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn(async () => respond('{"numeric":"수치임","context":"배경임"}')))
+
+    const r = await summarize('제목', '본문')
+
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[0] })
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+})
+
+describe('fetch 가 던졌을 때 (타임아웃·네트워크)', () => {
+  function timeoutError() {
+    const e = new Error('The operation was aborted due to timeout')
+    e.name = 'TimeoutError'
+    return e
+  }
+  function okResponse() {
+    return new Response(JSON.stringify({
+      candidates: [{ content: { parts: [
+        { text: JSON.stringify({ numeric: '수치임', context: '배경임' }), thoughtSignature: 'x' },
+      ] } }],
+    }), { status: 200 })
+  }
+
+  it('첫 모델이 타임아웃이면 다음 모델로 넘어가 정상 응답을 돌려준다', async () => {
+    // 예전에는 예외가 루프 밖으로 새어나가 체인 전체가 여기서 끝났다.
+    const calledUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calledUrls.push(url)
+      if (url.includes(MODEL_CHAIN[0])) throw timeoutError()
+      return okResponse()
+    }))
+
+    const r = await summarize('제목', '본문')
+
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[1] })
+    expect(calledUrls).toHaveLength(2)
+    expect(calledUrls[1]).toContain(MODEL_CHAIN[1])
+  })
+
+  it('네트워크 오류(fetch failed)도 다음 모델로 넘어간다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes(MODEL_CHAIN[0])) throw new TypeError('fetch failed')
+      return okResponse()
+    }))
+
+    const r = await summarize('제목', '본문')
+
+    expect(r.model).toBe(MODEL_CHAIN[1])
+  })
+
+  it('타임아웃은 소진으로 기록하지 않는다 — 다음 호출에서 맨 앞부터 다시 시도한다', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes(MODEL_CHAIN[0])) throw timeoutError()
+      return okResponse()
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await summarize('제목1', '본문1')
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(false)
+
+    fetchMock.mockClear()
+    await summarize('제목2', '본문2')
+
+    expect(fetchMock.mock.calls[0][0]).toContain(MODEL_CHAIN[0])
+  })
+
+  it('전부 타임아웃이면 체인 전체를 시도하고, 사유가 쿼터 소진과 구분된다', async () => {
+    // 전부 타임아웃인 날에 "쿼터가 소진됐다"고 말하면 운영자가 엉뚱한 데를 본다.
+    const fetchMock = vi.fn(async () => { throw timeoutError() })
+    vi.stubGlobal('fetch', fetchMock)
+
+    let error: unknown
+    try {
+      await summarize('제목', '본문')
+    } catch (e) {
+      error = e
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(MODEL_CHAIN.length)
+    const message = (error as Error).message
+    expect(message).toContain('응답 없음')
+    expect(message).not.toContain('쿼터 소진')
+    for (const model of MODEL_CHAIN) expect(message).toContain(model)
+  })
+
+  it('타임아웃과 429 가 섞이면 두 범주를 갈라 적는다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes(MODEL_CHAIN[0])) {
+        return new Response(JSON.stringify({ error: { status: 'RESOURCE_EXHAUSTED' } }), { status: 429 })
+      }
+      throw timeoutError()
+    }))
+
+    let error: unknown
+    try {
+      await summarize('제목', '본문')
+    } catch (e) {
+      error = e
+    }
+
+    const message = (error as Error).message
+    expect(message).toContain('쿼터 소진')
+    expect(message).toContain('응답 없음')
+  })
+
+  it('네트워크 장애가 아닌 예외는 그대로 던진다 — 다음 모델로 가려지지 않는다', async () => {
+    // 버그성 예외(예: 직렬화 실패)가 조용히 체인을 타고 넘어가면 진단이 사라진다.
+    const fetchMock = vi.fn(async () => { throw new TypeError('x is not a function') })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(summarize('제목', '본문')).rejects.toThrow(/x is not a function/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('classifyFailure', () => {
+  it('상태 코드를 본문보다 우선한다', () => {
+    expect(classifyFailure(429, 'UNAVAILABLE')).toBe('quota')
+    expect(classifyFailure(503, 'RESOURCE_EXHAUSTED')).toBe('unavailable')
+  })
+  it('상태 코드로 확정할 수 없으면 본문을 본다', () => {
+    expect(classifyFailure(400, 'RESOURCE_EXHAUSTED')).toBe('quota')
+    expect(classifyFailure(400, 'UNAVAILABLE')).toBe('unavailable')
+  })
+  it('그 밖은 other 다 — 체인을 넘기지 않고 던지는 쪽이 안전하다', () => {
+    expect(classifyFailure(401, 'API key not valid')).toBe('other')
   })
 })
