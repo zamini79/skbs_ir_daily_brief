@@ -20,9 +20,10 @@ import {
   buildFallbackSummaries,
   briefRunStartData,
 } from './collectHelpers'
+import { SUMMARY_VARIANTS } from '@/providers/summarize/prompt'
 
 const LONG_BODY = 'x'.repeat(30)
-const okSummary = { numeric: 'n', context: 'c', implication: 'i' }
+const okSummary = { numeric: 'n', context: 'c' }
 
 describe('resolveAliases', () => {
   it('콤마로 구분된 별칭을 배열로 만든다', () => {
@@ -588,11 +589,35 @@ describe('buildFallbackSummaries', () => {
   const LONG_SENTENCE_BODY = Array.from({ length: 30 }, (_, i) => `이것은 문장 번호 ${i + 1}입니다.`).join(' ')
   const SNIPPET = '이것은 검색 스니펫으로 본문과는 전혀 다른 문장입니다.'
 
-  it('긴 본문에서 서로 다른 세 구간(선두/다음/스니펫)을 뽑는다', () => {
+  it('긴 본문에서 서로 다른 두 구간(선두/다음)을 뽑는다 — 정상 요약과 개수가 같다', () => {
     const r = buildFallbackSummaries(LONG_SENTENCE_BODY, SNIPPET)
-    expect(r).toHaveLength(3)
-    expect(new Set(r).size).toBe(3) // 셋 다 다르다
-    expect(r[2]).toBe(SNIPPET)
+    expect(r).toHaveLength(2)
+    expect(new Set(r).size).toBe(2) // 둘 다 다르다
+    // 상한이 2라서 스니펫(세 번째 슬라이스)까지는 가지 않는다.
+    expect(r).not.toContain(SNIPPET)
+  })
+
+  it('개수 상한이 SUMMARY_VARIANTS 와 묶여 있다 — 폴백만 개수가 달라지지 않는다', () => {
+    // 발췌만 3안이 되면 담당자는 그 차이를 "요약 실패"로 읽지 않는다 — 그냥 행마다
+    // 개수가 다른 화면으로 보인다. 이 테스트는 상한을 숫자로 되돌리는 변경을 잡는다.
+    const inputs: Array<[string, string]> = [
+      [LONG_SENTENCE_BODY, SNIPPET],
+      [LONG_SENTENCE_BODY, ''],
+      ['짧은 본문 하나뿐인 문장입니다', SNIPPET],
+      ['', SNIPPET],
+    ]
+    for (const [body, snippet] of inputs) {
+      expect(buildFallbackSummaries(body, snippet).length).toBeLessThanOrEqual(SUMMARY_VARIANTS.length)
+    }
+  })
+
+  it('폴백 개수가 정상 경로의 variant 개수를 넘지 않아, collect.ts 의 인덱스 매핑이 항상 성립한다', () => {
+    // collect.ts 는 `variant: SUMMARY_VARIANTS[i].variant` 로 저장한다.
+    // 폴백이 더 많으면 SUMMARY_VARIANTS[i] 가 undefined 가 되어 저장이 터진다.
+    const r = buildFallbackSummaries(LONG_SENTENCE_BODY, SNIPPET)
+    for (let i = 0; i < r.length; i++) {
+      expect(SUMMARY_VARIANTS[i]).toBeDefined()
+    }
   })
 
   it('각 슬라이스는 100 코드포인트를 넘지 않는다', () => {
@@ -638,6 +663,14 @@ describe('buildFallbackSummaries', () => {
     // 스니펫이 본문 선두 슬라이스에 포함되므로 버려진다 — 본문에서 나온 두 구간만 남는다.
     expect(r).toHaveLength(2)
     for (const s of r) expect(s).not.toBe(prefixSnippet)
+  })
+
+  it('본문이 한 구간뿐이면 스니펫이 두 번째 자리를 채운다 — 상한 안에서 살아 있다', () => {
+    // 세 번째 슬라이스 경로가 죽지 않았는지 확인한다. 상한을 2로 줄이면서 스니펫
+    // 경로가 영영 도달 불가가 됐다면, 본문이 짧은 날 폴백이 1개로 쪼그라든다.
+    const shortBody = '짧은 본문 하나뿐인 문장입니다'
+    const r = buildFallbackSummaries(shortBody, SNIPPET)
+    expect(r).toEqual([shortBody, SNIPPET])
   })
 
   it('공백 하나만 다른 경우도 중복으로 보고 버린다', () => {

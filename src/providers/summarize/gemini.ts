@@ -215,10 +215,10 @@ function classifyFailure(status: number, detail: string): FailureClass {
 export type SummarySet = {
   numeric: string
   context: string
-  implication: string
-  /** 이 3안을 실제로 만들어낸 모델. 폴백 체인에서 몇 번째로 답한 모델인지
+  /** 이 2안을 실제로 만들어낸 모델. 폴백 체인에서 몇 번째로 답한 모델인지
    * 나중에 추적할 수 있도록 남긴다 — 예: gemini-3.1-flash-lite 는 100자
-   * 제한을 자주 넘겨서 truncateAtSentence 가 더 많이 개입한다. */
+   * 제한을 자주 넘겨서 truncateAtSentence 가 더 많이 개입한다. 체인이 8개로
+   * 늘어난 뒤로는 "오늘 요약이 왜 이상한가"의 답이 대개 이 값에 있다. */
   model: string
 }
 
@@ -281,9 +281,8 @@ export async function summarize(title: string, body: string): Promise<SummarySet
         properties: {
           numeric: { type: 'STRING' },
           context: { type: 'STRING' },
-          implication: { type: 'STRING' },
         },
-        required: ['numeric', 'context', 'implication'],
+        required: ['numeric', 'context'],
       },
     },
   }
@@ -334,10 +333,10 @@ export async function summarize(title: string, body: string): Promise<SummarySet
     const payload = await res.json()
     const text = extractJsonText(payload)
 
-    // Gemini 가 실제로 돌려주는 JSON 은 3안 필드뿐이다 — model 은 우리가 아는
+    // Gemini 가 실제로 돌려주는 JSON 은 2안 필드뿐이다 — model 은 우리가 아는
     // 값(위 for 루프의 model 변수)이지 응답 안에 들어있는 값이 아니므로,
-    // SummarySet(반환 타입)이 아니라 3안 필드만 있는 타입으로 파싱한다.
-    let parsed: { numeric: string; context: string; implication: string }
+    // SummarySet(반환 타입)이 아니라 2안 필드만 있는 타입으로 파싱한다.
+    let parsed: { numeric: string; context: string }
     try {
       parsed = JSON.parse(text)
     } catch {
@@ -351,7 +350,6 @@ export async function summarize(title: string, body: string): Promise<SummarySet
     return {
       numeric: enforceLimit(parsed.numeric ?? ''),
       context: enforceLimit(parsed.context ?? ''),
-      implication: enforceLimit(parsed.implication ?? ''),
       model,
     }
   }

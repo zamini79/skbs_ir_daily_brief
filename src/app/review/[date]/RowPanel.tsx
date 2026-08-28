@@ -2,14 +2,10 @@
 
 import { useState, useTransition } from 'react'
 import { charLength } from '@/domain/text'
+import { summaryVariantLabel } from '@/providers/summarize/prompt'
 import { sameEventBadgeLabel, summaryErrorShortLabel, type ClientRow } from '@/db/repo'
 import { selectNews, omitNews, editSummary, saveManualQuote } from './actions'
 
-const SUMMARY_LABEL: Record<number, string> = {
-  1: '① 수치 중심',
-  2: '② 배경·맥락 중심',
-  3: '③ 시사점 중심',
-}
 const SUMMARY_MAX = 100
 
 export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) {
@@ -270,7 +266,7 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
                     본문 발췌 (모델 요약 실패)
                   </span>
                 ) : (
-                  <span className="mr-1 font-medium">{SUMMARY_LABEL[s.variant]}</span>
+                  <span className="mr-1 font-medium">{summaryVariantLabel(s.variant)}</span>
                 )}
                 {s.text}
               </span>

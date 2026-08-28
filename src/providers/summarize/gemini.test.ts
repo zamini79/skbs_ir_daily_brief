@@ -106,14 +106,14 @@ describe('summarize', () => {
     }), { status: 200 })))
   }
 
-  it('3안을 돌려준다', async () => {
-    stubOnce({ numeric: '수치임', context: '배경임', implication: '시사점임' })
+  it('2안을 돌려준다', async () => {
+    stubOnce({ numeric: '수치임', context: '배경임' })
     const r = await summarize('제목', '본문')
-    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임', model: MODEL_CHAIN[0] })
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[0] })
   })
 
   it('100자를 넘긴 응답을 잘라서 돌려준다', async () => {
-    stubOnce({ numeric: '가'.repeat(180), context: '배경임', implication: '시사점임' })
+    stubOnce({ numeric: '가'.repeat(180), context: '배경임' })
     const r = await summarize('제목', '본문')
     expect([...r.numeric].length).toBeLessThanOrEqual(100)
   })
@@ -150,6 +150,39 @@ describe('summarize', () => {
     expect((error as Error).message).toContain('MAX_TOKENS')
   })
 
+  it('요청 스키마에 implication 이 없다 — 모델에게 3안을 요구하지 않는다', async () => {
+    let sentBody = ''
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      sentBody = String(init.body)
+      return new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: '{"numeric":"수치임","context":"배경임"}' }] } }],
+      }), { status: 200 })
+    }))
+
+    await summarize('제목', '본문')
+
+    const body = JSON.parse(sentBody)
+    const schema = body.generationConfig.responseSchema
+    expect(Object.keys(schema.properties)).toEqual(['numeric', 'context'])
+    expect(schema.required).toEqual(['numeric', 'context'])
+  })
+
+  it('모델이 implication 을 끼워 보내도 그대로 흘려보내지 않는다', async () => {
+    // 스키마에서 뺐어도 모델은 프롬프트를 따라 세 번째 필드를 낼 수 있다.
+    // 그걸 SummarySet 에 실어 보내면 저장 단계의 SUMMARY_VARIANTS 매핑이
+    // 조용히 무시하거나, 나중에 누가 되살릴 때 반쯤 살아 있는 경로가 된다.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{
+        text: '{"numeric":"수치임","context":"배경임","implication":"모델이 지어낸 전망임"}',
+      }] } }],
+    }), { status: 200 })))
+
+    const r = await summarize('제목', '본문')
+
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[0] })
+    expect(JSON.stringify(r)).not.toContain('전망')
+  })
+
   it('키가 없으면 던진다', async () => {
     const saved = process.env.GEMINI_API_KEY
     delete process.env.GEMINI_API_KEY
@@ -168,7 +201,7 @@ describe('모델 폴백 체인', () => {
   function okResponse() {
     return new Response(JSON.stringify({
       candidates: [{ content: { parts: [
-        { text: JSON.stringify({ numeric: '수치임', context: '배경임', implication: '시사점임' }), thoughtSignature: 'x' },
+        { text: JSON.stringify({ numeric: '수치임', context: '배경임' }), thoughtSignature: 'x' },
       ] } }],
     }), { status: 200 })
   }
@@ -182,7 +215,7 @@ describe('모델 폴백 체인', () => {
 
     const r = await summarize('제목', '본문')
 
-    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임', model: MODEL_CHAIN[1] })
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[1] })
     expect(calledUrls).toHaveLength(2)
     expect(calledUrls[0]).toContain(MODEL_CHAIN[0])
     expect(calledUrls[1]).toContain(MODEL_CHAIN[1])
@@ -245,7 +278,7 @@ describe('모델 폴백 체인', () => {
 
     const r = await summarize('제목', '본문')
 
-    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임', model: MODEL_CHAIN[0] })
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[0] })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -265,7 +298,7 @@ describe('모델 폴백 체인', () => {
 
     const r = await summarize('제목', '본문')
 
-    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임', model: MODEL_CHAIN[1] })
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[1] })
     expect(calledUrls).toHaveLength(2)
     expect(calledUrls[1]).toContain(MODEL_CHAIN[1])
   })
@@ -279,7 +312,7 @@ describe('모델 폴백 체인', () => {
 
     const r = await summarize('제목', '본문')
 
-    expect(r).toEqual({ numeric: '수치임', context: '배경임', implication: '시사점임', model: MODEL_CHAIN[1] })
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[1] })
     expect(calledUrls).toHaveLength(2)
   })
 
@@ -339,7 +372,7 @@ describe('쿼터 소진 기록의 KST 날짜 경계', () => {
   function okResponse() {
     return new Response(JSON.stringify({
       candidates: [{ content: { parts: [
-        { text: JSON.stringify({ numeric: '수치임', context: '배경임', implication: '시사점임' }), thoughtSignature: 'x' },
+        { text: JSON.stringify({ numeric: '수치임', context: '배경임' }), thoughtSignature: 'x' },
       ] } }],
     }), { status: 200 })
   }

@@ -352,7 +352,7 @@ export async function runCollection(now: Date): Promise<{
     ),
   )
 
-  // 6) 후보 저장 + 같은 사건 표시 + 요약 3안 생성
+  // 6) 후보 저장 + 같은 사건 표시 + 요약 2안 생성
   let candidatesCreated = 0
   let summariesGenerated = 0
   let summariesSkippedEmptyBody = 0

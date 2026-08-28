@@ -2,7 +2,7 @@ import { marketCapKrwTrillion } from '@/domain/calc'
 import { charLength, truncateAtSentence } from '@/domain/text'
 import { tokenize, jaccard } from './cluster'
 import type { SummarySet } from '@/providers/summarize/gemini'
-import { MAX_SUMMARY_CHARS } from '@/providers/summarize/prompt'
+import { MAX_SUMMARY_CHARS, SUMMARY_VARIANTS } from '@/providers/summarize/prompt'
 
 /**
  * 뉴스 관련성 필터에 쓸 별칭 목록을 만든다. newsAliases 는 콤마 구분 문자열이다.
@@ -402,14 +402,20 @@ function isNearDuplicate(a: string, b: string): boolean {
 }
 
 /**
- * 요약이 실패했을 때 화면 칸을 비워두지 않기 위한 기계적 발췌 3안을 만든다.
+ * 요약이 실패했을 때 화면 칸을 비워두지 않기 위한 기계적 발췌를 만든다.
  * 모델이 만든 게 아니므로(isFallback 마커는 호출자가 붙인다) 본문/스니펫에서
  * 있는 그대로 잘라낸다 — 새로 텍스트를 짓지 않는다.
+ *
+ * **개수는 정상 경로와 같다** — 상한이 `SUMMARY_VARIANTS.length` 다(2026-08-28
+ * 기준 2). 여기에 숫자를 직접 적으면 관점 개수를 바꿀 때 한쪽만 따라가서
+ * "정상 요약은 2안인데 발췌만 3안"이 된다. 담당자는 그 차이를 요약 실패의
+ * 신호로 읽지 않는다 — 그냥 행마다 개수가 다른 화면으로 보인다.
  *
  * 슬라이스 전략: (1) 본문 선두, (2) 본문에서 (1)이 소비한 구간 다음, (3) 검색
  * 스니펫(본문과 다를 때만). 각각 100자(코드포인트) 제한을 지키기 위해
  * truncateAtSentence 로 문장 경계에서 자른다 — 모델이 만든 요약과 같은 제약이다.
  * 본문이 짧아 서로 다른 구간을 뽑을 수 없으면 중복을 만들지 않고 개수를 줄인다.
+ * (3)은 (1)·(2)가 상한을 못 채웠을 때에만 실제로 쓰인다.
  */
 export function buildFallbackSummaries(body: string, snippet: string): string[] {
   const cap = (s: string): string => {
@@ -447,5 +453,5 @@ export function buildFallbackSummaries(body: string, snippet: string): string[] 
     if (out.some(existing => isNearDuplicate(existing, s))) continue
     out.push(s)
   }
-  return out.slice(0, 3)
+  return out.slice(0, SUMMARY_VARIANTS.length)
 }
