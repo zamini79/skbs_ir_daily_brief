@@ -15,6 +15,10 @@ model Instrument {
   currency      String
   quoteSource   String  // naver-stock | naver-world-stock | naver-index | krx-index | lse | six | twelvedata | marketstack | manual
   quoteSymbol   String
+  /// 1차(quoteSource)가 실패했을 때만 부르는 2차 소스. 지금은 'ft' 뿐이고, null 이면 폴백하지 않는다.
+  quoteFallbackSource String?
+  /// 2차 소스의 심볼 표기. 1차와 다르다(SAN.PA ↔ SAN:PAR).
+  quoteFallbackSymbol String?
   newsQuery     String
   /// 관련성 필터용 콤마 구분 별칭 목록. 비어 있으면 파이프라인이 name 하나로 폴백한다.
   newsAliases   String  @default("")

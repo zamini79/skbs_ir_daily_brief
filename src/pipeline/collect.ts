@@ -100,6 +100,8 @@ export async function runCollection(now: Date): Promise<{
   newsRecordFailed: number
   fxFailed: number
   quoteFailed: number
+  /** 1차 소스가 실패해 2차(폴백)로 채운 행의 수. 실패가 아니다 — 아래 선언부 주석 참고. */
+  quoteFallbackUsed: number
 }> {
   const runDate = kstDateString(now)
   const year = Number(runDate.slice(0, 4))
@@ -136,6 +138,11 @@ export async function runCollection(now: Date): Promise<{
 
   const targets: QuoteTarget[] = instruments.map(i => ({
     id: i.id, quoteSource: i.quoteSource, quoteSymbol: i.quoteSymbol,
+    // 2차 소스는 1차가 실패한 날에만 쓰인다(providers/quote/index.ts 의 폴백 단계).
+    // 연초 기준가는 여기와 무관하게 여전히 1차 경로(marketstack)로 간다 — ytdBase.ts 는
+    // quoteSource 로만 라우팅하므로 이 두 필드가 그 배선을 건드리지 않는다.
+    quoteFallbackSource: i.quoteFallbackSource,
+    quoteFallbackSymbol: i.quoteFallbackSymbol,
   }))
 
   // 1) 환율. 실패해도 절대 1로 대체하지 않는다 — 통화가 없으면 그 종목 시총은
@@ -213,6 +220,22 @@ export async function runCollection(now: Date): Promise<{
   //                 배너가 아무 뜻도 없어진다 — 지금은 manual 종목이 없지만, 운영 문서가
   //                 KRX 약관 문제 시 이 행을 manual 로 되돌리라고 안내하고 있다.
   let quoteFailed = 0
+  /**
+   * 1차가 실패해 2차(폴백) 소스로 채운 행의 수.
+   *
+   * **`computeRunStatus` 에는 넣지 않는다 — 의도한 판단이다.** 이 행들은 다섯 칸이
+   * 정상적으로 채워졌고 담당자가 오늘 아침에 할 일이 없다. PARTIAL 은 "이 실행에서
+   * 무언가를 얻지 못했다"는 뜻이고, 얻은 실행을 매번 「부분 완료」로 물들이면
+   * 배너가 뜻을 잃는다(bodyCrawlFailed 를 배너에서 뺀 것과 같은 규칙이다).
+   *
+   * 그렇다고 조용히 넘어가면 안 된다 — 1차가 몇 주째 죽어 있어도 아무도 모르는
+   * 것이 이 장치의 가장 큰 위험이다. 그래서 **세 군데에 남긴다**:
+   *   1) 행마다 화면에 「ft 대체」 배지 (db/repo.ts 의 quoteFallbackSourceUsed)
+   *   2) `[quote] … 1차(…) 실패로 2차(…)를 썼다` 로그 (providers/quote/index.ts)
+   *   3) 이 카운터 — 크론 응답 JSON 에 실려 나간다
+   * 셋 중 어느 것도 배너를 흔들지 않지만, 셋 다 매일 보인다.
+   */
+  let quoteFallbackUsed = 0
   for (const inst of instruments) {
     const q = quotes.get(inst.id)
     const { ok: wrote } = await isolate(async () => {
@@ -242,7 +265,9 @@ export async function runCollection(now: Date): Promise<{
       if (mismatch) {
         await prisma.quoteSnapshot.create({
           data: {
-            runId: run.id, instrumentId: inst.id, sourceName: inst.quoteSource,
+            // 값을 버리더라도 **그 값을 준 소스**를 남긴다. 폴백이 돌았는데 2차가
+            // 다른 통화를 준 경우, 여기에 1차 이름이 남으면 조사가 엉뚱한 데서 시작된다.
+            runId: run.id, instrumentId: inst.id, sourceName: q.sourceName,
             errorMessage: mismatch,
           },
         })
@@ -273,9 +298,14 @@ export async function runCollection(now: Date): Promise<{
           marketCapKrwTrillion: cap,
           fxRate: rate,
           asOf: normalizeAsOf(q.asOf),
-          sourceName: inst.quoteSource,
+          // **실제로 값을 가져온 소스**다. 설정값(inst.quoteSource)이 아니다 —
+          // 폴백이 돌면 둘이 달라지고, 설정값을 넣으면 이 칸이 거짓말을 한다.
+          // 화면의 「대체」 배지도 이 값과 설정값의 차이로 판정한다(db/repo.ts).
+          sourceName: q.sourceName,
         },
       })
+      // 폴백으로 채운 행. 값이 있으니 실패는 아니지만 1차가 죽었다는 사실은 남긴다.
+      if (q.fallbackFrom !== null) quoteFallbackUsed++
       ok++
     })
     // isolate가 예외를 삼켰다면(DB 쓰기 자체가 실패 등) worker 내부의 ok/failed 증가는
@@ -452,6 +482,8 @@ export async function runCollection(now: Date): Promise<{
 
   // status 와 statusDetail 은 같은 카운터 여섯 개에서 나온다. 둘이 어긋나지 않도록
   // 문구 조립은 collectHelpers 의 순수 함수에 두고 테스트가 짝을 지킨다.
+  // **quoteFallbackUsed 는 일부러 여기에 없다** — 값을 얻은 행이므로 배너를 흔들지
+  // 않는다. 대신 행 배지·로그·크론 응답에 남는다(위 quoteFallbackUsed 선언부 참고).
   const status = computeRunStatus(summariesFailed, ytdBaseFailed, newsFailed, fxFailed, quoteFailed, newsRecordFailed)
   const statusDetail = buildStatusDetail({
     quoteFailed,
@@ -467,5 +499,5 @@ export async function runCollection(now: Date): Promise<{
     data: { status, statusDetail, finishedAt: new Date() },
   })
 
-  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, bodyCrawlFailed, ytdBaseFailed, newsFailed, newsRecordFailed, fxFailed, quoteFailed }
+  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, bodyCrawlFailed, ytdBaseFailed, newsFailed, newsRecordFailed, fxFailed, quoteFailed, quoteFallbackUsed }
 }

@@ -191,6 +191,22 @@ describe('resolveMarketCap', () => {
     })
     expect(withDivisor).toBeCloseTo(withoutDivisor! / 100, 6)
   })
+
+  it('GSK 는 1차(LSE)로 오든 2차(FT)로 오든 같은 규칙으로 계산된다', () => {
+    // 두 소스 모두 GBX(펜스)로 같은 가격을 준다(실측 2026-08-28: LSE 1852, FT 1,852.00).
+    // 통화 검사가 GBX 를 GBP 로 접어 주므로 폴백 값이 버려지지 않고, 시총은 같은
+    // priceDivisorForMarketCap(100)을 탄다. 여기가 틀리면 폴백이 도는 날만 시총이 100배다.
+    // 1) FT 가 주는 통화(GBX)가 시드(GBP)와 어긋난 것으로 판정되면 폴백 값이 통째로
+    //    버려진다 — 폴백이 돌아도 그 행은 빈다.
+    expect(currencyMismatchReason('GBP', 'GBX')).toBeNull()
+    // 2) 보정값을 태운 시총과 안 태운 시총은 정확히 100배 차이여야 한다. FT 파서가
+    //    「1,852.00」을 1852(펜스)로 읽으므로 LSE 의 1852 와 같은 단위다.
+    const args = { isIndex: false, close: 1852, shares: 4_046_530_000, fxRate: 1700 }
+    const corrected = resolveMarketCap({ ...args, priceDivisor: 100 })
+    const uncorrected = resolveMarketCap({ ...args, priceDivisor: 1 })
+    expect(corrected).toBeCloseTo((1852 / 100) * 4_046_530_000 * 1700 / 1e12, 6)
+    expect(uncorrected!).toBeCloseTo(corrected! * 100, 6)
+  })
 })
 
 describe('resolveMarketCap — 환율 미확보 시 국내/해외 영향 분리', () => {

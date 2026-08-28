@@ -7,6 +7,14 @@ export type InstrumentSeed = {
     | 'naver-stock' | 'naver-world-stock' | 'naver-index' | 'krx-index'
     | 'lse' | 'six' | 'twelvedata' | 'marketstack' | 'manual'
   quoteSymbol: string
+  /**
+   * 1차(quoteSource)가 **실패했을 때만** 부르는 2차 소스. 없으면 폴백하지 않는다.
+   * 지금은 비미국 4종목의 `'ft'` 하나뿐이다 — FT 는 HTML 스크래핑이라 가장 취약한
+   * 의존이므로 2차에만 둔다(스펙 §3.2, src/providers/quote/ft.ts).
+   */
+  quoteFallbackSource?: 'ft'
+  /** 2차 소스의 심볼 표기. 1차와 다르다(`SAN.PA` ↔ `SAN:PAR`). */
+  quoteFallbackSymbol?: string
   newsQuery: string
   /** 관련성 필터용 콤마 구분 별칭 목록. 비우면 파이프라인이 name 하나로 폴백한다. */
   newsAliases?: string
@@ -52,19 +60,26 @@ export const INSTRUMENTS: InstrumentSeed[] = [
   // 연 1회짜리 연초 기준가는 네 종목 모두 여전히 marketstack 이다
   // (src/providers/quote/ytdBase.ts 의 MARKETSTACK_YTD_SUFFIX 가 심볼을 되돌려 준다).
   //
-  // 사노피만 남긴 이유: 유로넥스트의 ajax 응답이 암호화된 블롭(`ct:`)이라 쓸 수 없고,
-  // FT HTML 스크래핑은 동작하지만 파싱이 깨지기 쉽다. 한도 문제가 이미 해결되는데
-  // 취약한 의존을 하나 더 만들 이유가 없다. **사노피용 새 소스를 만들지 마라.**
+  // 사노피의 **1차**가 marketstack 인 이유: 유로넥스트의 ajax 응답이 암호화된
+  // 블롭(`ct:`)이라 쓸 수 없다. 그래서 1차는 그대로 두고 **2차만** 붙였다(Task 32).
+  //
+  // **네 종목 모두 2차가 FT(`markets.ft.com`) 하나다.** 1차가 실패한 날에만 부른다.
+  // FT 는 JSON 이 아니라 사람이 보는 HTML 을 긁으므로 지금 쓰는 어떤 소스보다
+  // 취약하다 — 그래서 **1차로 올리지 마라.** 심볼 표기가 또 달라서(`{티커}:{거래소}`)
+  // quoteFallbackSymbol 에 따로 적는다. `LONN:VTX` 는 빈 결과다(302). `SWX` 를 쓴다.
+  //
+  // 폴백은 실패 **확률을 낮추는** 장치이지 실패를 없애는 장치가 아니다. 1차와 2차가
+  // 함께 죽으면 그 행은 지금처럼 「시세 실패」로 뜬다 — 값을 지어내지 않는다.
   //
   // **quoteSymbol 표기가 소스마다 다르다.** marketstack 은 거래소 약칭 접미사를 쓰지만
   // (MIC 접미사 `GSK.XLON` 은 뉴욕 ADR 값이 온다) LSE 는 티커 그대로(`GSK`), SIX 는
   // ValorSymbol(`LONN`) 이다. 네이버 홍콩은 marketstack 과 같은 `2269.HK` 다.
-  { category: '해외사', displayOrder: 16, name: 'GSK',    currency: 'GBP', quoteSource: 'lse',               quoteSymbol: 'GSK',     newsQuery: 'GSK', newsAliases: 'GSK,지에스케이', priceDivisorForMarketCap: 100, sharesOutstanding: BigInt(4_046_530_000) },
-  { category: '해외사', displayOrder: 17, name: 'Sanofi', currency: 'EUR', quoteSource: 'marketstack',       quoteSymbol: 'SAN.PA',  newsQuery: '사노피', newsAliases: '사노피,Sanofi', sharesOutstanding: BigInt(1_191_860_000) },
-  { category: '해외사', displayOrder: 18, name: 'Lonza',  currency: 'CHF', quoteSource: 'six',               quoteSymbol: 'LONN',    newsQuery: '론자', newsAliases: '론자,Lonza', sharesOutstanding: BigInt(70_340_000) },
+  { category: '해외사', displayOrder: 16, name: 'GSK',    currency: 'GBP', quoteSource: 'lse',               quoteSymbol: 'GSK',     quoteFallbackSource: 'ft', quoteFallbackSymbol: 'GSK:LSE',  newsQuery: 'GSK', newsAliases: 'GSK,지에스케이', priceDivisorForMarketCap: 100, sharesOutstanding: BigInt(4_046_530_000) },
+  { category: '해외사', displayOrder: 17, name: 'Sanofi', currency: 'EUR', quoteSource: 'marketstack',       quoteSymbol: 'SAN.PA',  quoteFallbackSource: 'ft', quoteFallbackSymbol: 'SAN:PAR',  newsQuery: '사노피', newsAliases: '사노피,Sanofi', sharesOutstanding: BigInt(1_191_860_000) },
+  { category: '해외사', displayOrder: 18, name: 'Lonza',  currency: 'CHF', quoteSource: 'six',               quoteSymbol: 'LONN',    quoteFallbackSource: 'ft', quoteFallbackSymbol: 'LONN:SWX', newsQuery: '론자', newsAliases: '론자,Lonza', sharesOutstanding: BigInt(70_340_000) },
   // 네이버 홍콩은 `2269.HK` 다. 접미사 없는 `GSK`·`SAN` 은 미국 ADR 이라 값이 다르고,
   // `GSK.L`·`SAN.PA`·`LONN.SW` 는 네이버에 아예 없다(실측: HTTP 409 Not Exist Master).
-  { category: '해외사', displayOrder: 19, name: 'Wuxi',   currency: 'HKD', quoteSource: 'naver-world-stock', quoteSymbol: '2269.HK', newsQuery: '우시바이오로직스', newsAliases: '우시바이오로직스,우시바이오,WuXi', sharesOutstanding: BigInt(4_140_750_000) },
+  { category: '해외사', displayOrder: 19, name: 'Wuxi',   currency: 'HKD', quoteSource: 'naver-world-stock', quoteSymbol: '2269.HK', quoteFallbackSource: 'ft', quoteFallbackSymbol: '2269:HKG', newsQuery: '우시바이오로직스', newsAliases: '우시바이오로직스,우시바이오,WuXi', sharesOutstanding: BigInt(4_140_750_000) },
 
   // Index
   // S&P500: newsQuery('뉴욕증시')가 일부러 newsAliases에 없다 — 좁은 검색어로는 기사가

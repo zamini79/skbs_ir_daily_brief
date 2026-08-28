@@ -12,6 +12,11 @@ vi.mock('./lse', () => ({
 vi.mock('./six', () => ({
   fetchSixQuote: vi.fn(async () => ({ close: 588.4, prevClose: 587.8, currency: 'CHF', asOf: '2026-08-27' })),
 }))
+vi.mock('./ft', () => ({
+  // FT 는 2차 전용이다. 값을 1차와 **일부러 다르게** 둔다 — 어느 쪽이 쓰였는지
+  // 테스트가 값으로도 구분할 수 있어야 한다.
+  fetchFtQuote: vi.fn(async () => ({ close: 77.28, prevClose: 78.29, currency: 'EUR', asOf: '2026-08-27' })),
+}))
 vi.mock('./twelvedata', () => ({
   fetchTwelveDataQuotes: vi.fn(async () => ({
     quotes: new Map([['PFE', { close: 28.3, prevClose: 28.57, currency: 'USD', asOf: '2026-08-26' }]]),
@@ -38,6 +43,7 @@ import { fetchMarketstackQuotes } from './marketstack'
 import { fetchKrxIndexQuote } from './krx'
 import { fetchLseQuote } from './lse'
 import { fetchSixQuote } from './six'
+import { fetchFtQuote } from './ft'
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -147,6 +153,138 @@ describe('fetchAllQuotes', () => {
     expect((r.get('gsk') as Error).message).toContain('HTTP 404')
     expect((r.get('lonn') as any).close).toBeCloseTo(588.4, 4)
     expect(fetchLseQuote).toHaveBeenCalledTimes(1) // 404 는 재시도하지 않는다
+  })
+
+  // ── Task 32: 1차가 실패하면 2차(FT)로 채운다 ──
+  //
+  // 폴백은 실패 **확률을 낮추는** 장치다. 실패를 없애지 않는다 — 둘 다 죽으면
+  // 그 행은 여전히 실패이고, 그때 두 사유가 모두 남아야 원인 추적이 끊기지 않는다.
+
+  const SANOFI = {
+    id: 'san',
+    quoteSource: 'marketstack',
+    quoteSymbol: 'SAN.PA',
+    quoteFallbackSource: 'ft',
+    quoteFallbackSymbol: 'SAN:PAR',
+  }
+
+  it('1차가 성공하면 2차를 아예 부르지 않는다', async () => {
+    // 평소에 FT 를 부르면 우리는 아무것도 얻지 못하면서 남의 부하만 두 배로 만든다.
+    const r = await fetchAllQuotes([
+      { id: 'gsk', quoteSource: 'lse', quoteSymbol: 'GSK', quoteFallbackSource: 'ft', quoteFallbackSymbol: 'GSK:LSE' },
+      { id: 'lonn', quoteSource: 'six', quoteSymbol: 'LONN', quoteFallbackSource: 'ft', quoteFallbackSymbol: 'LONN:SWX' },
+    ])
+    expect((r.get('gsk') as any).close).toBe(1852)
+    expect((r.get('lonn') as any).close).toBeCloseTo(588.4, 4)
+    expect(fetchFtQuote).not.toHaveBeenCalled()
+  })
+
+  it('1차가 성공한 행의 sourceName 은 1차 소스이고 fallbackFrom 은 null 이다', async () => {
+    const r = await fetchAllQuotes([{ id: 'gsk', quoteSource: 'lse', quoteSymbol: 'GSK', quoteFallbackSource: 'ft', quoteFallbackSymbol: 'GSK:LSE' }])
+    expect((r.get('gsk') as any).sourceName).toBe('lse')
+    expect((r.get('gsk') as any).fallbackFrom).toBeNull()
+  })
+
+  it('1차(marketstack 소진)가 실패하면 2차 값으로 채우고 sourceName 이 2차 소스가 된다', async () => {
+    // 이것이 이 작업의 성공 조건이다 — marketstack 월 한도가 소진돼도 사노피 행이 빈다.
+    vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(
+      new Error('marketstack HTTP 429 (usage_limit_reached: Your monthly usage limit has been reached.)'),
+    )
+    const r = await fetchAllQuotes([SANOFI], { sleep: async () => {} })
+    const hit = r.get('san') as any
+    expect(hit).not.toBeInstanceOf(Error)
+    expect(hit.close).toBeCloseTo(77.28, 4)
+    // **설정값(marketstack)이 아니라 실제로 값을 가져온 소스**여야 한다.
+    expect(hit.sourceName).toBe('ft')
+    expect(hit.fallbackFrom).toBe('marketstack')
+  })
+
+  it('2차는 1차 심볼이 아니라 quoteFallbackSymbol 로 부른다', async () => {
+    // 표기가 다르다(`SAN.PA` ↔ `SAN:PAR`). 1차 심볼을 그대로 넘기면 FT 는 오류가
+    // 아니라 검색 페이지로 302 를 준다 — 폴백이 있으나 마나가 된다.
+    vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(new Error('marketstack HTTP 401'))
+    await fetchAllQuotes([SANOFI], { sleep: async () => {} })
+    expect(fetchFtQuote).toHaveBeenCalledWith('SAN:PAR')
+  })
+
+  it('둘 다 실패하면 사유에 **두 소스가 모두** 남는다', async () => {
+    vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(new Error('marketstack HTTP 401'))
+    // 2차는 **재시도해도 소용없는** 실패로 둔다(HTML 구조 변경). 5xx 로 두면 재시도
+    // 한 번에 성공해 버려서 "둘 다 실패"를 확인하지 못한다.
+    vi.mocked(fetchFtQuote).mockRejectedValueOnce(new Error('[SAN:PAR] FT: Price 라벨을 찾지 못함'))
+    const r = await fetchAllQuotes([SANOFI], { sleep: async () => {} })
+    const err = r.get('san') as Error
+    expect(err).toBeInstanceOf(Error)
+    expect(err.message).toContain('marketstack HTTP 401') // 1차 사유
+    expect(err.message).toContain('Price 라벨을 찾지 못함') // 2차 사유
+    expect(err.message).toContain('폴백')
+  })
+
+  it('폴백이 설정되지 않은 종목은 폴백하지 않는다 — 실패가 그대로 남는다', async () => {
+    vi.mocked(fetchNaverStock).mockRejectedValueOnce(new Error('[207940] HTTP 401'))
+    const r = await fetchAllQuotes(
+      [{ id: 'a', quoteSource: 'naver-stock', quoteSymbol: '207940' }],
+      { sleep: async () => {} },
+    )
+    expect(r.get('a')).toBeInstanceOf(Error)
+    expect(fetchFtQuote).not.toHaveBeenCalled()
+  })
+
+  it('모르는 폴백 소스는 조용히 건너뛰지 않고 사유에 남는다', async () => {
+    // 조용히 건너뛰면 "폴백이 설정돼 있는데 왜 안 도나"를 알아낼 방법이 없다.
+    vi.mocked(fetchSixQuote).mockRejectedValueOnce(new Error('[LONN] SIX HTTP 401'))
+    const r = await fetchAllQuotes(
+      [{ id: 'lonn', quoteSource: 'six', quoteSymbol: 'LONN', quoteFallbackSource: 'yahoo', quoteFallbackSymbol: 'LONN.SW' }],
+      { sleep: async () => {} },
+    )
+    const err = r.get('lonn') as Error
+    expect(err.message).toContain('SIX HTTP 401')
+    expect(err.message).toContain('알 수 없는 폴백 소스: yahoo')
+    expect(fetchFtQuote).not.toHaveBeenCalled()
+  })
+
+  it('폴백 심볼이 비어 있으면 사유에 남는다', async () => {
+    vi.mocked(fetchSixQuote).mockRejectedValueOnce(new Error('[LONN] SIX HTTP 401'))
+    const r = await fetchAllQuotes(
+      [{ id: 'lonn', quoteSource: 'six', quoteSymbol: 'LONN', quoteFallbackSource: 'ft', quoteFallbackSymbol: '' }],
+      { sleep: async () => {} },
+    )
+    expect((r.get('lonn') as Error).message).toContain('폴백 심볼이 비어 있음')
+    expect(fetchFtQuote).not.toHaveBeenCalled()
+  })
+
+  it('2차도 재시도를 태운다 — 1차가 이미 죽은 상태라 여기가 마지막 기회다', async () => {
+    vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(new Error('marketstack HTTP 401'))
+    vi.mocked(fetchFtQuote).mockRejectedValueOnce(new Error('[SAN:PAR] FT HTTP 503'))
+    const r = await fetchAllQuotes([SANOFI], { sleep: async () => {} })
+    expect((r.get('san') as any).close).toBeCloseTo(77.28, 4)
+    expect(fetchFtQuote).toHaveBeenCalledTimes(2)
+  })
+
+  it('2차의 재시도 불가 실패(302)는 한 번만 부른다', async () => {
+    vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(new Error('marketstack HTTP 401'))
+    vi.mocked(fetchFtQuote).mockRejectedValueOnce(new Error('[SAN:PAR] FT HTTP 302 (심볼을 찾지 못해 검색 페이지로 리다이렉트)'))
+    const r = await fetchAllQuotes([SANOFI], { sleep: async () => {} })
+    expect(r.get('san')).toBeInstanceOf(Error)
+    expect(fetchFtQuote).toHaveBeenCalledTimes(1)
+  })
+
+  it('한 종목이 폴백으로 채워져도 다른 종목의 결과는 그대로다', async () => {
+    vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(new Error('marketstack HTTP 429 (usage_limit_reached)'))
+    const r = await fetchAllQuotes(
+      [
+        { id: 'gsk', quoteSource: 'lse', quoteSymbol: 'GSK', quoteFallbackSource: 'ft', quoteFallbackSymbol: 'GSK:LSE' },
+        SANOFI,
+        { id: 'lonn', quoteSource: 'six', quoteSymbol: 'LONN', quoteFallbackSource: 'ft', quoteFallbackSymbol: 'LONN:SWX' },
+      ],
+      { sleep: async () => {} },
+    )
+    expect((r.get('gsk') as any).sourceName).toBe('lse')
+    expect((r.get('lonn') as any).sourceName).toBe('six')
+    expect((r.get('san') as any).sourceName).toBe('ft')
+    // 1차가 살아 있는 두 종목 때문에 FT 를 부르지는 않는다.
+    expect(fetchFtQuote).toHaveBeenCalledTimes(1)
+    expect(fetchFtQuote).toHaveBeenCalledWith('SAN:PAR')
   })
 
   it('manual 소스는 결과에 넣지 않는다', async () => {
