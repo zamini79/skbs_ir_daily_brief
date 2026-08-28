@@ -9,6 +9,11 @@ export type QuoteSource =
   | 'lse'
   /** SIX Swiss Exchange 공식 엔드포인트. 키 없음. 연초 기준가는 여전히 marketstack. */
   | 'six'
+  /**
+   * FT(markets.ft.com) HTML 스크래핑. **2차(폴백) 전용이다** — 비미국 4종목의
+   * 1차가 실패한 날에만 부른다. 1차로 쓰지 마라(src/providers/quote/ft.ts).
+   */
+  | 'ft'
   | 'twelvedata'
   | 'marketstack'
   /** 지금 쓰는 종목은 없다. 검수 화면의 수기 입력 경로를 위해 남겨 둔다. */
