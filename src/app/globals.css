@@ -1,26 +1,122 @@
 @import "tailwindcss";
 
+/*
+ * 팔레트는 전부 여기 한 곳에 있다.
+ *
+ * 왜 한 곳인가: 이 화면에는 「시세 실패」·「본문 발췌」·「미확정」·「선택 무효화됨」처럼
+ * 서로 절대 같아 보이면 안 되는 표시가 여러 개 있고, 그 구분이 색 하나에 걸려 있다.
+ * 색을 컴포넌트마다 하드코딩해 두면 다음에 톤을 바꿀 때 전수 조사를 해야 하고,
+ * 한 군데를 빠뜨리는 순간 두 상태가 같은 색으로 수렴한다 — 그게 이 시스템이 막으려는
+ * 사고다. 토큰 이름은 색이 아니라 **뜻**으로 짓는다(`--color-orange-200` 이 아니라
+ * `--color-fail`). 뜻으로 지어야 나중에 색을 바꿔도 이름이 거짓말을 하지 않는다.
+ *
+ * 톤은 참조 이미지에서 뽑은 따뜻한 뉴트럴이다. 의미 색(실패/미확정/발췌…)은 그 톤에
+ * 맞춰 채도를 낮췄지만, **서로 구분되는 것이 채도보다 우선**이다.
+ */
+@theme {
+  --font-sans: var(--font-noto-sans-kr), ui-sans-serif, system-ui, sans-serif;
+
+  /* --- 셸 --- */
+  --color-sidebar: #3b352e;
+  --color-sidebar-active: #4e463c;
+  --color-sidebar-fg: #c9c3b8;
+  --color-sidebar-label: #8a8175;
+
+  /* --- 본문 --- */
+  --color-page: #ffffff;
+  --color-ink: #1f1b16;
+  --color-ink-muted: #7a7168;
+  /* '-'(값 없음)처럼 존재감을 낮춰야 하는 글자. ink-muted 보다 한 단계 더 옅다. */
+  --color-ink-faint: #a79e93;
+
+  /* --- 표 --- */
+  --color-thead: #faf8f5;
+  --color-line: #e5e0d8;
+  --color-rowline: #efebe4;
+
+  /* --- 배지·버튼 --- */
+  --color-badge: #e9e3d6;
+  --color-badge-fg: #5a5145;
+  --color-btn: #2e2a24;
+  --color-btn-border: #d8d2c8;
+
+  /* 강조. 지금은 "한도 초과·오류 문구"에만 쓴다. 숫자 열의 상승/하락에는 쓰지
+     않는다 — 한국 시장 관행에서 빨강은 상승이라 음수에 빨강을 칠하면 훑어보는
+     담당자를 정반대로 오독하게 만든다. 방향은 ▲/▼ 기호가 이미 말한다. */
+  --color-accent: #c0392b;
+  --color-link: #2f5d8c;
+
+  /* --- 의미 색 ---------------------------------------------------------
+   * fail / excerpt : 같은 주황 계열. 화면에 실패 표시가 두 방언으로 존재하면
+   *   안 된다는 기존 원칙을 그대로 옮긴 것이고, 두 색은 명도로 갈린다.
+   * pending : 황토(amber). "확정 여부"를 묻는 표시라 실패 계열과 반드시 갈린다.
+   * stale   : 분홍-빨강. pending 과 같은 급의 "다시 봐야 함"이지만 사유가 달라
+   *   황토와 겹치지 않게 두고, fail 의 주황과도 색상(hue)이 갈리게 잡았다.
+   */
+  --color-fail: #f2dcc8;
+  --color-fail-fg: #8a4a18;
+  --color-fail-border: #e3c7ab;
+  --color-fail-row: #fcf3ea;
+
+  --color-excerpt: #f9ead9;
+  --color-excerpt-fg: #96551f;
+
+  --color-pending: #f2e2b0;
+  --color-pending-fg: #6e5410;
+  --color-pending-border: #e2ce93;
+  --color-pending-row: #fdf8e7;
+
+  --color-stale: #f3d7da;
+  --color-stale-fg: #97313f;
+  --color-stale-row: #fceff1;
+
+  /* 행 틴트 두 가지. "기사가 없었다"(none)와 "담당자가 뺐다"(omitted)는
+     둘 다 조용한 행이지만 같은 색이면 안 된다 — omitted 를 한 단계 짙게 둔다. */
+  --color-none-row: #faf8f5;
+  --color-omitted-row: #f1ede6;
+
+  /* 배너·박스 */
+  --color-ok: #e3eadf;
+  --color-ok-fg: #3e5a3a;
+  --color-ok-border: #c7d6c0;
+
+  --color-info: #dde4ec;
+  --color-info-fg: #3c5169;
+  --color-info-border: #c2cedc;
+
+  /* 「naver 대체」처럼 실패도 정상도 아닌, 조용한 사실 표시. info(파랑)와 갈리게
+     청록으로 둔다 — 배너와 인라인 배지가 같은 색이면 같은 뜻으로 읽힌다. */
+  --color-note: #dce8e6;
+  --color-note-fg: #38564f;
+
+  /* 「n위와 같은 사건」. 위 어느 계열과도 겹치면 안 되는 중립적 분류 표시. */
+  --color-tag: #e3deec;
+  --color-tag-fg: #4e4266;
+
+  /* --- 달력 점 ---
+   * 사이드바(#3b352e) 위에서 읽혀야 하므로 본문용 의미 색을 그대로 쓸 수 없다
+   * (본문 배지 배경은 전부 옅은 색이라 어두운 바탕에서 서로 구분되지 않는다).
+   * 네 상태가 색상(hue)으로 갈리도록 따로 잡았다. unknown 은 회색이다 —
+   * 모르는 상태를 완료(초록)로 그리면 달력이 거짓말을 한다. */
+  --color-mark-done: #9cc49a;
+  --color-mark-partial: #e0b657;
+  --color-mark-running: #8fb2d6;
+  --color-mark-failed: #d97b6c;
+  --color-mark-unknown: #a79e93;
+}
+
+/*
+ * 이 화면은 하루 한 번, 마감 시간 압박 속에서 훑어보는 내부 도구다.
+ * OS/브라우저의 다크 모드 설정을 그대로 물려받으면 행 틴트(--color-pending-row 등)는
+ * 옅은 색 그대로인데 글자색만 밝은 색으로 뒤집혀 사실상 안 보이게 된다
+ * (특히 미검토 행 — 검수가 가장 급한 행). 팔레트 전체를 라이트로 고정해
+ * OS 설정이 새어 들어오지 못하게 한다.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-page);
+  color: var(--color-ink);
 }

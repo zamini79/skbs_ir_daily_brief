@@ -72,8 +72,8 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
         * "폐기된 결론" 표에 기록으로 남아 있다).
         */}
       {isManualSource && (
-        <div className="flex flex-wrap items-center gap-3 rounded border border-blue-200 bg-blue-50 p-2 text-sm">
-          <span className="font-medium text-blue-800">
+        <div className="flex flex-wrap items-center gap-3 rounded border border-info-border bg-info p-2 text-[13px]">
+          <span className="font-medium text-info-fg">
             수기 입력 (이 종목은 자동 시세 소스가 지정돼 있지 않습니다)
           </span>
           <label className="flex items-center gap-1">
@@ -84,7 +84,7 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
               value={manualClose}
               onChange={e => setManualClose(e.target.value)}
               onBlur={handleManualBlur}
-              className="w-28 rounded border border-gray-300 px-1.5 py-0.5"
+              className="w-28 rounded border border-btn-border px-1.5 py-0.5"
             />
           </label>
           <label className="flex items-center gap-1">
@@ -95,7 +95,7 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
               value={manualPrevClose}
               onChange={e => setManualPrevClose(e.target.value)}
               onBlur={handleManualBlur}
-              className="w-28 rounded border border-gray-300 px-1.5 py-0.5"
+              className="w-28 rounded border border-btn-border px-1.5 py-0.5"
             />
           </label>
         </div>
@@ -112,23 +112,23 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
         * 걸러내므로(repo.ts), 여기 뜨면 그건 진짜 실패다.
         */}
       {row.quoteFailReason !== null && (
-        <p className="rounded border border-orange-200 bg-orange-50 p-2 text-xs text-orange-800">
+        <p className="rounded border border-fail-border bg-fail-row p-2 text-[12px] text-fail-fg">
           시세를 받아오지 못했습니다 — 주가·전일대비·%·연초대비가 비어 있는 것은 값이
           없어서가 아니라 조회에 실패했기 때문입니다. 이 행의 숫자는 신뢰할 수 없습니다.
-          <span className="mt-0.5 block text-orange-700">사유: {row.quoteFailReason}</span>
+          <span className="mt-0.5 block text-fail-fg">사유: {row.quoteFailReason}</span>
         </p>
       )}
 
       {/* 시총이 왜 비었는지 아는 경우에만 말한다. 이유를 모르면 아무 말도 하지 않는다. */}
       {row.marketCapBlankReason === 'FX_UNAVAILABLE' && (
-        <p className="rounded border border-orange-200 bg-orange-50 p-2 text-xs text-orange-800">
+        <p className="rounded border border-fail-border bg-fail-row p-2 text-[12px] text-fail-fg">
           {row.instrument.currency} 환율을 받지 못해 시가총액을 계산하지 못했습니다.
           시세·전일대비·연초대비는 환율과 무관하므로 그대로 유효합니다.
         </p>
       )}
 
       <fieldset className="space-y-2">
-        <legend className="mb-1 text-xs font-semibold text-gray-500">뉴스 후보</legend>
+        <legend className="mb-1 text-[12px] font-semibold text-ink-muted">뉴스 후보</legend>
         {/*
           * 후보 0건의 두 가지 뜻을 갈라서 말한다. 검색이 실패했으면 "기사가 없다"고
           * 말할 근거가 없다 — 담당자가 직접 찾아봐야 하는 행이다.
@@ -136,24 +136,24 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
           * (기록 이전 실행) 사유를 짐작하지 않고 미기록이라고만 말한다.
           */}
         {row.candidates.length === 0 && row.state === 'NEWS_FAILED' && (
-          <p className="text-sm text-orange-700" title={row.newsFetchError ?? undefined}>
+          <p className="text-[13px] text-fail-fg" title={row.newsFetchError ?? undefined}>
             뉴스 조회에 실패했습니다 — 기사가 없는 것이 아니라 확인하지 못한 것입니다.
             직접 검색해 확인해 주세요.
-            <span className="mt-0.5 block text-xs text-orange-600">
+            <span className="mt-0.5 block text-[12px] text-fail-fg">
               사유: {row.newsFetchError ?? '미기록'}
             </span>
           </p>
         )}
         {row.candidates.length === 0 && row.state !== 'NEWS_FAILED' && (
-          <p className="text-sm text-gray-400">당일·D-1 기사가 없습니다.</p>
+          <p className="text-[13px] text-ink-faint">당일·D-1 기사가 없습니다.</p>
         )}
         {row.candidates.map(c => (
           <label
             key={c.id}
-            className={`block cursor-pointer rounded border p-2 text-sm text-gray-900 ${
+            className={`block cursor-pointer rounded border p-2 text-[13px] text-ink ${
               row.selection.chosenCandidateId === c.id
-                ? 'border-emerald-400 bg-emerald-50'
-                : 'border-gray-200 bg-white'
+                ? 'border-ok-border bg-ok'
+                : 'border-line bg-page'
             }`}
           >
             <div className="flex items-start gap-2">
@@ -171,24 +171,24 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
                     target="_blank"
                     rel="noreferrer"
                     onClick={e => e.stopPropagation()}
-                    className="font-medium text-blue-700 hover:underline"
+                    className="font-medium text-link hover:underline"
                   >
                     {c.title}
                   </a>
                   {c.sameEventAsRank != null && (
-                    <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700">
+                    <span className="rounded bg-tag px-1.5 py-0.5 text-[10px] font-medium text-tag-fg">
                       {sameEventBadgeLabel(c.sameEventAsRank)}
                     </span>
                   )}
                 </div>
-                <div className="mt-0.5 text-xs text-gray-500">
+                <div className="mt-0.5 text-[12px] text-ink-muted">
                   {c.publisher} · {new Date(c.publishedAt).toLocaleString('ko-KR')} · {c.clusterSize}개 매체
                 </div>
                 {c.summaryError && (
                   // title에 원문을 그대로 남긴다 — 담당자에게는 모델명 나열이 의미
                   // 없지만(비개발자, 08:00 마감 전 급하게 훑는 화면), 운영자는 원문이
                   // 필요할 수 있으므로 지우지 않는다.
-                  <p className="mt-1 text-xs text-red-600" title={c.summaryError}>
+                  <p className="mt-1 text-[12px] text-accent" title={c.summaryError}>
                     {summaryErrorShortLabel(c.summaryError)}
                     {c.summaries.some(s => s.isFallback) && ' — 아래는 본문 발췌로 대체됨'}
                   </p>
@@ -201,15 +201,15 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
                  * 분기로 간다.
                  */}
                 {!c.summaryError && c.summaries.length === 0 && (
-                  <p className="mt-1 text-xs text-gray-400">요약 없음 (사유 미기록)</p>
+                  <p className="mt-1 text-[12px] text-ink-faint">요약 없음 (사유 미기록)</p>
                 )}
               </div>
             </div>
           </label>
         ))}
         <label
-          className={`flex items-center gap-2 rounded border p-2 text-sm text-gray-900 ${
-            row.selection.decision === 'OMITTED' ? 'border-gray-400 bg-gray-100' : 'border-gray-200 bg-white'
+          className={`flex items-center gap-2 rounded border p-2 text-[13px] text-ink ${
+            row.selection.decision === 'OMITTED' ? 'border-badge-fg bg-omitted-row' : 'border-line bg-page'
           }`}
         >
           <input
@@ -223,8 +223,8 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
       </fieldset>
 
       {chosenCandidate && (
-        <fieldset className="space-y-2 border-t border-gray-200 pt-3">
-          <legend className="mb-1 text-xs font-semibold text-gray-500">요약 선택</legend>
+        <fieldset className="space-y-2 border-t border-line pt-3">
+          <legend className="mb-1 text-[12px] font-semibold text-ink-muted">요약 선택</legend>
           {/*
            * summaryError 가 있으면 모델 요약은 실패한 것이다 — summaries가 비어 있든
            * (모델 실패 + 발췌 대체도 못 만든 경우) 채워져 있든(발췌 대체로 채운 경우)
@@ -234,7 +234,7 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
            * 짐작해서 이름 붙이지 않는다.
            */}
           {chosenCandidate.summaryError && (
-            <p className="text-sm text-red-600" title={chosenCandidate.summaryError}>
+            <p className="text-[13px] text-accent" title={chosenCandidate.summaryError}>
               {summaryErrorShortLabel(chosenCandidate.summaryError)}
               {chosenCandidate.summaries.length > 0
                 ? ' — 아래는 모델이 아니라 본문에서 기계적으로 뽑아낸 발췌입니다. 그대로 싣지 말고 반드시 손보세요.'
@@ -243,12 +243,12 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
           )}
           {/* 위 후보 목록의 주석과 같은 이유로 사유를 짐작해 말하지 않는다 — 레거시 경로. */}
           {!chosenCandidate.summaryError && chosenCandidate.summaries.length === 0 && (
-            <p className="text-sm text-gray-500">
+            <p className="text-[13px] text-ink-muted">
               이 후보는 요약이 없고, 사유가 기록되어 있지 않습니다. 제목만 보고 판단하세요.
             </p>
           )}
           {chosenCandidate.summaries.map(s => (
-            <label key={s.id} className="flex items-start gap-2 text-sm">
+            <label key={s.id} className="flex items-start gap-2 text-[13px]">
               <input
                 type="radio"
                 name={`summary-${instrumentId}`}
@@ -262,7 +262,7 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
                   // 않은 관점을 주장하는 라벨이 되므로 붙이지 않고, 대신 발췌라는
                   // 사실 자체를 먼저 보여준다. 정상 요약과 색을 다르게 해 한눈에
                   // 구분되게 한다.
-                  <span className="mr-1 rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-medium text-orange-800">
+                  <span className="mr-1 rounded bg-excerpt px-1.5 py-0.5 text-[10px] font-medium text-excerpt-fg">
                     본문 발췌 (모델 요약 실패)
                   </span>
                 ) : (
@@ -278,11 +278,11 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
               onChange={e => setDraftText(e.target.value)}
               onBlur={handleTextBlur}
               rows={2}
-              className="w-full rounded border border-gray-300 p-1.5 text-sm"
+              className="w-full rounded border border-btn-border p-1.5 text-[13px]"
             />
             <div
-              className={`text-right text-xs ${
-                charLength(draftText) > SUMMARY_MAX ? 'font-semibold text-red-600' : 'text-gray-400'
+              className={`text-right text-[12px] ${
+                charLength(draftText) > SUMMARY_MAX ? 'font-semibold text-accent' : 'text-ink-faint'
               }`}
             >
               {charLength(draftText)}/{SUMMARY_MAX}자
