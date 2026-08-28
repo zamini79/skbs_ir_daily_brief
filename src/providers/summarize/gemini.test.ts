@@ -429,26 +429,33 @@ describe('쿼터 소진 기록의 KST 날짜 경계', () => {
 
 describe('체인 순서 정책', () => {
   // 이 블록이 지키는 것은 "코드가 컴파일되는가"가 아니라 **순서의 근거**다.
-  // 체인이 8개로 늘면서 뒤쪽에 품질이 덜 검증된 모델이 들어왔다. 누가 이 배열을
-  // 정렬하거나 새 모델을 앞에 끼워 넣으면, 평상시 담당자에게 가는 요약이 조용히
-  // 그 모델의 것으로 바뀐다 — 화면에서는 구분되지 않는다.
+  // 누가 이 배열을 정렬하거나 검증 안 된 모델을 앞에 끼워 넣으면, 평상시 담당자에게
+  // 가는 요약이 조용히 그 모델의 것으로 바뀐다 — 화면에서는 구분되지 않는다.
 
-  it('last-resort 모델은 verified 모델보다 뒤에 있다', () => {
-    const lastVerified = MODEL_CHAIN_ENTRIES.map(e => e.quality).lastIndexOf('verified')
+  it('last-resort 모델이 verified 모델보다 앞에 오지 않는다', () => {
+    // 2026-08-28 현재 체인은 전원 verified 라 이 단언은 공허하게 참이다. 그래도
+    // 남긴다 — "빈칸보다는 낫다" 후보가 다시 생기는 순간 이 불변식이 필요해진다.
     const firstLastResort = MODEL_CHAIN_ENTRIES.findIndex(e => e.quality === 'last-resort')
-    expect(firstLastResort).toBeGreaterThan(-1) // 등급 자체가 사라지지 않았는지
-    expect(firstLastResort).toBeGreaterThan(lastVerified)
+    if (firstLastResort >= 0) {
+      const lastVerified = MODEL_CHAIN_ENTRIES.map(e => e.quality).lastIndexOf('verified')
+      expect(firstLastResort).toBeGreaterThan(lastVerified)
+    }
+  })
+
+  it('체인은 전원 verified 다 — 검증 안 된 모델이 슬쩍 들어오지 않았는지', () => {
+    // gemma-4-31b-it 을 뺀 뒤의 상태다(실제 본문에서 타임아웃 50%·정상 JSON 0%,
+    // 60초 타임아웃이 07:40~08:00 수집 창을 갉아먹었다 — EXCLUDED_MODELS 참고).
+    // 새 모델을 last-resort 로 넣으려면 이 테스트를 **의식적으로** 고쳐야 한다.
+    expect(MODEL_CHAIN_ENTRIES.map(e => e.quality)).toEqual(MODEL_CHAIN_ENTRIES.map(() => 'verified'))
   })
 
   it('품질을 실측 검증한 gemini-3.6-flash 가 1순위다', () => {
     expect(MODEL_CHAIN_ENTRIES[0]).toMatchObject({ model: 'gemini-3.6-flash', quality: 'verified' })
   })
 
-  it('gemma 계열은 gemini 계열보다 모두 뒤에 있다', () => {
-    // "빈칸보다는 낫다" 자리. 앞으로 오면 평상시 결과가 이쪽에서 나온다.
-    const lastGemini = MODEL_CHAIN.map(m => m.startsWith('gemini-')).lastIndexOf(true)
-    const firstGemma = MODEL_CHAIN.findIndex(m => m.startsWith('gemma-'))
-    if (firstGemma >= 0) expect(firstGemma).toBeGreaterThan(lastGemini)
+  it('gemma 계열은 체인에 없다 — 둘 다 실측으로 배제했다', () => {
+    // 26b 는 조용히 무너지고(성공분의 40%), 31b 는 타임아웃 50% 에 정상 JSON 0% 였다.
+    expect(MODEL_CHAIN.filter(m => m.startsWith('gemma-'))).toEqual([])
   })
 
   it('실측으로 배제한 모델은 체인에 없다', () => {
@@ -490,6 +497,7 @@ describe('체인 순서 정책', () => {
 
   it('체인이 넓어졌다 — 확장 전 5개보다 많다', () => {
     // 파트 A 의 목적 자체(모델별 일일 한도를 합산해 발췌 폴백을 줄인다)를 지킨다.
+    // gemma 둘을 배제하고도 gemini 7개가 남아 목적은 유지된다.
     expect(MODEL_CHAIN.length).toBeGreaterThan(5)
   })
 })
@@ -684,6 +692,77 @@ describe('fetch 가 던졌을 때 (타임아웃·네트워크)', () => {
     const message = (error as Error).message
     expect(message).toContain('쿼터 소진')
     expect(message).toContain('응답 없음')
+  })
+
+  it('본문을 읽는 도중 끊기면 다음 모델로 넘어간다 (정상 응답 경로)', async () => {
+    // fetch 는 헤더만 받고 반환한다. 바디가 흘러오다 끊기면 예외는 res.json() 에서
+    // 난다 — fetch 를 감싼 try 로는 못 잡는다.
+    const calledUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calledUrls.push(url)
+      if (url.includes(MODEL_CHAIN[0])) {
+        return { ok: true, status: 200, json: async () => { throw new TypeError('terminated') } } as unknown as Response
+      }
+      return okResponse()
+    }))
+
+    const r = await summarize('제목', '본문')
+
+    expect(r.model).toBe(MODEL_CHAIN[1])
+    expect(calledUrls).toHaveLength(2)
+  })
+
+  it('오류 본문을 읽는 도중 끊겨도 다음 모델로 넘어간다 (실패 응답 경로)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes(MODEL_CHAIN[0])) {
+        return { ok: false, status: 500, text: async () => { throw new TypeError('terminated') } } as unknown as Response
+      }
+      return okResponse()
+    }))
+
+    expect((await summarize('제목', '본문')).model).toBe(MODEL_CHAIN[1])
+  })
+
+  it('본문 읽기 중 끊김은 소진으로 기록하지 않는다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes(MODEL_CHAIN[0])) {
+        return { ok: true, status: 200, json: async () => { throw new TypeError('terminated') } } as unknown as Response
+      }
+      return okResponse()
+    }))
+
+    await summarize('제목', '본문')
+
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(false)
+  })
+
+  it('전부 본문 도중 끊기면 사유가 쿼터와 구분된다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => (
+      { ok: true, status: 200, json: async () => { throw new TypeError('terminated') } } as unknown as Response
+    )))
+
+    let error: unknown
+    try {
+      await summarize('제목', '본문')
+    } catch (e) {
+      error = e
+    }
+
+    const message = (error as Error).message
+    expect(message).toContain('응답 없음')
+    expect(message).not.toContain('쿼터 소진')
+  })
+
+  it('JSON 문법 오류는 다음 모델로 넘기지 않고 던진다 — 연결 문제가 아니다', async () => {
+    // res.json() 의 SyntaxError 까지 "끊김"으로 삼키면, 응답이 이상한 모델이
+    // 조용히 체인을 타고 넘어가 진단이 사라진다.
+    const fetchMock = vi.fn(async () => (
+      { ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token < in JSON at position 0') } } as unknown as Response
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(summarize('제목', '본문')).rejects.toThrow(/Unexpected token/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('네트워크 장애가 아닌 예외는 그대로 던진다 — 다음 모델로 가려지지 않는다', async () => {

@@ -19,6 +19,12 @@ import { isTransientNetworkError } from '../transientNetwork'
  * 평상시(앞쪽 모델이 살아 있는 동안) 담당자에게 가는 것은 검증된 결과이고,
  * 뒤쪽 모델은 앞이 전부 소진된 날에만 "빈칸보다는 낫다"의 자리에서 일한다.
  *
+ * **2026-08-28 현재 체인은 전원 `verified` 다**(gemini 7개). `last-resort` 자리에 있던
+ * `gemma-4-31b-it` 은 실제 기사 본문 재측정 뒤 배제했다 — 타임아웃 60초가 수집 창을
+ * 갉아먹는 비용이 그 자리에서 얻는 것보다 컸다(EXCLUDED_MODELS 참고). `last-resort`
+ * 등급 자체는 남겨 둔다: 다음에 "빈칸보다는 낫다" 후보가 생기면 그 자리를 명시적으로
+ * 표시할 수단이 있어야 하고, 순서 불변식을 테스트가 계속 지키고 있어야 하기 때문이다.
+ *
  * 이 배열을 **모델 이름 문자열이 아니라 구조체로 두는 이유가 그것이다.**
  * 이름만 늘어놓으면 나중에 누가 알파벳순으로 정렬하거나 "최신 모델을 앞으로"
  * 옮기면서 이 정책을 흔적 없이 지운다. `quality` 는 그 정렬을 테스트가 막기
@@ -87,25 +93,6 @@ export const MODEL_CHAIN_ENTRIES: readonly ChainEntry[] = [
       '2026-08-28 추가. JSON OK, 5초로 빠르다. 다만 실측 108~126자로 100자를 상시 초과해 ' +
       '절삭이 늘 개입한다 — 그래서 gemini-3-flash-preview 뒤다.',
   },
-  {
-    model: 'gemma-4-31b-it',
-    quality: 'last-resort',
-    note:
-      '2026-08-28 재측정해 추가. **실제 기사 본문으로 재실측하니 첫 표본(짧은 합성 기사 ' +
-      '26회, 20회 성공)이 전혀 대표적이지 않았다.** 실제 본문 24회: 타임아웃 12, ' +
-      '코드펜스로 감싼 응답 12, **펜스 없는 정상 JSON 0회.** 즉 이 모델은 실제 입력에서 ' +
-      '항상 규약을 어기고, 절반은 60초 안에 답하지 못한다. stripCodeFence 복구가 없으면 ' +
-      '실질 수확이 0 이다(복구가 생긴 뒤 12/24). ' +
-      '성공했을 때의 품질은 대체로 쓸 만하다 — 100자 이내, 개조식. ' +
-      '**다만 파싱된 12건 중 1건은 내용이 무너져 있었다**("유럽으로의 시장으로의 확장 및 ' +
-      '미국으로의 … same-day same-day own ow"). 펜스가 우연히 막아 주던 것을 복구가 ' +
-      '통과시키는 셈이라, 이 자리는 gemma-4-26b-a4b-it 을 배제한 기준(조용한 실패)에 ' +
-      '8% 가량 걸친다. 26b(성공분의 40%가 파손)보다 훨씬 낮지만 0 은 아니다 — ' +
-      '재검토가 필요하면 task-33-report.md 의 선택지 (a)(b)(c) 를 보라. ' +
-      '(브리프가 남긴 "maxOutputTokens 3000 에서 잘린다"는 재현되지 않았다 — ' +
-      '출력이 65~193토큰이라 애초에 상한에 닿지 않는다.) ' +
-      '앞으로 옮기지 마라: 타임아웃 50%·정상 JSON 0% 인 모델이 앞에 오면 평상시가 무너진다.',
-  },
 ] as const
 
 /**
@@ -123,6 +110,19 @@ export const EXCLUDED_MODELS: Readonly<Record<string, string>> = {
   'gemini-pro-latest': '실측 429(RESOURCE_EXHAUSTED). 무료 티어에서 쓸 수 있는 여유가 없다.',
   'gemini-3.1-pro-preview': '실측 429(RESOURCE_EXHAUSTED). pro 계열은 무료 티어 일일 한도가 사실상 없어 체인에 넣어도 매번 건너뛴다.',
   'gemini-omni-1.1-flash': '실측 429(RESOURCE_EXHAUSTED). 첫 호출부터 소진 상태라 이 키로는 쓸 수 없다.',
+  'gemma-4-31b-it':
+    '**실제 기사 본문에서는 쓸 수 없다.** 짧은 합성 기사로 잰 첫 표본(26회 중 20회 성공)이 ' +
+    '전혀 대표적이지 않았다. 실제 크롤링 본문 24회 재측정: **타임아웃 12 / 코드펜스로 감싼 응답 12 / ' +
+    '펜스 없는 정상 JSON 0.** 즉 실제 입력에서는 항상 규약을 어기고, 절반은 60초 안에 답하지 못한다. ' +
+    '**배제의 결정적 근거는 타임아웃 비용이다.** 한 번이 60초이고 요약 동시성은 4다. 이 모델까지 ' +
+    '내려간 날 후보 20건이 닿으면 20 × 60초 ÷ 4 = **5분**을 순수 대기로 쓴다 — 시세·뉴스·요약을 ' +
+    '모두 처리해야 하는 07:40~08:00 창 20분의 4분의 1이다. 수율 50% 짜리 모델에 걸 수 없다. ' +
+    '여기에 조용한 실패도 겹친다: 파싱된 12건 중 1건은 내용이 무너져 있었다("유럽으로의 시장으로의 ' +
+    '확장 및 미국으로의 … same-day same-day own ow"). 아래 gemma-4-26b-a4b-it 과 성질이 같고 ' +
+    '비율만 40% → 8% 로 낮다. 발췌 폴백은 배지가 붙고 본문에서 그대로 오려낸 문장이라 이미 정직하므로, ' +
+    '이 모델을 두고 얻는 것("8순위까지 내려간 날에만, 절반의 확률로, 발췌 대신 요약")이 비용보다 작다. ' +
+    '(브리프가 남긴 "maxOutputTokens 3000 에서 잘린다"는 재현되지 않았다 — 출력이 65~193토큰이라 ' +
+    '애초에 상한에 닿지 않는다. 잘린 게 아니라 펜스였다.)',
   'gemma-4-26b-a4b-it':
     '**JSON 은 내지만 내용이 무너진다.** 2026-08-28 프로덕션과 같은 설정으로 10회 호출: ' +
     '5회 120초 초과(프로덕션 타임아웃 60초를 훨씬 넘는다), 1회만 정상, 4회는 finishReason=STOP ' +
@@ -254,6 +254,32 @@ function classifyThrownFailure(error: unknown): FailureClass {
 }
 
 /**
+ * **응답 본문을 읽는 도중** 끊긴 것인지 판별한다.
+ *
+ * `fetch` 는 헤더를 받으면 반환하고, 본문은 `res.text()`/`res.json()` 에서 흘러온다.
+ * 그 사이에 소켓이 끊기거나 60초 타임아웃이 걸리면 예외가 **본문 읽기 쪽에서** 난다 —
+ * `fetch` 호출을 감싼 try 로는 못 잡는다. 기능적으로는 fetch 가 던진 것과 같다:
+ * 이 모델은 답을 못 줬으니 다음 모델로 가야 한다.
+ *
+ * **공유 목록(`../transientNetwork`)을 넓히지 않고 여기서 끝낸다.** 그 목록은 시세
+ * 경로(`classifyQuoteFailure`)와 함께 쓰므로, 거기에 `terminated` 같은 패턴을 넣으면
+ * 시세 재시도 동작까지 바뀐다 — 요청받지 않은 변경이다. 본문 읽기 중 끊김은 이
+ * 파일에서만 나는 문제이므로 판정도 이 파일에 둔다.
+ *
+ * undici 는 본문 도중 소켓이 끊기면 `TypeError: terminated` 를 던진다(원인은 `cause`).
+ * 여기에 공유 판정(타임아웃·`fetch failed` 등)을 더한 것이 전부다.
+ *
+ * **JSON 문법 오류는 여기 해당하지 않는다.** `res.json()` 이 `SyntaxError` 를 던지면
+ * 그건 연결 문제가 아니라 응답이 이상한 것이다 — 체인으로 넘기지 않고 던져야 진단이
+ * 가려지지 않는다(`classifyFailure` 의 `other` 와 같은 취급).
+ */
+function isBodyReadFailure(error: unknown): boolean {
+  if (isTransientNetworkError(error)) return true
+  const message = error instanceof Error ? error.message : String(error)
+  return /\bterminated\b|premature close|ERR_STREAM_PREMATURE_CLOSE/i.test(message)
+}
+
+/**
  * 모델이 JSON 을 ```` ```…``` ```` 코드펜스로 감싸 보냈으면 그 안쪽을 꺼낸다.
  * 감싸지 않았으면 `null`.
  *
@@ -272,6 +298,12 @@ function classifyThrownFailure(error: unknown): FailureClass {
  *
  * 벗겨낸 뒤에도 파싱에 실패하면 호출부가 **그대로 실패시킨다.** 무리해서 건져내지
  * 않는다 — 깨진 응답을 억지로 살리면 그게 정상 요약처럼 화면에 오른다.
+ *
+ * **현재 체인에 이 경로를 쓰는 모델은 없다.** 이 코드를 필요로 하던 `gemma-4-31b-it`
+ * 은 2026-08-28 에 배제됐고, 남은 gemini 7개는 실측상 펜스를 붙인 적이 한 번도 없다.
+ * **그래도 지우지 마라 — 죽은 코드가 아니다.** 정상 파싱이 실패했을 때만 도는 경로라
+ * 비용이 0 이고, 복구하면 경고 로그가 남는다. 다음에 어떤 모델이 같은 짓을 하면
+ * 그때 조용히 폴백으로 새지 않고 로그에 드러난다 — 그것이 이 코드의 값어치다.
  */
 export function stripCodeFence(text: string): string | null {
   if (!text.includes('```')) return null
@@ -391,7 +423,17 @@ export async function summarize(title: string, body: string): Promise<SummarySet
       // 오류 본문에는 요청 URL 이 되비쳐 오는 경우가 있고, 그 URL 에는 `?key=` 가 붙어
       // 있다. 이 문자열은 summaryError 로 DB 에 저장되고 검수 화면의 title 속성에까지
       // 실리므로, 자르기 전에 키를 지운다. 자른 뒤에 지우면 잘린 조각이 남을 수 있다.
-      const detail = redactKey(await res.text(), key)
+      let rawDetail: string
+      try {
+        rawDetail = await res.text()
+      } catch (e) {
+        // 오류 본문을 읽다 끊겼다. 상태 코드는 봤지만 사유를 확정할 수 없으므로
+        // 응답을 못 받은 것과 같이 다룬다 — 다음 모델로, 소진 기록은 안 한다.
+        if (!isBodyReadFailure(e)) throw e
+        skipped.push({ model, reason: 'no-response' })
+        continue
+      }
+      const detail = redactKey(rawDetail, key)
       const failure = classifyFailure(res.status, detail)
       if (failure === 'quota') {
         // 오늘치가 끝났다 — 영구 기록해서 이후 호출은 이 모델을 건너뛴다.
@@ -411,7 +453,16 @@ export async function summarize(title: string, body: string): Promise<SummarySet
       throw new Error(`gemini HTTP ${res.status}: ${detail.slice(0, 200)}`)
     }
 
-    const payload = await res.json()
+    let payload: unknown
+    try {
+      payload = await res.json()
+    } catch (e) {
+      // 본문 도중 끊긴 경우만 다음 모델로 넘긴다. JSON 문법 오류(SyntaxError)는
+      // 연결 문제가 아니라 응답이 이상한 것이므로 그대로 던진다.
+      if (!isBodyReadFailure(e)) throw e
+      skipped.push({ model, reason: 'no-response' })
+      continue
+    }
     const text = extractJsonText(payload)
 
     // Gemini 가 실제로 돌려주는 JSON 은 2안 필드뿐이다 — model 은 우리가 아는
