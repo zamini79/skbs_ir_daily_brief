@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { extractJsonText, enforceLimit, summarize, MODEL_CHAIN, exhaustedModels, redactKey } from './gemini'
+import {
+  extractJsonText,
+  enforceLimit,
+  summarize,
+  MODEL_CHAIN,
+  MODEL_CHAIN_ENTRIES,
+  EXCLUDED_MODELS,
+  exhaustedModels,
+  redactKey,
+} from './gemini'
 
 beforeEach(() => {
   process.env.GEMINI_API_KEY = 'test-key'
@@ -189,8 +198,9 @@ describe('모델 폴백 체인', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('모든 모델이 429면 시도한 모델 이름을 모두 담아 던진다', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => quotaResponse()))
+  it('모든 모델이 429면 체인 전체를 실제로 두드리고, 시도한 모델 이름을 모두 담아 던진다', async () => {
+    const fetchMock = vi.fn(async () => quotaResponse())
+    vi.stubGlobal('fetch', fetchMock)
 
     let error: unknown
     try {
@@ -200,6 +210,9 @@ describe('모델 폴백 체인', () => {
     }
 
     expect(error).toBeInstanceOf(Error)
+    // 이름만 메시지에 담고 실제로는 앞의 몇 개만 호출하는 구현을 잡는다 —
+    // 체인을 넓힌 목적(모델별 일일 한도를 합산한다)이 지켜지는지의 핵심이다.
+    expect(fetchMock).toHaveBeenCalledTimes(MODEL_CHAIN.length)
     for (const model of MODEL_CHAIN) {
       expect((error as Error).message).toContain(model)
     }
@@ -376,5 +389,72 @@ describe('쿼터 소진 기록의 KST 날짜 경계', () => {
     expect(calledUrls).toHaveLength(1)
     expect(calledUrls[0]).toContain(MODEL_CHAIN[1])
     expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(true)
+  })
+})
+
+describe('체인 순서 정책', () => {
+  // 이 블록이 지키는 것은 "코드가 컴파일되는가"가 아니라 **순서의 근거**다.
+  // 체인이 8개로 늘면서 뒤쪽에 품질이 덜 검증된 모델이 들어왔다. 누가 이 배열을
+  // 정렬하거나 새 모델을 앞에 끼워 넣으면, 평상시 담당자에게 가는 요약이 조용히
+  // 그 모델의 것으로 바뀐다 — 화면에서는 구분되지 않는다.
+
+  it('last-resort 모델은 verified 모델보다 뒤에 있다', () => {
+    const lastVerified = MODEL_CHAIN_ENTRIES.map(e => e.quality).lastIndexOf('verified')
+    const firstLastResort = MODEL_CHAIN_ENTRIES.findIndex(e => e.quality === 'last-resort')
+    expect(firstLastResort).toBeGreaterThan(-1) // 등급 자체가 사라지지 않았는지
+    expect(firstLastResort).toBeGreaterThan(lastVerified)
+  })
+
+  it('품질을 실측 검증한 gemini-3.6-flash 가 1순위다', () => {
+    expect(MODEL_CHAIN_ENTRIES[0]).toMatchObject({ model: 'gemini-3.6-flash', quality: 'verified' })
+  })
+
+  it('gemma 계열은 gemini 계열보다 모두 뒤에 있다', () => {
+    // "빈칸보다는 낫다" 자리. 앞으로 오면 평상시 결과가 이쪽에서 나온다.
+    const lastGemini = MODEL_CHAIN.map(m => m.startsWith('gemini-')).lastIndexOf(true)
+    const firstGemma = MODEL_CHAIN.findIndex(m => m.startsWith('gemma-'))
+    if (firstGemma >= 0) expect(firstGemma).toBeGreaterThan(lastGemini)
+  })
+
+  it('실측으로 배제한 모델은 체인에 없다', () => {
+    for (const model of Object.keys(EXCLUDED_MODELS)) {
+      expect(MODEL_CHAIN).not.toContain(model)
+    }
+  })
+
+  it('배제 사유는 비어 있지 않다 — 사유 없는 배제는 다음 사람이 되돌린다', () => {
+    for (const [model, reason] of Object.entries(EXCLUDED_MODELS)) {
+      expect(reason.length, model).toBeGreaterThan(20)
+    }
+  })
+
+  it('모든 항목에 순서의 근거(note)가 달려 있다', () => {
+    for (const entry of MODEL_CHAIN_ENTRIES) {
+      expect(entry.note.length, entry.model).toBeGreaterThan(20)
+    }
+  })
+
+  it('중복 모델이 없다 — 같은 모델을 두 번 두드리면 쿼터만 빨리 마른다', () => {
+    expect(new Set(MODEL_CHAIN).size).toBe(MODEL_CHAIN.length)
+  })
+
+  it('MODEL_CHAIN 은 MODEL_CHAIN_ENTRIES 에서 파생된다 (둘이 어긋나지 않는다)', () => {
+    expect(MODEL_CHAIN).toEqual(MODEL_CHAIN_ENTRIES.map(e => e.model))
+  })
+
+  it('기존 5개 모델의 상대 순서가 유지된다 — 체인을 넓히면서 앞쪽을 흔들지 않았다', () => {
+    const before = [
+      'gemini-3.6-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-flash-lite-latest',
+      'gemini-3.5-flash',
+      'gemini-3.1-flash-lite',
+    ]
+    expect(MODEL_CHAIN.slice(0, before.length)).toEqual(before)
+  })
+
+  it('체인이 넓어졌다 — 확장 전 5개보다 많다', () => {
+    // 파트 A 의 목적 자체(모델별 일일 한도를 합산해 발췌 폴백을 줄인다)를 지킨다.
+    expect(MODEL_CHAIN.length).toBeGreaterThan(5)
   })
 })

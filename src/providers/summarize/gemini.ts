@@ -3,29 +3,134 @@ import { kstDateString } from '@/domain/date'
 import { buildPrompt, MAX_SUMMARY_CHARS } from './prompt'
 
 /**
- * gemini-2.5-flash 는 신규 사용자에게 404다.
+ * 요약 모델 폴백 체인.
  *
  * 무료 티어의 일일 쿼터는 "모델별로" 소진된다(실측: gemini-3.6-flash 가 429로
  * GenerateRequestsPerDayPerProjectPerModel-FreeTier 를 반환하는 순간에도
  * gemini-3.5-flash-lite 는 200을 돌려줬다). 그래서 단일 모델이 아니라 순서가
  * 있는 체인을 둔다 — 한 모델의 하루 치가 끝나면 다음 모델로 넘어간다.
- * gemini-3.6-flash 를 맨 앞에 둔 것은 품질을 실측으로 검증한 모델이기 때문이다.
- * 나머지는 측정된 품질(3안 모두 100자 이내인지, 관점이 실제로 갈리는지) 순으로
- * 배치했다(task-13-report.md "Fix round 2" 의 비교표 참고). 두 모델은 제외했다:
- * gemini-2.5-flash-lite 는 신규 사용자에게 404(영구 실패)를 반환한다 — 쿼터
- * 소진도, 일시적 장애도 아니라서 체인을 넘기는 조건에 해당하지 않는다. 어느
- * 자리에 두든 그 뒤 모델을 무력화하므로 제외했다. gemini-3.7-flash 는 실측
- * 시점에 매번 503(UNAVAILABLE)을 반환해 실제 응답 품질을 한 번도 측정하지
- * 못했다 — 품질을 추측해서 순서를 매기지 않고 제외해 둔다. 503 은 이제(fix
- * round 3) 체인을 넘기는 조건이라서 재측정만 하면 다시 넣을 수 있다.
+ *
+ * ## 순서는 곧 품질 정책이다 (지우지 마라)
+ *
+ * 체인이 길어질수록 **뒤쪽 모델의 품질 편차가 커진다.** 그런데 요약은 나쁘게
+ * 나와도 "요약처럼" 생겼다 — 검수 화면에서 좋은 모델의 결과와 글자 하나
+ * 다르지 않게 보인다. 그래서 **좋은 모델을 앞에 두는 것 자체가 안전장치**다:
+ * 평상시(앞쪽 모델이 살아 있는 동안) 담당자에게 가는 것은 검증된 결과이고,
+ * 뒤쪽 모델은 앞이 전부 소진된 날에만 "빈칸보다는 낫다"의 자리에서 일한다.
+ *
+ * 이 배열을 **모델 이름 문자열이 아니라 구조체로 두는 이유가 그것이다.**
+ * 이름만 늘어놓으면 나중에 누가 알파벳순으로 정렬하거나 "최신 모델을 앞으로"
+ * 옮기면서 이 정책을 흔적 없이 지운다. `quality` 는 그 정렬을 테스트가 막기
+ * 위한 필드다(gemini.test.ts 의 "체인 순서 정책" 참고).
+ *
+ * 어느 모델이 실제로 답했는지는 `NewsCandidate.summaryModel` 에 남는다 —
+ * 요약 품질이 이상한 날에는 그 컬럼부터 본다(docs/운영.md 2.8).
  */
-export const MODEL_CHAIN = [
-  'gemini-3.6-flash',
-  'gemini-3.5-flash-lite',
-  'gemini-flash-lite-latest',
-  'gemini-3.5-flash',
-  'gemini-3.1-flash-lite',
+export type ChainQuality =
+  /**
+   * 여러 기사로 JSON·문체(개조식)·길이를 실측 확인했다. 평상시 담당자에게
+   * 가는 결과는 이 등급에서 나와야 한다.
+   */
+  | 'verified'
+  /**
+   * JSON 은 내지만 품질을 아직 신뢰할 수 없다. **앞의 모델이 전부 소진된
+   * 날에만** 쓰이는 "빈칸보다는 낫다" 자리. verified 앞으로 옮기지 마라.
+   */
+  | 'last-resort'
+
+export type ChainEntry = {
+  model: string
+  quality: ChainQuality
+  /** 이 자리에 있는 근거. 실측 날짜와 관측값을 남긴다. */
+  note: string
+}
+
+export const MODEL_CHAIN_ENTRIES: readonly ChainEntry[] = [
+  {
+    model: 'gemini-3.6-flash',
+    quality: 'verified',
+    note: '기준 모델. 품질을 실측으로 검증한 유일한 모델이라 맨 앞에 둔다(task-13-report.md).',
+  },
+  {
+    model: 'gemini-3.5-flash-lite',
+    quality: 'verified',
+    note: '측정된 품질(2안이 100자 이내인지, 관점이 실제로 갈리는지) 순 배치. 응답 1~2초로 가장 빠르다.',
+  },
+  {
+    model: 'gemini-flash-lite-latest',
+    quality: 'verified',
+    note: '위와 같은 근거로 배치. 2026-08-28 재확인: 200 OK, 1.5초.',
+  },
+  {
+    model: 'gemini-3.5-flash',
+    quality: 'verified',
+    note: '위와 같은 근거로 배치. 사고 토큰이 많아 10초대.',
+  },
+  {
+    model: 'gemini-3.1-flash-lite',
+    quality: 'verified',
+    note: '100자를 자주 넘겨 truncateAtSentence 개입이 잦다 — 그래서 검증군 중 마지막이다.',
+  },
+  {
+    model: 'gemini-3-flash-preview',
+    quality: 'verified',
+    note:
+      '2026-08-28 추가. 프로덕션과 같은 responseSchema 로 실측: JSON OK, 개조식 준수, ' +
+      '93~107자(초과분은 절삭된다). 사고 토큰이 8,300여 개라 34초가 걸린다 — 60초 타임아웃 ' +
+      '안이지만 여유가 크지 않으니, 이 모델까지 내려온 날은 수집이 느려진다.',
+  },
+  {
+    model: 'gemini-3.1-flash-lite-preview',
+    quality: 'verified',
+    note:
+      '2026-08-28 추가. JSON OK, 5초로 빠르다. 다만 실측 108~126자로 100자를 상시 초과해 ' +
+      '절삭이 늘 개입한다 — 그래서 gemini-3-flash-preview 뒤다.',
+  },
+  {
+    model: 'gemma-4-31b-it',
+    quality: 'last-resort',
+    note:
+      '2026-08-28 재측정해 추가. 6회 호출 전부 JSON OK, 전 필드 65~90자로 100자 이내, ' +
+      '개조식 준수, 5~7초. (브리프가 남긴 "maxOutputTokens 3000 에서 잘린다"는 재현되지 ' +
+      '않았다 — 출력이 142~193토큰이라 애초에 상한에 닿지 않는다.) 그런데도 last-resort 인 ' +
+      '이유는 형제 모델 gemma-4-26b-a4b-it 이 같은 프롬프트에서 10회 중 4회 "요약처럼 생긴 ' +
+      '쓰레기"를 냈기 때문이다(EXCLUDED_MODELS 참고). 같은 계열의 그 실패 모드를 6회 표본으로 ' +
+      '배제할 수 없다. 프로덕션 track record 가 쌓이기 전까지는 앞으로 옮기지 마라.',
+  },
 ] as const
+
+/**
+ * 체인에 **넣지 않기로 실측을 근거로 결정한** 모델과 그 사유.
+ *
+ * 목록으로 남기는 이유: 사유 없이 빠져 있으면 다음 사람이 "왜 없지?" 하고 다시
+ * 넣는다. 테스트가 이 목록의 모델이 체인에 없음을 강제한다.
+ */
+export const EXCLUDED_MODELS: Readonly<Record<string, string>> = {
+  'gemini-2.5-flash': '신규 키에 404(NOT_FOUND, 영구 실패). 쿼터 소진도 일시적 장애도 아니라 체인을 넘기는 조건에 해당하지 않는다.',
+  'gemini-2.5-flash-lite': '신규 키에 404(NOT_FOUND, 영구 실패). 어느 자리에 두든 체인을 넘기는 조건이 아니라서 그 뒤 모델을 통째로 무력화한다.',
+  'gemini-2.5-pro': '신규 키에 404(NOT_FOUND, 영구 실패). gemini-2.5 계열은 신규 사용자에게 모두 폐지됐다.',
+  'gemini-3.7-flash': '실측할 때마다 503(UNAVAILABLE)이라 응답 품질을 한 번도 측정하지 못했다. 2026-08-28 재확인에도 503. 품질을 추측해서 순서를 매기지 않는다 — 200 을 받는 날 재측정하면 넣을 수 있다.',
+  'gemini-flash-latest': '2026-08-28 실측 503(UNAVAILABLE, high demand). gemini-3.7-flash 와 같은 이유로 품질을 측정하지 못했다.',
+  'gemini-pro-latest': '실측 429(RESOURCE_EXHAUSTED). 무료 티어에서 쓸 수 있는 여유가 없다.',
+  'gemini-3.1-pro-preview': '실측 429(RESOURCE_EXHAUSTED). pro 계열은 무료 티어 일일 한도가 사실상 없어 체인에 넣어도 매번 건너뛴다.',
+  'gemini-omni-1.1-flash': '실측 429(RESOURCE_EXHAUSTED). 첫 호출부터 소진 상태라 이 키로는 쓸 수 없다.',
+  'gemma-4-26b-a4b-it':
+    '**JSON 은 내지만 내용이 무너진다.** 2026-08-28 프로덕션과 같은 설정으로 10회 호출: ' +
+    '5회 120초 초과(프로덕션 타임아웃 60초를 훨씬 넘는다), 1회만 정상, 4회는 finishReason=STOP ' +
+    '인 채로 (a) 프롬프트의 자리표시자를 본문에 흘리고("1안(수치 중심): ..."), ' +
+    '(b) 한국어가 깨지고("체결질적적 변화", "가동률 회솔복", "도약약속함"), ' +
+    '(c) 한 번은 `<em>undercut</em>` 을 110회 반복한 2,081자를 냈다. ' +
+    '이 출력은 enforceLimit 가 100자로 잘라 **정상 요약과 똑같이 「① 수치 중심」 라벨을 달고** ' +
+    '화면에 오른다 — 이 저장소가 여섯 번 반복한 "부분 실패가 정상값과 똑같이 보이는" 결함 그 자체다. ' +
+    '발췌 폴백은 최소한 「본문 발췌」 배지가 붙고 본문에서 그대로 오려낸 문장이다. ' +
+    '따라서 이 모델은 "빈칸보다는 낫다"가 아니라 **발췌보다도 나쁘다.**',
+}
+
+/**
+ * 체인의 모델 이름만 순서대로. `MODEL_CHAIN_ENTRIES` 가 유일한 출처다 —
+ * 여기에 직접 이름을 추가하지 마라(순서의 근거가 사라진다).
+ */
+export const MODEL_CHAIN: readonly string[] = MODEL_CHAIN_ENTRIES.map(e => e.model)
 
 function endpointFor(model: string): string {
   return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
