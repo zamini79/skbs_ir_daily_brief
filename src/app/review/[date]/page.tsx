@@ -1,7 +1,7 @@
-import { getBriefRows, runStatusLabel } from '@/db/repo'
+import { getBriefRows, runStatusLabel, type ClientRow } from '@/db/repo'
 import { isValidMonthKey, monthKeyOf } from '@/domain/calendar'
 import { kstDateString } from '@/domain/date'
-import { countNewsFailed, countUnconfirmed } from '@/domain/excel'
+import { countBlankNewsCells, countNewsFailed } from '@/domain/excel'
 import { AppShell } from './AppShell'
 import { BriefTable } from './BriefTable'
 
@@ -95,22 +95,28 @@ export default async function ReviewPage({ params, searchParams }: PageProps<'/r
  * 다운로드를 막지 않는다 — 담당자가 중간 산출물을 받아볼 이유가 있다. 다만
  * **누르기 전에** 파일이 화면과 어떻게 다를지 말해 준다.
  *
- * 두 가지는 뜻이 다르므로 한 문장으로 뭉치지 않는다:
+ * 두 가지는 뜻도 결과도 다르므로 한 문장으로 뭉치지 않는다:
  *  - 미확정 → 뉴스 칸이 **빈다**(아직 정해지지 않았다). 「미검토」(PENDING)와
- *    「선택 무효화됨」(STALE_SELECTION)을 함께 센다 — 헤더의 「미검토」 수와
- *    다를 수 있고, 그래서 라벨도 다른 말을 쓴다.
- *  - 조회 실패 → 뉴스 칸이 **`-`** 다(기사 없음과 같은 모양이 된다).
+ *    「선택 무효화됨」(STALE_SELECTION)을 함께 세므로 헤더의 「미검토」 수와 다를
+ *    수 있고, 그래서 라벨도 다른 말을 쓴다.
+ *  - 조회 실패 → 뉴스 칸에 **「뉴스 조회 실패 — 확인 필요」가 적혀서** 나간다.
+ *    그 문구는 메일 받는 사람 눈에 그대로 보이므로, 몇 건인지 알고 붙여야 한다.
+ *
+ * 빈 칸 수는 `countBlankNewsCells` 가 **실제로 만들어진 셀에서** 센다. 화면이
+ * 파일과 다른 수를 말하면 경고가 없느니만 못하다.
  */
-function ExportNotice({ rows }: { rows: Parameters<typeof countUnconfirmed>[0] }) {
-  const unconfirmed = countUnconfirmed(rows)
+function ExportNotice({ rows }: { rows: ClientRow[] }) {
+  const blank = countBlankNewsCells(rows)
   const newsFailed = countNewsFailed(rows)
-  if (unconfirmed === 0 && newsFailed === 0) return null
+  if (blank === 0 && newsFailed === 0) return null
 
   return (
     <p className="mt-1.5 max-w-[22rem] text-[11px] leading-snug text-pending-fg">
-      {unconfirmed > 0 && <>미확정 {unconfirmed}건은 뉴스가 비어 있습니다.</>}
-      {unconfirmed > 0 && newsFailed > 0 && ' '}
-      {newsFailed > 0 && <>뉴스 조회 실패 {newsFailed}건은 「-」 로 나갑니다.</>}
+      {blank > 0 && <>미확정 {blank}건은 뉴스가 비어 있습니다.</>}
+      {blank > 0 && newsFailed > 0 && ' '}
+      {newsFailed > 0 && (
+        <>뉴스 조회 실패 {newsFailed}건은 「뉴스 조회 실패 — 확인 필요」로 나갑니다.</>
+      )}
     </p>
   )
 }

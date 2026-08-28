@@ -74,9 +74,14 @@ const BLANK: NewsCells = { title: '', summary: '' }
  * 뉴스 두 칸. 화면과 **같은 순수 함수**(newsColumnContent)로 무엇을 실을지 정한다 —
  * 엑셀 전용 조회나 전용 판정을 따로 두면 화면과 파일이 다른 내용을 보여주게 된다.
  *
- * 빈 칸('')과 `-` 는 다른 뜻이다. 빈 칸 = "아직 정해지지 않았다", `-` = "실을 것이
- * 없다고 정해졌다"(기사 없음·담당자가 뺌·조회 실패). 화면은 다운로드 버튼 옆에
- * 빈 칸이 몇 개인지 미리 알려준다.
+ * **결과가 세 가지이고 서로 달라야 한다.** 서로 다른 사실이라, 파일에서 둘로
+ * 합쳐지는 순간 그중 하나가 거짓이 된다:
+ *
+ *  - 빈 칸 `''` — 아직 정해지지 않았다 (미검토 · 선택 무효화됨)
+ *  - `-` — 실을 것이 없다고 **정해졌다** (기사 없음 · 담당자가 뺌)
+ *  - 「뉴스 조회 실패 — 확인 필요」 — 확인하지 **못했다** (기사가 있었을 수 있다)
+ *
+ * 화면은 다운로드 버튼 옆에 앞의 두 경우가 몇 건인지 미리 알려준다.
  */
 export function excelNewsCells(row: {
   state: RowState
@@ -106,9 +111,17 @@ export function excelNewsCells(row: {
   // 아무것도 할 일이 없는 행과 파일에서 똑같이 보이면 안 된다. 화면에서 없앤
   // 거짓말을 파일에서 되살리지 않는다(repo.ts 의 NEWS_FAILED 주석과 같은 이유).
   //
-  // STALE_SELECTION 도 kind:'label' 이지만 여기 오지 않는다 —
+  // STALE_SELECTION 도 kind:'label' 이지만 그 **상태**로는 여기 오지 않는다 —
   // isUnconfirmedForExport 가 위에서 공란으로 걸러낸다(미확정이지 부재가 아니다).
-  if (content.kind === 'label') return { title: content.text, summary: '' }
+  //
+  // 다만 kind:'label' 로 오는 경로가 하나 더 있다: decision 이 SELECTED 인데 고른
+  // 후보를 목록에서 찾지 못한 방어 경로다(repo.ts). 그때 text 는 STALE_SELECTION
+  // 라벨이고, 그건 담당자에게 "다시 보라"는 말이지 메일 받는 사람에게 할 말이
+  // 아니다. 그 행은 미확정이므로 공란으로 내보낸다 — state 만으로는 SELECTED 라
+  // 위쪽 필터에 걸리지 않으니 여기서 잡는다.
+  if (content.kind === 'label') {
+    return row.state === 'NEWS_FAILED' ? { title: content.text, summary: '' } : BLANK
+  }
 
   // kind: 'none'(기사 없음) | 'omitted'(담당자가 뺌). 둘 다 "실을 것이 없다"로
   // 결정된 상태라 원본 엑셀과 같이 `-` 다. 화면에서는 「싣지 않음」 태그로 갈리지만,
@@ -155,15 +168,22 @@ export function toExcelRows(rows: ClientRow[]): ExcelInstrumentRow[] {
   })
 }
 
-/** 다운로드 전에 알려줄 수 = 뉴스 칸이 빈 채로 나가는 행. */
-export function countUnconfirmed(rows: Array<{ state: RowState }>): number {
-  return rows.filter(r => isUnconfirmedForExport(r.state)).length
+/**
+ * 뉴스 칸이 **빈 채로** 나가는 행 수. 다운로드 버튼 옆 경고에 쓴다.
+ *
+ * 상태를 따로 세지 않고 **실제로 만들어진 셀을 센다.** 상태로 세면 "무엇이 비는가"의
+ * 판정이 두 곳이 되고, 언젠가 한쪽만 바뀌어 "몇 건이 빕니다"가 실제 파일과 어긋난다 —
+ * 틀린 경고는 없느니만 못하다. 23행짜리 표라 한 번 더 만드는 비용은 없다.
+ */
+export function countBlankNewsCells(rows: ClientRow[]): number {
+  return toExcelRows(rows).filter(r => r.newsTitle === '').length
 }
 
 /**
- * 「조회 실패」로 `-` 가 되는 행. 이 행의 `-` 는 "기사가 없었다"가 아니라
- * "찾아보지 못했다"인데 파일에서는 둘이 같은 `-` 로 수렴한다. 파일 형식은
- * 원본과 같게 유지하되, **누르기 전에 화면에서** 몇 건이 그런지 알려준다.
+ * 뉴스 칸에 「뉴스 조회 실패 — 확인 필요」가 **적혀서** 나가는 행 수.
+ *
+ * 그 문구는 메일 받는 사람 눈에 그대로 보인다. 담당자가 누르기 전에 몇 건이 그렇게
+ * 나가는지 알아야 파일을 붙이기 전에 처리할 수 있다.
  */
 export function countNewsFailed(rows: Array<{ state: RowState }>): number {
   return rows.filter(r => r.state === 'NEWS_FAILED').length
