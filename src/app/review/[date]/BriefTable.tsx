@@ -253,6 +253,23 @@ export function BriefTable({ runDate, rows }: { runDate: string; rows: ClientRow
                           {row.quote?.asOf ? `기준 ${row.quote.asOf}` : '기준일 미상'}
                         </div>
                       )}
+                      {/* 1차 소스가 죽어 2차(폴백)로 채운 행. **실패가 아니다** —
+                          값이 다 차 있고 담당자가 오늘 할 일은 없다. 그래서 「시세 실패」의
+                          orange pill 을 쓰지 않는다(그 색은 "이 행의 숫자가 통째로 없다"는
+                          뜻으로 이미 쓰이고 있다). 대신 '(수기)'와 같은 급의 조용한 표시로
+                          둔다 — 뜻도 같은 계열이다: "이 값은 평소와 다른 경로로 들어왔다".
+                          그래도 표시 자체를 없애면 안 된다. 폴백이 조용히 성공하면 1차가
+                          몇 주째 죽어 있어도 아무도 모른다(db/repo.ts 의 판정 함수 참고). */}
+                      {row.quoteFallbackSource !== null && (
+                        <div>
+                          <span
+                            className="inline-block rounded bg-sky-100 px-1 py-0.5 text-[10px] font-medium text-sky-800"
+                            title={`평소 소스(${row.instrument.quoteSource})가 실패해 대체 소스(${row.quoteFallbackSource})로 채운 값입니다. 값 자체는 정상이지만 1차 소스를 점검해야 합니다.`}
+                          >
+                            {row.quoteFallbackSource} 대체
+                          </span>
+                        </div>
+                      )}
                     </td>
                     {/* formatPrevDiff가 close/prevClose null 여부와 보합(0)을 각각 다른
                        문자열로 처리하므로 여기서 다시 분기하지 않는다. */}

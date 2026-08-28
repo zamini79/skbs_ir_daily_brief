@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  quoteFallbackSourceUsed,
   rowDisplayState,
   rowStateLabel,
   runStatusLabel,
@@ -575,5 +576,40 @@ describe('quoteFailureReason', () => {
     // 예: QuoteSnapshot 쓰기 자체가 실패해 행이 아예 없는 경우. 화면은 '-' 로 두고
     // 배너가 대신 말한다(collect.ts 의 quoteFailed 는 이 경우도 센다).
     expect(quoteFailureReason({ ...failed, errorMessage: null })).toBeNull()
+  })
+})
+
+describe('quoteFallbackSourceUsed', () => {
+  // 폴백은 값을 채우기 때문에 **실패처럼 보이지 않는다.** 배너는 초록색이고 다섯 칸이
+  // 다 차 있다. 이 판정이 없으면 1차 소스가 몇 주째 죽어 있어도 아무도 모른다.
+  const fellBack = {
+    quoteSource: 'marketstack',
+    snapshotSource: 'ft',
+    displayClose: 77.28,
+    displayIsManual: false,
+  }
+
+  it('실제로 값을 가져온 소스가 설정된 1차와 다르면 그 이름을 준다', () => {
+    expect(quoteFallbackSourceUsed(fellBack)).toBe('ft')
+  })
+
+  it('1차가 채운 평소의 행에는 아무 말도 하지 않는다', () => {
+    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: 'marketstack' })).toBeNull()
+    expect(quoteFallbackSourceUsed({
+      quoteSource: 'lse', snapshotSource: 'lse', displayClose: 1852, displayIsManual: false,
+    })).toBeNull()
+  })
+
+  it('표시할 값이 없으면 폴백이 아니다 — 그 행은 이미 「시세 실패」로 뜬다', () => {
+    // 폴백까지 실패했거나 통화 불일치로 값을 버린 행이다. 사유에 두 소스가 모두 있다.
+    expect(quoteFallbackSourceUsed({ ...fellBack, displayClose: null })).toBeNull()
+  })
+
+  it('수기 입력값으로 채워진 행은 폴백이 아니다 — 이미 (수기) 로 구분된다', () => {
+    expect(quoteFallbackSourceUsed({ ...fellBack, displayIsManual: true })).toBeNull()
+  })
+
+  it('스냅샷이 아예 없으면 아무 말도 하지 않는다', () => {
+    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: null })).toBeNull()
   })
 })

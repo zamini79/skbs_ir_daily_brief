@@ -311,6 +311,38 @@ export function quoteFailureReason(row: {
   return row.errorMessage
 }
 
+/**
+ * 이 행의 값이 **1차가 아닌 2차(폴백) 소스**에서 왔으면 그 소스 이름을 준다.
+ * 아니면 null 이고, 그때 화면은 아무 표시도 하지 않는다.
+ *
+ * 왜 화면에 드러내야 하는가: 폴백은 값을 채우기 때문에 **실패처럼 보이지 않는다.**
+ * 배너는 초록색이고 다섯 칸이 다 차 있다. 표시가 없으면 1차 소스가 몇 주째 죽어
+ * 있어도 아무도 모르고, 그러면 이 장치는 "이중화"가 아니라 "장애 은폐"가 된다.
+ *
+ * 판정 근거는 `QuoteSnapshot.sourceName`(**실제로 값을 가져온 소스**)과 시드의
+ * `Instrument.quoteSource`(설정된 1차)의 차이 하나뿐이다 — 별도 플래그를 저장하지
+ * 않는다. 두 곳에 같은 사실을 적으면 언젠가 어긋난다.
+ *
+ * 두 경우는 폴백이 아니므로 제외한다:
+ *  - **표시할 값이 없는 행** — 폴백까지 실패했거나 통화 불일치로 값을 버린 행이다.
+ *    그 행은 이미 「시세 실패」로 뜨고 사유에 두 소스가 모두 적혀 있다.
+ *  - **수기 입력값으로 채워진 행** — 자동 수집의 산물이 아니다. '(수기)' 로 이미 구분된다.
+ */
+export function quoteFallbackSourceUsed(row: {
+  /** Instrument.quoteSource — 설정된 1차 소스. */
+  quoteSource: string
+  /** QuoteSnapshot.sourceName — 실제로 값을 가져온 소스. 스냅샷이 없으면 null. */
+  snapshotSource: string | null
+  displayClose: number | null
+  displayIsManual: boolean
+}): string | null {
+  if (row.snapshotSource === null) return null
+  if (row.displayClose === null) return null
+  if (row.displayIsManual) return null
+  if (row.snapshotSource === row.quoteSource) return null
+  return row.snapshotSource
+}
+
 function toNum(v: Prisma.Decimal | number | null | undefined): number | null {
   if (v === null || v === undefined) return null
   return Number(v)
@@ -354,6 +386,8 @@ export type ClientQuote = {
   marketCapKrwTrillion: number | null
   asOf: string | null
   errorMessage: string | null
+  /** 실제로 값을 가져온 소스(QuoteSnapshot.sourceName). 설정된 1차와 다를 수 있다. */
+  sourceName: string
 } | null
 
 export type ClientInstrument = {
@@ -382,6 +416,9 @@ export type ClientRow = {
   /** 시세 칸이 비어 있는 이유를 수집 실패로 단정할 수 있으면 그 원문 사유. 아니면 null
    * (수기 입력 대상이거나, 표시할 값이 있거나, 사유가 기록되지 않았다). */
   quoteFailReason: string | null
+  /** 1차가 실패해 2차 소스로 채운 행이면 그 소스 이름. 평소에는 null.
+   * 실패는 아니지만 「평소 경로가 죽었다」는 사실이라 화면에 작게 드러낸다. */
+  quoteFallbackSource: string | null
 }
 
 export type ClientRun = {
@@ -453,6 +490,7 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
             marketCapKrwTrillion: toNum(q.marketCapKrwTrillion),
             asOf: q.asOf,
             errorMessage: q.errorMessage,
+            sourceName: q.sourceName,
           }
         : null,
       candidates: mine.map(c => ({
@@ -494,6 +532,12 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
         quoteSource: inst.quoteSource,
         displayClose: display.close,
         errorMessage: q?.errorMessage ?? null,
+      }),
+      quoteFallbackSource: quoteFallbackSourceUsed({
+        quoteSource: inst.quoteSource,
+        snapshotSource: q?.sourceName ?? null,
+        displayClose: display.close,
+        displayIsManual: display.isManual,
       }),
     }
   })
