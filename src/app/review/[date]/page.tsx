@@ -1,6 +1,7 @@
 import { getBriefRows, runStatusLabel } from '@/db/repo'
 import { isValidMonthKey, monthKeyOf } from '@/domain/calendar'
 import { kstDateString } from '@/domain/date'
+import { countNewsFailed, countUnconfirmed } from '@/domain/excel'
 import { AppShell } from './AppShell'
 import { BriefTable } from './BriefTable'
 
@@ -45,7 +46,7 @@ export default async function ReviewPage({ params, searchParams }: PageProps<'/r
         </main>
       ) : (
         <main className="px-8 py-7">
-          <header className="mb-5">
+          <header className="mb-5 flex flex-wrap items-start justify-between gap-4">
             <div>
               <h1 className="text-[28px] leading-tight font-bold text-ink">주가 현황 및 뉴스</h1>
               <p className="mt-1 text-[13px] text-ink-muted">
@@ -57,6 +58,19 @@ export default async function ReviewPage({ params, searchParams }: PageProps<'/r
               </p>
             </div>
 
+            <div className="text-right">
+              {/*
+               * 서버가 Content-Disposition 으로 파일명을 정하므로 평범한 링크면 된다
+               * (next/link 를 쓰면 클라이언트 라우팅으로 잡아채려 해서 안 된다).
+               */}
+              <a
+                href={`/api/export/${date}`}
+                className="inline-block rounded border border-btn-border bg-page px-3.5 py-2 text-[13px] font-medium text-ink hover:bg-thead"
+              >
+                Excel 다운로드
+              </a>
+              <ExportNotice rows={data.rows} />
+            </div>
           </header>
 
           <div
@@ -74,5 +88,29 @@ export default async function ReviewPage({ params, searchParams }: PageProps<'/r
         </main>
       )}
     </AppShell>
+  )
+}
+
+/**
+ * 다운로드를 막지 않는다 — 담당자가 중간 산출물을 받아볼 이유가 있다. 다만
+ * **누르기 전에** 파일이 화면과 어떻게 다를지 말해 준다.
+ *
+ * 두 가지는 뜻이 다르므로 한 문장으로 뭉치지 않는다:
+ *  - 미확정 → 뉴스 칸이 **빈다**(아직 정해지지 않았다). 「미검토」(PENDING)와
+ *    「선택 무효화됨」(STALE_SELECTION)을 함께 센다 — 헤더의 「미검토」 수와
+ *    다를 수 있고, 그래서 라벨도 다른 말을 쓴다.
+ *  - 조회 실패 → 뉴스 칸이 **`-`** 다(기사 없음과 같은 모양이 된다).
+ */
+function ExportNotice({ rows }: { rows: Parameters<typeof countUnconfirmed>[0] }) {
+  const unconfirmed = countUnconfirmed(rows)
+  const newsFailed = countNewsFailed(rows)
+  if (unconfirmed === 0 && newsFailed === 0) return null
+
+  return (
+    <p className="mt-1.5 max-w-[22rem] text-[11px] leading-snug text-pending-fg">
+      {unconfirmed > 0 && <>미확정 {unconfirmed}건은 뉴스가 비어 있습니다.</>}
+      {unconfirmed > 0 && newsFailed > 0 && ' '}
+      {newsFailed > 0 && <>뉴스 조회 실패 {newsFailed}건은 「-」 로 나갑니다.</>}
+    </p>
   )
 }
