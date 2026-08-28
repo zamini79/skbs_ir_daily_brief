@@ -1,53 +1,78 @@
 import { getBriefRows, runStatusLabel } from '@/db/repo'
+import { isValidMonthKey, monthKeyOf } from '@/domain/calendar'
+import { kstDateString } from '@/domain/date'
+import { AppShell } from './AppShell'
 import { BriefTable } from './BriefTable'
 
+/**
+ * `force-dynamic`. 이 화면은 사이드바에서 「오늘」을 표시하려고
+ * `kstDateString(new Date())` 를 읽는다. 정적으로 굳으면 그 「오늘」이 배포일에
+ * 고정돼 달력이 매일 지난 날짜를 오늘이라고 가리킨다 — 루트 `/` 리다이렉트에서
+ * 이미 한 번 밟은 함정과 같은 것이다.
+ */
+export const dynamic = 'force-dynamic'
+
 const STATUS_BANNER_STYLE: Record<string, string> = {
-  COLLECTING: 'border-blue-300 bg-blue-50 text-blue-800',
-  READY: 'border-emerald-300 bg-emerald-50 text-emerald-800',
-  PARTIAL: 'border-amber-400 bg-amber-50 text-amber-900',
-  FAILED: 'border-red-400 bg-red-50 text-red-800',
+  COLLECTING: 'border-info-border bg-info text-info-fg',
+  READY: 'border-ok-border bg-ok text-ok-fg',
+  PARTIAL: 'border-pending-border bg-pending text-pending-fg',
+  FAILED: 'border-fail-border bg-fail text-fail-fg',
 }
 
-export default async function ReviewPage({ params }: { params: Promise<{ date: string }> }) {
+export default async function ReviewPage({ params, searchParams }: PageProps<'/review/[date]'>) {
   const { date } = await params
+  const query = await searchParams
+
+  /*
+   * 달력이 보여줄 달. `?m=` 이 있으면 그 달(사용자가 달력을 넘긴 것),
+   * 없으면 보고 있는 날짜의 달이다. 형식이 틀린 `?m=` 은 조용히 무시하고
+   * 날짜의 달로 돌아간다 — 잘못된 값으로 빈 달력을 그리면 화면이 "이 달에는
+   * 브리프가 없다"고 거짓으로 말하게 된다.
+   */
+  const requested = typeof query.m === 'string' && isValidMonthKey(query.m) ? query.m : null
+  const monthKey = requested ?? monthKeyOf(date) ?? monthKeyOf(kstDateString(new Date()))!
+
   const data = await getBriefRows(date)
 
-  if (!data) {
-    return (
-      <main className="min-h-screen bg-white p-8 text-gray-900 [color-scheme:light]">
-        <h1 className="text-xl font-bold">{date} 브리프가 없습니다</h1>
-        <p className="mt-2 text-sm text-gray-600">수집이 아직 돌지 않았습니다.</p>
-      </main>
-    )
-  }
-
-  const pending = data.rows.filter(r => r.state === 'PENDING').length
-  const bannerStyle = STATUS_BANNER_STYLE[data.run.status] ?? 'border-gray-300 bg-gray-50 text-gray-700'
-
   return (
-    /*
-     * 이 화면은 하루 한 번, 마감 시간 압박 속에서 훑어보는 내부 도구다.
-     * OS/브라우저의 다크 모드 설정을 그대로 물려받으면 행 배경(bg-amber-50 등)은
-     * 옅은 색 그대로인데 글자색만 밝은 색으로 뒤집혀 사실상 안 보이게 된다
-     * (특히 PENDING 행 — 검수가 가장 급한 행). 페이지 전체를 라이트 테마로
-     * 명시적으로 고정해 OS 설정이 새어 들어오지 못하게 한다.
-     */
-    <main className="min-h-screen bg-white p-6 text-gray-900 [color-scheme:light]">
-      <header className="mb-4 flex items-baseline gap-4">
-        <h1 className="text-xl font-bold">주가 현황 및 뉴스 — {date}</h1>
-        <span className="text-sm text-gray-600">
-          미검토 {pending}건 / 전체 {data.rows.length}건
-        </span>
-      </header>
+    <AppShell date={date} monthKey={monthKey}>
+      {data === null ? (
+        <main className="px-8 py-7">
+          <h1 className="text-[28px] font-bold text-ink">{date} 브리프가 없습니다</h1>
+          <p className="mt-1 text-[13px] text-ink-muted">
+            수집이 아직 돌지 않았습니다. 왼쪽 달력에서 브리프가 있는 날짜를 고르세요.
+          </p>
+        </main>
+      ) : (
+        <main className="px-8 py-7">
+          <header className="mb-5">
+            <div>
+              <h1 className="text-[28px] leading-tight font-bold text-ink">주가 현황 및 뉴스</h1>
+              <p className="mt-1 text-[13px] text-ink-muted">
+                <span className="tabular-nums">{date}</span> · 미검토{' '}
+                <span className="tabular-nums">
+                  {data.rows.filter(r => r.state === 'PENDING').length}
+                </span>
+                건 / 전체 <span className="tabular-nums">{data.rows.length}</span>건
+              </p>
+            </div>
 
-      <div className={`mb-4 rounded border px-3 py-2 text-sm ${bannerStyle}`}>
-        <span className="font-semibold">실행 상태: {runStatusLabel(data.run.status)}</span>
-        {data.run.status === 'PARTIAL' && data.run.statusDetail && (
-          <span className="ml-2">— {data.run.statusDetail}</span>
-        )}
-      </div>
+          </header>
 
-      <BriefTable runDate={date} rows={data.rows} />
-    </main>
+          <div
+            className={`mb-5 rounded border px-3 py-2 text-[13px] ${
+              STATUS_BANNER_STYLE[data.run.status] ?? 'border-line bg-thead text-ink-muted'
+            }`}
+          >
+            <span className="font-semibold">실행 상태: {runStatusLabel(data.run.status)}</span>
+            {data.run.status === 'PARTIAL' && data.run.statusDetail && (
+              <span className="ml-2">— {data.run.statusDetail}</span>
+            )}
+          </div>
+
+          <BriefTable runDate={date} rows={data.rows} />
+        </main>
+      )}
+    </AppShell>
   )
 }

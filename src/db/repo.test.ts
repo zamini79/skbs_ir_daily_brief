@@ -11,6 +11,7 @@ import {
   resolveDisplayQuote,
   marketCapBlankReason,
   quoteFailureReason,
+  briefDayMark,
   type ClientCandidate,
   type RowState,
 } from './repo'
@@ -611,5 +612,27 @@ describe('quoteFallbackSourceUsed', () => {
 
   it('스냅샷이 아예 없으면 아무 말도 하지 않는다', () => {
     expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: null })).toBeNull()
+  })
+})
+
+describe('briefDayMark', () => {
+  it('네 상태를 서로 다른 표시로 가른다', () => {
+    expect(briefDayMark('READY')).toBe('DONE')
+    expect(briefDayMark('PARTIAL')).toBe('PARTIAL')
+    expect(briefDayMark('COLLECTING')).toBe('RUNNING')
+    expect(briefDayMark('FAILED')).toBe('FAILED')
+    const marks = ['READY', 'PARTIAL', 'COLLECTING', 'FAILED'].map(briefDayMark)
+    expect(new Set(marks).size).toBe(4)
+  })
+
+  it('부분 완료를 완료로 합치지 않는다', () => {
+    expect(briefDayMark('PARTIAL')).not.toBe(briefDayMark('READY'))
+  })
+
+  it('모르는 상태는 완료가 아니라 UNKNOWN 이다', () => {
+    // 조용히 DONE 으로 떨어지면 달력이 "이 날은 다 됐다"고 거짓말을 하게 된다.
+    expect(briefDayMark('WHATEVER')).toBe('UNKNOWN')
+    expect(briefDayMark('')).toBe('UNKNOWN')
+    expect(briefDayMark('ready')).toBe('UNKNOWN') // 대소문자도 지어내 맞추지 않는다
   })
 })

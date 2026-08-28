@@ -1,5 +1,6 @@
 import { prisma } from './client'
 import { changePct as calcChangePct } from '@/domain/calc'
+import { monthRange } from '@/domain/calendar'
 import type { Prisma } from '@prisma/client'
 
 export type RowState = 'NEWS_FAILED' | 'NO_NEWS' | 'OMITTED' | 'PENDING' | 'SELECTED' | 'STALE_SELECTION'
@@ -552,4 +553,93 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
     },
     rows,
   }
+}
+
+/* ------------------------------------------------------------------------ *
+ * 달력·날짜 네비게이션
+ *
+ * 날짜 키는 **`runDate`** 다. `/review/[date]` 의 URL 키이고 `getBriefRows` 가
+ * 찾는 값이며 `@@unique` 가 걸린 열이다. `tradeDate`(시세 기준일)는 실행에 따라
+ * 다를 수 있으므로 달력이 그쪽을 쓰면 달력에서 누른 날짜와 열리는 화면의 날짜가
+ * 어긋난다.
+ *
+ * 'YYYY-MM-DD' 문자열은 사전순 비교가 곧 날짜순 비교라, 문자열 열에 gte/lte 를
+ * 걸어도 정확하다(자릿수가 항상 같다).
+ * ------------------------------------------------------------------------ */
+
+/**
+ * 달력 한 칸이 말해야 하는 것. **`UNKNOWN` 이 있는 이유가 중요하다** — 모르는
+ * 상태 문자열을 만났을 때 조용히 `DONE`(완료)으로 떨어뜨리면 달력이 "이 날은
+ * 다 됐다"고 거짓으로 말하게 된다. 모르면 모른다고 표시한다.
+ * `PARTIAL` 을 `DONE` 과 합치지 않는 것도 같은 이유다 — 부분 완료는 완료가 아니다.
+ */
+export type BriefDayMark = 'DONE' | 'PARTIAL' | 'RUNNING' | 'FAILED' | 'UNKNOWN'
+
+const DAY_MARK: Record<string, BriefDayMark> = {
+  READY: 'DONE',
+  PARTIAL: 'PARTIAL',
+  COLLECTING: 'RUNNING',
+  FAILED: 'FAILED',
+}
+
+export function briefDayMark(status: string): BriefDayMark {
+  return DAY_MARK[status] ?? 'UNKNOWN'
+}
+
+export type BriefDateEntry = {
+  /** BriefRun.runDate — 검수 화면 URL 키. */
+  date: string
+  /** 원본 status 문자열. 화면은 runStatusLabel 로 사람 말로 바꿔 쓴다. */
+  status: string
+  mark: BriefDayMark
+}
+
+function toDateEntry(r: { runDate: string; status: string }): BriefDateEntry {
+  return { date: r.runDate, status: r.status, mark: briefDayMark(r.status) }
+}
+
+/**
+ * 그 달에 브리프가 있는 날짜들. 23행을 다 읽지 않고 `runDate`·`status` 두 열만 받는다 —
+ * 달력이 알아야 하는 것은 "있나"와 "다 됐나" 둘뿐이다.
+ */
+export async function listBriefDates(yearMonth: string): Promise<BriefDateEntry[]> {
+  const { first, last } = monthRange(yearMonth)
+  const runs = await prisma.briefRun.findMany({
+    where: { runDate: { gte: first, lte: last } },
+    select: { runDate: true, status: true },
+    orderBy: { runDate: 'asc' },
+  })
+  return runs.map(toDateEntry)
+}
+
+/** 사이드바 「최근 브리프」. 최신순. */
+export async function listRecentBriefDates(limit: number): Promise<BriefDateEntry[]> {
+  const runs = await prisma.briefRun.findMany({
+    select: { runDate: true, status: true },
+    orderBy: { runDate: 'desc' },
+    take: limit,
+  })
+  return runs.map(toDateEntry)
+}
+
+/**
+ * 「◀ 이전 / 다음 ▶」이 갈 곳. **하루씩 빼고 더하지 않는다** — 수집은 평일에만 돌아서
+ * 하루씩 움직이면 주말·공휴일마다 「브리프 없음」 화면에 떨어진다. 실제로 데이터가
+ * 있는 이웃 날짜로 건너뛰고, 없으면 null 이라 버튼이 비활성으로 보인다.
+ * 기준 날짜 자체에 브리프가 없어도(없는 날짜를 URL 로 직접 열었을 때) 동작한다.
+ */
+export async function adjacentBriefDates(date: string): Promise<{ prev: string | null; next: string | null }> {
+  const [prev, next] = await Promise.all([
+    prisma.briefRun.findFirst({
+      where: { runDate: { lt: date } },
+      select: { runDate: true },
+      orderBy: { runDate: 'desc' },
+    }),
+    prisma.briefRun.findFirst({
+      where: { runDate: { gt: date } },
+      select: { runDate: true },
+      orderBy: { runDate: 'asc' },
+    }),
+  ])
+  return { prev: prev?.runDate ?? null, next: next?.runDate ?? null }
 }
