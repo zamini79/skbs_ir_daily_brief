@@ -42,7 +42,14 @@ Render 의 **크론(Cron Job)은 유료 서비스 타입이다.** 서비스당 �
 
 ## 1. GitHub 저장소 만들고 푸시
 
-Render 는 Git 저장소에 연결해야 배포한다. 지금 이 저장소에는 원격이 없다.
+Render 는 Git 저장소에 연결해야 배포한다.
+
+**이 단계는 2026-08-31 에 끝났다.** 저장소는
+[`zamini79/skbs_ir_daily_brief`](https://github.com/zamini79/skbs_ir_daily_brief) 이고
+`main` 과 `feature/ir-daily-brief` 두 브랜치가 모두 올라가 있다. 배포에 쓸 것은
+**`feature/ir-daily-brief`** 다 — `render.yaml` 과 앱 코드가 거기에만 있다.
+
+다시 만들어야 할 때를 위해 절차만 남긴다.
 
 ```bash
 cd /Users/zamini/Project/ir_daily_brief
@@ -51,10 +58,10 @@ cd /Users/zamini/Project/ir_daily_brief
 git status
 
 # GitHub 에 저장소를 만든다. gh CLI 가 있으면:
-gh repo create ir-daily-brief --private --source=. --remote=origin
+gh repo create <저장소명> --private --source=. --remote=origin
 
 # 없으면 github.com 에서 빈 저장소를 만든 뒤:
-git remote add origin git@github.com:<계정>/ir-daily-brief.git
+git remote add origin https://github.com/<계정>/<저장소명>.git
 
 git push -u origin feature/ir-daily-brief
 ```
@@ -198,7 +205,31 @@ Render 를 동시에 켜 두면 `max clients reached in session mode` 가 뜰 �
 
 ## 5. 수집을 직접 돌리는 법
 
-크론이 없으므로(0절 (1)) 새 데이터가 필요하면 손으로 부른다.
+크론이 없으므로(0절 (1)) 새 데이터가 필요하면 손으로 돌린다. 방법이 둘이고,
+**화면의 버튼이 기본**이다.
+
+### (1) 화면의 「수집 실행」 버튼 — 권장
+
+브리프 화면 위쪽에 버튼이 있다. 터미널도 시크릿도 필요 없다.
+
+- 라벨에 **대상 날짜가 박혀 있다**: 오늘을 보고 있으면 `수집 실행`, 지난 날짜를
+  보고 있으면 `수집 실행 (2026-08-31)` 처럼 오늘 날짜가 붙는다. **수집은 언제나
+  오늘 것을 돌린다** — 보고 있는 날짜를 돌리는 것이 아니다. 시세 소스가 직전
+  영업일 종가만 주기 때문에, 지난 날짜에 오늘 숫자를 써 넣으면 날짜만 거짓인
+  화면이 된다.
+- 누르면 라벨이 `시작하는 중…` → `수집 중…` 으로 바뀌고 버튼이 잠긴다.
+  화면 위 **실행 상태 배너**가 지금 어느 단계인지(시세 / 환율 / 뉴스 / 요약)를
+  같이 보여준다. **약 3~4분** 걸린다 — 무료 인스턴스는 더 걸릴 수 있다.
+- 멈춘 것처럼 보이면 배너가 「수집 중 상태로 멈춰 있음」과 경과 시간을 적고,
+  버튼은 `수집 다시 실행` 으로 바뀐다.
+- 이미 검수를 마친 행이 있는 날에 다시 돌리려 하면 몇 건이 무효화되는지
+  경고하고 한 번 더 묻는다.
+
+무료 인스턴스가 잠들어 있었다면 첫 화면 로딩에 콜드 스타트 1분이 먼저 붙는다.
+
+### (2) `curl` 로 엔드포인트 직접 호출
+
+자동화하거나 화면 없이 돌릴 때 쓴다.
 **이 엔드포인트만 Basic 인증에서 제외돼 있다** — `CRON_SECRET` 으로 스스로
 인증하기 때문이다. 그래서 `-u` 를 붙이지 않는다.
 
