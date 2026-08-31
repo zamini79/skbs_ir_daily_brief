@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { secretMatches } from '@/auth/secret'
 import { runCollection } from '@/pipeline/collect'
 
 /**
@@ -12,25 +12,15 @@ import { runCollection } from '@/pipeline/collect'
  * - GET + `Authorization: Bearer <secret>` 헤더: Vercel Cron이 보내는 방식.
  *   GET은 POST 로직에 위임한다(중복 구현 금지).
  *
+ * **이 경로는 `src/proxy.ts` 의 Basic 인증 matcher에서 제외돼 있다.** 크론은
+ * 자기 시크릿으로 인증하며, 여기에 Basic 인증까지 얹으면 crontab의 `curl` 한
+ * 줄이 깨진다(설계 문서 §4.1-3). 제외는 의도된 것이니 되돌리지 마라 —
+ * 시크릿 검사가 이 경로의 유일하고 충분한 보호 장치다.
+ *
  * 실제 수집이 56초 걸린 것을 측정했으므로 넉넉한 maxDuration을 둔다.
  */
 export const maxDuration = 300
 export const dynamic = 'force-dynamic'
-
-/**
- * 시크릿 비교. `!==` 는 첫 다른 바이트에서 즉시 끝나므로 원리상 응답 시간이
- * "몇 글자까지 맞았는지"를 흘린다. 지금은 인증 없는 1단계 설계에 수집만
- * 트리거하는 엔드포인트라 실질 위험이 낮지만, 사내 이관 후에는 이 시크릿이
- * 유일한 보호 장치가 된다(3부).
- *
- * 길이가 다르면 timingSafeEqual 이 던지므로, 먼저 길이를 비교하는 대신
- * **SHA-256 다이제스트(항상 32바이트)를 비교한다** — 길이 자체도 흘리지 않는다.
- */
-function secretMatches(provided: string | null, expected: string): boolean {
-  if (provided === null) return false
-  const digest = (v: string): Buffer => createHash('sha256').update(v, 'utf8').digest()
-  return timingSafeEqual(digest(provided), digest(expected))
-}
 
 /** `Authorization: Bearer <token>` 에서 토큰만 꺼낸다. 접두사 검사는 시크릿과
  * 무관하므로 타이밍에 영향을 주지 않는다. */
