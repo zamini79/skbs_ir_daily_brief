@@ -577,6 +577,13 @@ describe('briefRunStartData', () => {
     expect(update.finishedAt).toBeNull()
   })
 
+  it('진행 문구도 함께 비운다 — 지난 실행의 단계가 남으면 새 실행이 뒷걸음질친다', () => {
+    // 「요약 생성 중 (31/47)」이 남아 있으면 방금 시작한 실행이 이미 요약 단계에
+    // 와 있는 것처럼 보이고, 몇 초 뒤 「환율 수집 중」으로 되돌아간다.
+    const { update } = briefRunStartData('2026-08-27')
+    expect(update.progressDetail).toBeNull()
+  })
+
   it('처음 생성하는 경우에도 COLLECTING으로 시작한다', () => {
     const { create } = briefRunStartData('2026-08-27')
     expect(create).toEqual({ runDate: '2026-08-27', tradeDate: '2026-08-27', status: 'COLLECTING' })

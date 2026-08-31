@@ -28,6 +28,7 @@ import {
   buildFallbackSummaries,
   briefRunStartData,
 } from './collectHelpers'
+import { createProgressReporter } from './progressReporter'
 
 /** 본문이 짧아 요약 자체를 시도하지 않은 경우의 사유 — 화면에 "사유 미기록"으로
  * 뜨지 않도록 남긴다. summariesFailed 에는 넣지 않는다(의도된 결정이지 장애가 아니다). */
@@ -86,7 +87,7 @@ async function recordNewsFetch(
   }
 }
 
-export async function runCollection(now: Date): Promise<{
+export type CollectionResult = {
   runId: string
   ok: number
   failed: number
@@ -102,7 +103,57 @@ export async function runCollection(now: Date): Promise<{
   quoteFailed: number
   /** 1차 소스가 실패해 2차(폴백)로 채운 행의 수. 실패가 아니다 — 아래 선언부 주석 참고. */
   quoteFallbackUsed: number
-}> {
+}
+
+/**
+ * 예외로 끝난 실행을 `COLLECTING` 인 채로 남기지 않는다.
+ *
+ * 이게 없으면 파이프라인이 예외를 던진 날의 행이 영원히 「수집 중」으로 보인다 —
+ * 아무것도 돌고 있지 않은데 화면은 도는 중이라고 말한다. 실제로 2026-08-26 행이
+ * 그 상태로 남아 있었고, 이 코드베이스가 반복해서 고쳐 온 결함(어떤 상태가 다른
+ * 상태와 똑같이 렌더된다)의 살아 있는 예다.
+ *
+ * **`updateMany` 에 `status: 'COLLECTING'` 조건을 건다.** 그 사이 다른 실행이
+ * 이 날짜를 다시 선점해 정상적으로 돌고 있을 수 있는데, 조건 없이 덮으면 멀쩡히
+ * 도는 실행을 실패로 만든다.
+ *
+ * 이 기록 자체가 실패해도 삼킨다 — 원래 예외를 가리면 안 된다. 호출부(크론 라우트,
+ * 서버 액션)는 여전히 원래 예외를 받는다.
+ *
+ * 프로세스가 통째로 죽는 경우는 여기서 잡을 수 없다. 그쪽은 화면이
+ * `startedAt` 경과 시간으로 판정한다(`domain/runProgress.ts`).
+ */
+async function markRunFailed(runDate: string, error: unknown): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error)
+  try {
+    await prisma.briefRun.updateMany({
+      where: { runDate, status: 'COLLECTING' },
+      data: {
+        status: 'FAILED',
+        statusDetail: `수집이 중단됐습니다: ${message}`,
+        progressDetail: null,
+        finishedAt: new Date(),
+      },
+    })
+  } catch (e) {
+    console.error(`[collect] 실패 상태 기록 실패 (${runDate}): ${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
+/**
+ * 수집 실행. 크론 라우트와 화면의 「수집 실행」 버튼이 **둘 다 이 함수 하나**를 부른다
+ * (수집 로직을 두 벌로 만들지 않는다 — 설계 문서 §4.1-3).
+ */
+export async function runCollection(now: Date): Promise<CollectionResult> {
+  try {
+    return await collect(now)
+  } catch (e) {
+    await markRunFailed(kstDateString(now), e)
+    throw e
+  }
+}
+
+async function collect(now: Date): Promise<CollectionResult> {
   const runDate = kstDateString(now)
   const year = Number(runDate.slice(0, 4))
 
@@ -113,6 +164,24 @@ export async function runCollection(now: Date): Promise<{
   const run = await prisma.briefRun.upsert({
     where: { runDate },
     ...briefRunStartData(runDate),
+  })
+
+  /**
+   * 단계마다 `BriefRun.progressDetail` 을 갱신한다. 실측 202초짜리 작업이라
+   * 아무 표시도 없으면 화면은 "고장 났다"와 구별되지 않는다.
+   *
+   * 쓰기는 뒤에서 돌고 수집을 붙잡지 않는다(progressReporter.ts 참고).
+   * **건수는 아래 실제 카운터에서만 온다** — 지어낸 진행률을 쓰지 않는다.
+   */
+  const progress = createProgressReporter(async text => {
+    // **`status: 'COLLECTING'` 조건이 붙어 있다.** 실행이 끝났거나(READY/PARTIAL)
+    // 예외로 FAILED 가 기록된 뒤에 뒤늦게 도착한 진행 쓰기가 완료된 행에 단계
+    // 문구를 되살리면, 끝난 실행이 다시 도는 것처럼 보인다. 조건이 없으면 예외
+    // 경로(progress.close() 를 부르지 못하는 경로)에서 실제로 그렇게 된다.
+    await prisma.briefRun.updateMany({
+      where: { id: run.id, status: 'COLLECTING' },
+      data: { progressDetail: text },
+    })
   })
 
   // 이전 실행분을 지운다. Selection 은 남긴다(담당자 선택을 덮어쓰지 않는다).
@@ -157,6 +226,7 @@ export async function runCollection(now: Date): Promise<{
   //   부분 결손 — 정상 반환하지만 특정 통화 키가 빠져 있다(frankfurter.ts 의
   //               `if (!usdToC) continue`). 나머지 통화는 멀쩡하다.
   // 요청한 통화와 돌려받은 키를 비교하면 둘 다 같은 방식으로 잡힌다.
+  progress.step('fx')
   const currencies = [...new Set(instruments.map(i => i.currency))]
   let fx: Record<string, number> = {}
   let fxError: string | null = null
@@ -177,7 +247,10 @@ export async function runCollection(now: Date): Promise<{
     console.error(`[fx] 환율 미확보: ${missingCurrencies.join(', ')} — ${why}`)
   }
 
-  // 2) 시세
+  // 2) 시세.
+  // `fetchAllQuotes` 는 배치라 중간 진행을 알려주지 않는다 — 건수를 지어내지 않고
+  // 단계 이름만 남긴다.
+  progress.step('quote')
   const quotes = await fetchAllQuotes(targets)
 
   // 3) 연초대비 기준가(전년 마지막 거래일 종가) — 캐시에 없는 종목만 조회.
@@ -188,6 +261,9 @@ export async function runCollection(now: Date): Promise<{
   const cachedIds = new Set(cached.map(c => c.instrumentId))
   const missing = targets.filter(t => !cachedIds.has(t.id))
   if (missing.length > 0) {
+    // 대부분의 날은 캐시가 차 있어 이 단계가 통째로 건너뛰어진다. 조회할 게 있을
+    // 때만 단계를 알린다 — 없는데 「연초 기준가 조회 중」을 띄우면 거짓말이다.
+    progress.step('ytdBase')
     const { prices, failures } = await fetchYtdBase(missing, year)
     for (const [instrumentId, price] of prices) {
       await prisma.ytdBasePrice.upsert({
@@ -236,6 +312,8 @@ export async function runCollection(now: Date): Promise<{
    * 셋 중 어느 것도 배너를 흔들지 않지만, 셋 다 매일 보인다.
    */
   let quoteFallbackUsed = 0
+  /** 진행 표시 전용 카운터. 성공/실패와 무관하게 **처리를 끝낸 행 수**다. */
+  let quoteSaved = 0
   for (const inst of instruments) {
     const q = quotes.get(inst.id)
     const { ok: wrote } = await isolate(async () => {
@@ -316,6 +394,8 @@ export async function runCollection(now: Date): Promise<{
       failed++
       quoteFailed++
     }
+    quoteSaved++
+    progress.step('quoteSave', { done: quoteSaved, total: instruments.length })
   }
 
   // 5) 뉴스 수집 + 별칭 필터 + 클러스터링.
@@ -326,6 +406,9 @@ export async function runCollection(now: Date): Promise<{
   // 「당일·D-1 기사 없음」으로 단정된다(recordNewsFetch 주석 참고) — 행별로는
   // 바로잡을 수 없어도 실행 단위 배너에는 반드시 남아야 한다.
   let newsRecordFailed = 0
+  /** 진행 표시 전용. 검색을 마친 종목 수(성공·실패 무관). */
+  let newsDone = 0
+  progress.step('news', { done: 0, total: instruments.length })
   const newsLimit = pLimit(NEWS_CONCURRENCY)
   const perInstrument = await Promise.all(
     instruments.map(inst =>
@@ -347,6 +430,12 @@ export async function runCollection(now: Date): Promise<{
           console.error(`[news] ${inst.name}: ${reason}`)
           if (!(await recordNewsFetch(run.id, inst.id, 'FAILED', reason))) newsRecordFailed++
           return { inst, clusters: [] }
+        } finally {
+          // 성공이든 실패든 그 종목은 **끝났다.** 성공만 세면 429 가 몇 건 난 날
+          // 진행 숫자가 23에 못 미친 채 멈춰, 담당자에게는 파이프라인이 멈춘 것으로
+          // 보인다 — 실제로는 다음 단계로 넘어갔는데도.
+          newsDone++
+          progress.step('news', { done: newsDone, total: instruments.length })
         }
       }),
     ),
@@ -375,6 +464,17 @@ export async function runCollection(now: Date): Promise<{
   // 이번 실행 전체가 공유하는 할당량 가드. 첫 429/RESOURCE_EXHAUSTED 이후로는
   // 죽은 할당량에 나머지 후보를 계속 쏘지 않고 곧바로 실패로 기록한다.
   const quotaGuard = createQuotaGuard()
+
+  /**
+   * 이번 실행에서 처리할 후보의 **총 개수**. 지어낸 값이 아니라 방금 뽑아 놓은
+   * 클러스터를 실제로 센 것이다. 요약이 실행 시간의 대부분을 차지하므로(후보 47건 ×
+   * 수 초) 여기만은 반드시 건수를 세어 보여준다 — 이 단계가 표시 없이 3분을 먹으면
+   * 담당자는 고장으로 판단하고 버튼을 다시 누른다.
+   */
+  const summaryTotal = perInstrument.reduce((n, p) => n + p.clusters.length, 0)
+  /** 진행 표시 전용. 처리를 끝낸 후보 수(생성·요약·실패 무관). */
+  let summaryDone = 0
+  progress.step('summary', { done: 0, total: summaryTotal })
 
   const sumLimit = pLimit(SUMMARY_CONCURRENCY)
   await Promise.all(
@@ -466,12 +566,17 @@ export async function runCollection(now: Date): Promise<{
           // isolate가 예외를 삼켰다면(예: newsCandidate.create 자체가 실패) worker 내부의
           // summariesFailed 증가는 일어나지 않았다 — 여기서 집계한다.
           if (!handled) summariesFailed++
+          // 성공·실패 무관하게 이 후보는 끝났다. 실패한 후보를 세지 않으면 요약이
+          // 무더기로 실패한 날 진행 숫자가 총계에 못 미친 채 멈춘다.
+          summaryDone++
+          progress.step('summary', { done: summaryDone, total: summaryTotal })
         }),
       )
     }),
   )
 
   // 7) Selection 행 준비 (없는 것만)
+  progress.step('finish')
   for (const inst of instruments) {
     await prisma.selection.upsert({
       where: { runId_instrumentId: { runId: run.id, instrumentId: inst.id } },
@@ -494,9 +599,16 @@ export async function runCollection(now: Date): Promise<{
     newsRecordFailed,
     missingCurrencies,
   })
+  // 완료 상태를 적기 **전에** 진행 리포터를 닫는다. 닫지 않으면 뒤에서 돌던 마지막
+  // 진행 쓰기가 이 update 뒤에 도착해, 끝난 실행에 「마무리 중」이 다시 붙는다.
+  await progress.close()
+
   await prisma.briefRun.update({
     where: { id: run.id },
-    data: { status, statusDetail, finishedAt: new Date() },
+    // progressDetail 은 여기서 비운다. 남겨 두면 완료된 행이 마지막 단계 문구를
+    // 계속 들고 있어, 화면이 그걸 근거로 도는 중이라고 말할 여지가 생긴다.
+    // 「멈춘 것으로 보이는」 실행에서만 이 값이 살아남아 마지막 도달 단계를 알려준다.
+    data: { status, statusDetail, progressDetail: null, finishedAt: new Date() },
   })
 
   return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, bodyCrawlFailed, ytdBaseFailed, newsFailed, newsRecordFailed, fxFailed, quoteFailed, quoteFallbackUsed }

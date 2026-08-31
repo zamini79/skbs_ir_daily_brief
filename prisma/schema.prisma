@@ -56,8 +56,19 @@ model BriefRun {
   /// 실행 당일 KST 날짜. 검수 화면 URL 키.
   runDate    String
   status     String   // COLLECTING | READY | PARTIAL | FAILED
-  /// status가 PARTIAL/FAILED일 때 사람이 읽을 수 있는 사유(예: 요약 20건 실패, 할당량 소진).
+  /// status가 PARTIAL/FAILED일 때 사람이 읽을 수 있는 **완료 사유**(예: 요약 20건 실패, 할당량 소진).
+  /// 진행 문구를 여기 쓰지 않는다 — 아래 progressDetail 주석 참고.
   statusDetail String? @db.Text
+  /// 수집이 도는 동안의 **진행 문구**(예: `요약 생성 중 (31/47)`). 실행이 끝나면 null로 비운다.
+  ///
+  /// statusDetail과 칸을 나눈 이유: 한 칸을 둘이 나눠 쓰면 진행 문구가 지난 실행의
+  /// 완료 사유를 덮어 사유가 사라지거나(재실행 중에 어제 사유가 지워진다), 반대로
+  /// 완료 사유가 진행 문구 자리에 남아 끝난 실행이 도는 것처럼 보인다. 둘은 서로
+  /// 다른 사실이고 수명도 다르다 — 진행은 실행 중에만, 사유는 실행 후에만 유효하다.
+  ///
+  /// 멈춘 실행에서는 이 값이 **마지막으로 도달한 단계**를 알려준다(화면이 그대로 보여준다).
+  /// enum이 아니라 자유 문자열인 것은 MariaDB 이관 제약(설계 문서 §4.1-2) 그대로다.
+  progressDetail String? @db.Text
   startedAt  DateTime @default(now())
   finishedAt DateTime?
 

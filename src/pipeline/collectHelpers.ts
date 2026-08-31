@@ -376,13 +376,30 @@ export function needsPendingRevert(selection: {
  * "환율 미확보: ..." 문구가 여전히 붙어 있으면, 그 사이 화면을 연 검수자는 그것을
  * 오늘 것으로 오인한다. 이번 실행의 진짜 사유는 실행이 끝난 뒤 별도로 다시 채워진다
  * (collect.ts 끝부분의 status 갱신).
+ *
+ * progressDetail도 같은 이유로 비운다. 그쪽은 더 나쁘다 — 지난 실행이 남긴
+ * 「요약 생성 중 (31/47)」이 그대로 있으면 방금 시작한 실행이 이미 요약 단계에
+ * 와 있는 것처럼 보이고, 몇 초 뒤 「환율 수집 중」으로 **뒷걸음질친다.**
+ * 시작 시점에 아는 것은 "아직 아무 단계도 끝나지 않았다"뿐이다.
  */
 export function briefRunStartData(runDate: string): {
-  update: { status: 'COLLECTING'; statusDetail: null; startedAt: Date; finishedAt: null }
+  update: {
+    status: 'COLLECTING'
+    statusDetail: null
+    progressDetail: null
+    startedAt: Date
+    finishedAt: null
+  }
   create: { runDate: string; tradeDate: string; status: 'COLLECTING' }
 } {
   return {
-    update: { status: 'COLLECTING', statusDetail: null, startedAt: new Date(), finishedAt: null },
+    update: {
+      status: 'COLLECTING',
+      statusDetail: null,
+      progressDetail: null,
+      startedAt: new Date(),
+      finishedAt: null,
+    },
     create: { runDate, tradeDate: runDate, status: 'COLLECTING' },
   }
 }
