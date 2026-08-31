@@ -1,7 +1,12 @@
 import type { QuoteTarget } from './index'
 import { fetchMarketstackYtdBase } from './marketstack'
 import { fetchKrxIndexYtdBase } from './krx'
-import { parseKoreanNumber } from './naverParse'
+import { parseKoreanNumber, parseNaverSiseJson } from './naverParse'
+
+// 파서는 `naverParse.ts` 로 옮겼다 — `naver.ts` 도 같은 엔드포인트를 읽는데 여기에
+// 두면 import 가 순환한다(naverParse.ts 의 주석 참고). 기존 import 경로를 쓰는
+// 호출부·테스트가 그대로 돌도록 여기서도 계속 내보낸다.
+export { parseNaverSiseJson }
 
 /** 기준가를 얻지 못한 종목 하나. 조용히 사라지지 않도록 반드시 호출자에게 돌려준다. */
 export type YtdBaseFailure = { id: string; symbol: string; reason: string }
@@ -62,20 +67,6 @@ function marketstackYtdSymbol(t: QuoteTarget): string | null {
   if (t.quoteSource === 'marketstack') return t.quoteSymbol
   const suffix = MARKETSTACK_YTD_SUFFIX[t.quoteSource]
   return suffix === undefined ? null : `${t.quoteSymbol}${suffix}`
-}
-
-/**
- * 네이버 siseJson 은 헤더 행에 홑따옴표를 써서 유효한 JSON 이 아니다.
- * 데이터 행만 정규식으로 뽑는다.
- */
-export function parseNaverSiseJson(raw: string): Array<{ date: string; open: number; close: number }> {
-  const out: Array<{ date: string; open: number; close: number }> = []
-  const re = /\["(\d{8})",\s*([\d.]+),\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(raw)) !== null) {
-    out.push({ date: m[1], open: Number(m[2]), close: Number(m[5]) })
-  }
-  return out
 }
 
 /**
