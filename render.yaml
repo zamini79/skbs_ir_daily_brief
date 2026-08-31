@@ -1,0 +1,85 @@
+# Render Blueprint — 임시 확인용 배포.
+#
+# 절차는 docs/render-배포.md 를 따른다. 먼저 읽어야 할 사실이 두 가지 있다:
+#   1. 무료 플랜에는 크론이 없다. 07:40 자동 수집은 여기서 돌지 않는다.
+#   2. 무료 인스턴스는 15분 놀면 잠들고, 다음 첫 요청이 1분쯤 걸린다.
+#
+# **이 파일에 값을 적지 마라.** 시크릿은 전부 `sync: false` 로 두고, 값은
+# Render 대시보드에서 사용자가 직접 넣는다. 저장소가 공개로 바뀌는 순간
+# 여기 적힌 값은 되돌릴 수 없다.
+
+services:
+  - type: web
+    name: ir-daily-brief
+    runtime: node
+    plan: free
+    # 한국에서 쓰는 화면이라 가장 가까운 리전을 고른다. 리전은 나중에 바꿀 수
+    # 없고 서비스를 다시 만들어야 한다. Supabase 프로젝트 리전과 맞추면 DB
+    # 왕복이 짧아진다 — 다르면 oregon 등으로 바꿔도 동작에는 문제 없다.
+    region: singapore
+
+    # `--include=dev` 는 보험이다. Render 는 NODE_ENV=production 을 **런타임에만**
+    # 넣으므로 기본 상태에서는 devDependencies 가 설치된다. 다만 대시보드에서
+    # NODE_ENV 를 직접 추가하면 npm 이 dev 를 빼버리고, 그러면 빌드에 필요한
+    # prisma·typescript·tailwindcss 가 사라진다.
+    #
+    # `npx prisma generate` 는 **반드시 있어야 한다.** 없으면 런타임에 Prisma
+    # 클라이언트가 없어 모든 DB 접근이 실패한다.
+    #
+    # `prisma migrate deploy` 는 **일부러 넣지 않았다.** 빌드 커맨드에 두면 배포할
+    # 때마다 운영 DB 스키마를 건드린다. 지금 Supabase 는 이미 최신이라 실행할
+    # 이유가 없다. 필요해지면 docs/render-배포.md 의 마이그레이션 절을 따라
+    # 사람이 한 번 돌린다.
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
+
+    # `next start` 는 기본으로 0.0.0.0 에 바인딩하고 PORT 환경변수를 읽는다.
+    # Render 가 PORT=10000 을 넣어 주므로 손댈 것이 없다.
+    startCommand: npm start
+
+    # healthCheckPath 를 **일부러 두지 않았다.** 기본 헬스체크는 포트가 열렸는지
+    # 보는 TCP 프로브라 Basic 인증과 무관하다. 여기에 경로를 적으면 그 경로가
+    # 401 을 돌려주고(2xx·3xx 만 정상으로 친다) 멀쩡한 배포가 실패로 뒤집힌다.
+
+    envVars:
+      # 로컬 개발이 v24 라서 맞춘다. Render 의 현재 기본값도 24.x 다.
+      # 상한 없는 범위(">=20" 등)를 쓰면 언젠가 메이저가 올라가 버린다.
+      - key: NODE_VERSION
+        value: "24"
+
+      # 여기부터는 전부 값을 비워 둔다. `sync: false` 는 "블루프린트가 값을
+      # 관리하지 않는다"는 뜻이고, 서비스를 처음 만들 때 Render 가 하나씩
+      # 물어본다. 각 값을 어디서 가져오는지는 docs/render-배포.md 3절에 있다.
+
+      # --- 공개 URL 을 막는 최소 인증 (docs/render-배포.md 1절) ---
+      # **둘 다 넣어야 한다.** 한쪽만 넣으면 앱이 모든 요청을 401 로 막는다.
+      # 반쪽 설정을 통과시키면 "인증이 걸린 줄 아는 무방비 상태"가 되기 때문에
+      # 일부러 그렇게 만들어 두었다(src/auth/basic.ts).
+      - key: BASIC_AUTH_USER
+        sync: false
+      - key: BASIC_AUTH_PASSWORD
+        sync: false
+
+      # --- DB ---
+      # Supabase 세션 풀러 주소여야 한다. 대시보드가 먼저 보여주는 직접 접속
+      # 호스트는 IPv6 전용이라 Render 에서 접속되지 않는다(설계 문서 §4.1).
+      - key: DATABASE_URL
+        sync: false
+
+      # --- 수집 트리거 ---
+      # 이 값이 없으면 /api/cron/collect 는 열리는 대신 500 으로 닫힌다.
+      - key: CRON_SECRET
+        sync: false
+
+      # --- 외부 API 키 (src/providers/** 가 실제로 읽는 이름들) ---
+      - key: NAVER_CLIENT_ID
+        sync: false
+      - key: NAVER_CLIENT_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TWELVEDATA_API_KEY
+        sync: false
+      - key: MARKETSTACK_API_KEY
+        sync: false
+      - key: KRX_AUTH_KEY
+        sync: false

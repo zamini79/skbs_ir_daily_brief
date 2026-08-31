@@ -32,5 +32,7 @@ npm run build      # 프로덕션 빌드 (배포 전 필수)
 - **[운영 문서 — `docs/운영.md`](docs/운영.md)**
   검수 담당자용 화면 사용법(1부), 개발·운영 함정과 한도(2부), 사내 이관 절차(3부).
   **화면을 매일 여는 담당자와 이 시스템을 넘겨받을 개발자 모두 여기부터 읽는다.**
+- [Render 임시 배포 — `docs/render-배포.md`](docs/render-배포.md)
+  화면을 잠깐 공개 URL 로 열어 보기 위한 절차. **무료 플랜에는 크론이 없어 자동 수집이 돌지 않는다.**
 - 설계 문서: [`docs/superpowers/specs/2026-08-27-ir-daily-brief-design.md`](docs/superpowers/specs/2026-08-27-ir-daily-brief-design.md)
 - 구현 계획: [`docs/superpowers/plans/2026-08-27-ir-daily-brief.md`](docs/superpowers/plans/2026-08-27-ir-daily-brief.md)
