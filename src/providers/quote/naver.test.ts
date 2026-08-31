@@ -181,25 +181,29 @@ function integration(over: Record<string, unknown> = {}) {
 function stubDomestic(opts: {
   series?: string | { body: string; status: number }
   integrationBody?: unknown | { body: unknown; status: number }
+  /** `basic.closePrice` — marketValue 가 계산된 시점의 현재가. 시총 되계산에 쓰인다. */
+  basicBody?: unknown | { body: unknown; status: number }
 } = {}) {
+  const json = (v: unknown, fallback: unknown) => {
+    const x = v ?? fallback
+    const { body, status } =
+      x && typeof x === 'object' && 'status' in (x as object)
+        ? (x as { body: unknown; status: number })
+        : { body: x, status: 200 }
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
   const spy = vi.fn(async (url: string) => {
     const u = String(url)
+    if (u.includes('/basic')) return json(opts.basicBody, { closePrice: '38,950' })
     if (u.includes('siseJson.naver')) {
       const s = opts.series ?? SISE_302440_PREOPEN
       const { body, status } = typeof s === 'string' ? { body: s, status: 200 } : s
       return new Response(body, { status })
     }
-    if (u.includes('/integration')) {
-      const i = opts.integrationBody ?? integration()
-      const { body, status } =
-        i && typeof i === 'object' && 'status' in (i as object)
-          ? (i as { body: unknown; status: number })
-          : { body: i, status: 200 }
-      return new Response(JSON.stringify(body), {
-        status,
-        headers: { 'content-type': 'application/json' },
-      })
-    }
+    if (u.includes('/integration')) return json(opts.integrationBody, integration())
     throw new Error(`예상하지 못한 URL: ${u}`)
   })
   vi.stubGlobal('fetch', spy)
@@ -289,6 +293,99 @@ describe('실행 시각 무관 불변식 — 같은 입력, 다른 실행 시각
     await fetchNaverStock('302440', new Date('2026-08-30T15:30:00Z')) // = KST 08-31 00:30
     const url = String(spy.mock.calls.find(c => String(c[0]).includes('siseJson'))![0])
     expect(url).toContain('endTime=20260831')
+  })
+})
+
+describe('시가총액도 실행 시각에 흔들리지 않는다', () => {
+  /**
+   * `marketValue` 는 **그 순간의 현재가로 계산된 값**이다. 실측(2026-08-31, 302440):
+   *
+   *     08:58 (개장 전)  현재가 38,950   marketValue "3조 559억"
+   *     09:19 (장중)     현재가 37,950   marketValue "2조 9,813억"
+   *
+   * 그대로 쓰면 주가는 금요일(38,950)인데 시총만 오늘 장중이 되어 한 행에 두 시점이 섞인다.
+   * 아래 두 픽스처는 그 실측값 그대로이고, 되계산 후 같은 값이 나와야 한다.
+   */
+  const cap = (marketValue: string) =>
+    integration({
+      totalInfos: [
+        { code: 'lastClosePrice', value: '38,950' },
+        { code: 'marketValue', value: marketValue },
+      ],
+    })
+
+  const PREOPEN = { basicBody: { closePrice: '38,950' }, integrationBody: cap('3조 559억') }
+  const INTRADAY = { basicBody: { closePrice: '37,950' }, integrationBody: cap('2조 9,813억') }
+
+  it('개장 전과 장중의 시총이 같아진다', async () => {
+    stubDomestic(PREOPEN)
+    const a = (await fetchNaverStock('302440', kst('07:40'))).marketCapKrwTrillion!
+    stubDomestic(INTRADAY)
+    const b = (await fetchNaverStock('302440', kst('09:19'))).marketCapKrwTrillion!
+
+    // 되계산 후 남는 차이는 두 엔드포인트의 표본 시각이 어긋나서 생기는 것뿐이다(실측 0.13%).
+    expect(Math.abs(a - b) / a).toBeLessThan(0.005)
+    expect(a).toBeCloseTo(3.06, 1)
+    expect(b).toBeCloseTo(3.06, 1)
+  })
+
+  it('되계산하지 않았다면 두 값이 2% 넘게 벌어진다 — 이 테스트가 지키는 것이 그것이다', async () => {
+    // 네이버가 준 원본끼리의 차이. 위 테스트의 0.5% 와 대비된다.
+    const rawPreopen = 3.0559
+    const rawIntraday = 2.9813
+    expect(Math.abs(rawPreopen - rawIntraday) / rawPreopen).toBeGreaterThan(0.02)
+  })
+
+  it('개장 전에는 되계산이 값을 바꾸지 않는다 — 현재가 = 거래일 종가이므로', async () => {
+    stubDomestic(PREOPEN)
+    const q = await fetchNaverStock('302440', kst('07:40'))
+    expect(q.marketCapKrwTrillion).toBeCloseTo(3.0559, 4) // 원본 그대로
+  })
+
+  it('장중 시총은 거래일 종가로 환산된다 — 네이버가 준 값 그대로가 아니다', async () => {
+    stubDomestic(INTRADAY)
+    const q = await fetchNaverStock('302440', kst('09:19'))
+    // 2.9813 × (38,950 / 37,950)
+    expect(q.marketCapKrwTrillion).toBeCloseTo(3.0598, 3)
+    expect(q.marketCapKrwTrillion).not.toBeCloseTo(2.9813, 3)
+  })
+
+  it('하루 어느 시각에 돌려도 시총이 하나다', async () => {
+    // 장중 가격이 어떻게 움직이든 marketValue 가 함께 움직이므로 되계산 결과는 같다.
+    const moves: Array<[string, string]> = [
+      ['38,950', '3조 559억'],   // 개장 전(실측)
+      ['37,950', '2조 9,813억'], // 09:19(실측)
+      ['40,000', '3조 1,383억'], // 가상의 상승 — 78.46M 주 기준으로 만든 값
+      ['35,000', '2조 7,460억'], // 가상의 하락
+    ]
+    const caps = []
+    for (const [price, mv] of moves) {
+      stubDomestic({ basicBody: { closePrice: price }, integrationBody: cap(mv) })
+      caps.push((await fetchNaverStock('302440', kst('13:00'))).marketCapKrwTrillion!)
+    }
+    for (const c of caps) expect(c).toBeCloseTo(3.06, 1)
+  })
+
+  it('현재가가 없거나 0 이면 시총을 지어내지 않고 비운다 — 시세는 산다', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    for (const bad of [{ closePrice: '' }, { closePrice: '0' }, {}]) {
+      stubDomestic({ basicBody: bad })
+      const q = await fetchNaverStock('302440', kst('07:40'))
+      expect(q.close).toBe(38950) // 시세는 멀쩡하다
+      expect(q.marketCapKrwTrillion).toBeUndefined()
+    }
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('시가총액 조회 실패'))
+    log.mockRestore()
+  })
+
+  it('basic 이 죽어도 시세는 산다', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    stubDomestic({ basicBody: { body: {}, status: 500 } })
+    const q = await fetchNaverStock('302440', kst('07:40'))
+    expect(q.close).toBe(38950)
+    expect(q.prevClose).toBe(38450)
+    expect(q.marketCapKrwTrillion).toBeUndefined()
+    log.mockRestore()
   })
 })
 

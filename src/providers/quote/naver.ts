@@ -90,11 +90,18 @@ function fromCompactYmd(ymd: string): string {
  * 아예 오지 않는다 — 실측). 그 행을 쓰면 07:40 에 만든 브리프와 10:00 에 다시 수집한
  * 브리프의 숫자가 달라진다. 그래서 **KST 오늘 날짜의 행은 무조건 버린다.**
  *
- * 장 마감 뒤(16:00)에도 버린다. 이 표는 "오늘 아침 기준 직전 영업일"이고, 같은 날
- * 언제 다시 돌려도 같은 표가 나오는 것이 이 수정의 목적이기 때문이다 — 마감 후에만
- * 오늘 행을 받아들이면 「기준 2026-08-28」로 아침에 발송된 브리프가 저녁 재수집에서
- * 「기준 2026-08-31」로 바뀐다. 시각이 아니라 **날짜**로 거르므로 09:00·15:30 같은
- * 장 시간 상수를 이 코드가 알 필요가 없고, 반휴장(조기 마감)도 저절로 맞는다.
+ * **장 마감 뒤(16:00)에도 버린다.** 이건 아침 브리프다 — 날짜 D 의 브리프는 언제
+ * 수집하든 D-1 종가를 보여야 한다. 마감 후에만 오늘 행을 받아들이면:
+ *
+ *   - 담당자가 검토·확정한 가격과 **보관된 브리프가 달라진다.** 메일이 이미 나갔으면
+ *     아카이브가 발송본과 어긋난다.
+ *   - 같은 날짜를 다시 돌렸을 때 다른 답이 나온다 — **그게 정확히 이번 결함의 성질이다.**
+ *
+ * "직전 영업일"을 마감 후에는 오늘로 읽을 여지가 있지만, 그건 **저녁 브리프라는 다른
+ * 제품**이다. 필요해지면 그때 따로 만든다. **이 규칙을 되돌리지 마라.**
+ *
+ * 시각이 아니라 **날짜**로 거르므로 09:00·15:30 같은 장 시간 상수를 이 코드가 알 필요가
+ * 없고, 반휴장(조기 마감)도 저절로 맞는다. `krx.ts` 도 같은 규칙을 쓴다.
  */
 async function fetchLastTwoSessions(
   symbol: string,
@@ -135,25 +142,74 @@ async function fetchLastTwoSessions(
 }
 
 /**
- * 시가총액(단위: 조원).
+ * 시가총액(단위: 조원). **우리가 고른 거래일 종가 기준으로 되계산한다.**
  *
- * **`basic` 이 아니라 `integration` 에만 있다.** 실측(2026-08-31): `basic` 의 최상위
- * 키에는 시총 필드가 없고, `integration.totalInfos` 에 `marketValue "3조 559억"` 이
- * 있다. 시세를 일별 계열로 옮긴 뒤에도 이 한 값 때문에 이 엔드포인트가 계속 필요하다.
+ * ## 왜 네이버가 준 값을 그대로 쓰지 않는가
  *
- * 이 값은 **오늘의 현재가로 계산된 값**이라 시세와 달리 실행 시각에 따라 흔들린다.
- * 조원 단위 반올림이라 아침 시간대에는 대개 같은 숫자가 나오지만 원리상 불변은
- * 아니다(스펙 §3 에 적어 뒀다). 국내 종목은 시드에 `sharesOutstanding` 이 없어
- * 계열 종가로 되계산할 방법이 없다 — 되계산하려면 시드에 주식 수를 먼저 넣어야 한다.
+ * `integration.totalInfos.marketValue` 는 **그 순간의 현재가로 계산된 값**이다.
+ * 실측(2026-08-31, 같은 종목 302440):
+ *
+ *     08:58 (개장 전)  현재가 38,950   marketValue "3조 559억"
+ *     09:19 (장중)     현재가 37,950   marketValue "2조 9,813억"
+ *
+ * 그대로 쓰면 장중·마감 후 재수집에서 **주가는 금요일인데 시총만 오늘 장중** 값이 되어
+ * 한 행 안에 두 시점이 섞인다. 73조짜리가 1% 움직이면 0.73조라 화면에 그대로 보인다.
+ *
+ * ## 되계산 방법
+ *
+ *     주식 수   = marketValue / 그 응답 시점의 현재가
+ *     시가총액  = 주식 수 × 우리가 고른 거래일 종가
+ *
+ * 아래 식은 이 둘을 합친 형태다(주식 수를 실제로 만들지 않아 조원/원 단위 혼동이 없다).
+ * **시드에 `sharesOutstanding` 을 넣지 않는 이유**: 국내 종목은 분기마다 손으로 갱신해야
+ * 하고, 스펙 §3.4 가 국내를 그 목록에서 뺀 것도 같은 이유다. 응답에서 역산하면 유상증자·
+ * 자사주 소각이 있어도 저절로 따라온다.
+ *
+ * ## 현재가는 `basic` 에서 온다 — 그리고 그게 이 방법의 한계다
+ *
+ * `integration` 에는 현재가가 없다(실측: `totalInfos` 에 `lastClosePrice`·`openPrice`·
+ * `highPrice`·`lowPrice` 는 있어도 현재가는 없고, `dealTrendInfos[0]` 은 현재가가 아니라
+ * **직전 거래일** 종가다). 그래서 현재가는 `basic.closePrice` 에서 받는다.
+ *
+ * 두 값이 **서로 다른 응답**에서 오므로 장중에는 표본 시각이 조금 어긋난다 — 실측으로
+ * 역산 주식 수가 78,456,996(08:58) 대 78,558,630(09:19)으로 **약 0.13%** 차이났다.
+ * 그래도 아무것도 안 했을 때의 오차(위 예에서 2.4%)보다 한 자릿수 작고, 무엇보다
+ * **개장 전에는 현재가 = 직전 종가라 오차가 0 이다** — 07:40 정기 실행에서 이 되계산은
+ * 값을 바꾸지 않는다. 바로잡는 대상은 어디까지나 장중·마감 후 재수집이다.
+ *
+ * 현재가가 없거나 0 이면 **역산하지 않고 실패로 던진다.** 호출부가 시총 칸만 비운다 —
+ * 지어낸 시총을 채우지 않는다.
+ *
+ * 시세 계열과 **동시에** 부를 수 있도록 조회와 계산을 나눠 놓았다. 여기서는 같은 시점의
+ * 두 값만 받아 오고, 거래일 종가를 곱하는 것은 호출부가 한다(`marketCapAtSessionClose`).
  */
-async function fetchNaverMarketCapTrillion(code: string): Promise<number> {
-  const j = await getJson(`https://m.stock.naver.com/api/stock/${code}/integration`, code)
-  const infos: Array<{ code: string; value: string }> = j.totalInfos ?? []
+async function fetchNaverCapBasis(code: string): Promise<{ capAtPriceNow: number; priceNow: number }> {
+  const [basic, integration] = await Promise.all([
+    getJson(`https://m.stock.naver.com/api/stock/${code}/basic`, code),
+    getJson(`https://m.stock.naver.com/api/stock/${code}/integration`, code),
+  ])
+
+  const infos: Array<{ code: string; value: string }> = integration.totalInfos ?? []
   const raw = infos.find(i => i.code === 'marketValue')?.value
   if (!raw) throw new QuoteError(code, 'marketValue 없음')
-  const cap = parseMarketValueToTrillion(raw)
-  if (!Number.isFinite(cap)) throw new QuoteError(code, `marketValue 파싱 실패: ${raw}`)
-  return cap
+  const capAtPriceNow = parseMarketValueToTrillion(raw)
+  if (!Number.isFinite(capAtPriceNow)) throw new QuoteError(code, `marketValue 파싱 실패: ${raw}`)
+
+  // marketValue 가 계산된 시점의 가격. 0 이나 NaN 이면 나눗셈이 Infinity·NaN 을 낳는다.
+  const priceNow = parseKoreanNumber(basic.closePrice)
+  if (!Number.isFinite(priceNow) || priceNow <= 0) {
+    throw new QuoteError(code, `시총 되계산용 현재가 없음: ${basic.closePrice}`)
+  }
+
+  return { capAtPriceNow, priceNow }
+}
+
+/** 주식 수(= capAtPriceNow / priceNow)를 거래일 종가로 다시 곱한 시가총액. */
+function marketCapAtSessionClose(
+  basis: { capAtPriceNow: number; priceNow: number },
+  sessionClose: number,
+): number {
+  return basis.capAtPriceNow * (sessionClose / basis.priceNow)
 }
 
 /**
@@ -171,20 +227,23 @@ async function fetchNaverMarketCapTrillion(code: string): Promise<number> {
  * 두 호출은 동시에 나간다(`Promise` 를 먼저 만들고 뒤에서 await 한다).
  */
 export async function fetchNaverStock(code: string, now: Date = new Date()): Promise<RawQuote> {
-  const capPromise = fetchNaverMarketCapTrillion(code).catch((e: unknown) => {
+  // 세 호출이 동시에 나간다. 시총 쪽은 실패해도 시세를 죽이지 않도록 여기서 삼킨다.
+  const basisPromise = fetchNaverCapBasis(code).catch((e: unknown) => {
     const reason = e instanceof Error ? e.message : String(e)
     console.error(`[quote] ${code}: 시가총액 조회 실패 — 시세는 살리고 시총 칸만 빈다: ${reason}`)
     return undefined
   })
 
   const { last, prev } = await fetchLastTwoSessions(code, now)
+  const basis = await basisPromise
+  const cap = basis === undefined ? undefined : marketCapAtSessionClose(basis, last.close)
 
   return {
     close: last.close,
     prevClose: prev.close,
     currency: 'KRW',
     asOf: last.date,
-    marketCapKrwTrillion: await capPromise,
+    marketCapKrwTrillion: cap,
   }
 }
 
