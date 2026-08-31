@@ -84,6 +84,11 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
+// **날짜 규칙(Task 35 후속)**: `fetchKrxIndexQuote` 는 **KST 오늘 행을 쓰지 않고**
+// 어제부터 거슬러 올라간다(국내 네이버 경로와 같은 규칙, 스펙 §3.0). 그래서 아래 테스트는
+// 거래일 D 의 행을 얻으려고 `now` 를 **D+1** 로 준다. `now` 를 D 로 주면 조회가 D-1 에서
+// 시작해 D 행에 닿지 않는다 — 그게 의도된 동작이다.
+
 describe('fetchKrxIndexQuote — 51행에서 우리 지수 고르기', () => {
   it('51행 중 IDX_NM 이 정확히 일치하는 행을 고른다', async () => {
     withKey()
@@ -91,7 +96,7 @@ describe('fetchKrxIndexQuote — 51행에서 우리 지수 고르기', () => {
     expect(day.OutBlock_1).toHaveLength(51)
     stubKrx({ '20260826': day })
 
-    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))
+    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))
     expect(q.close).toBeCloseTo(2173.53, 2)
   })
 
@@ -106,7 +111,7 @@ describe('fetchKrxIndexQuote — 51행에서 우리 지수 고르기', () => {
     // FLUC_RT 를 말이 안 되는 값으로 둔다. 그대로 쓰는 구현이면 여기서 드러난다.
     stubKrx({ '20260826': fullDay(healthcareRow('20260826', '2173.53', '65.33', '99.99')) })
 
-    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))
+    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))
     // 키 목록 자체를 못박는다 — FLUC_RT·MKTCAP 을 나중에 슬쩍 끼워 넣으면 여기서 걸린다.
     expect(Object.keys(q).sort()).toEqual(['asOf', 'close', 'currency', 'prevClose'])
     expect(q.close).toBeCloseTo(2173.53, 2)
@@ -129,7 +134,7 @@ describe('fetchKrxIndexQuote — 51행에서 우리 지수 고르기', () => {
     withKey()
     const row = healthcareRow('2026-08-26', '2173.53', '65.33', '3.10')
     stubKrx({ '20260826': fullDay(row) })
-    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))).rejects.toThrow(
+    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))).rejects.toThrow(
       /BAS_DD 파싱 실패/,
     )
   })
@@ -139,14 +144,14 @@ describe('fetchKrxIndexQuote — 문자열 → 숫자 변환', () => {
   it('prevClose = close - CMPPREVDD_IDX', async () => {
     withKey()
     stubKrx({ '20260826': fullDay(healthcareRow('20260826', '2173.53', '65.33', '3.10')) })
-    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))
+    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))
     expect(q.prevClose).toBeCloseTo(2108.2, 2)
   })
 
   it('전일대비가 음수여도 맞는다 (실측 20251230: -6.67)', async () => {
     withKey()
     stubKrx({ '20251230': fullDay(healthcareRow('20251230', '2392.04', '-6.67', '-0.28')) })
-    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2025-12-30T10:00:00+09:00'))
+    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2025-12-31T10:00:00+09:00'))
     expect(q.close).toBeCloseTo(2392.04, 2)
     expect(q.prevClose).toBeCloseTo(2398.71, 2)
   })
@@ -155,7 +160,7 @@ describe('fetchKrxIndexQuote — 문자열 → 숫자 변환', () => {
     withKey()
     // Number('') === 0 이라 그냥 Number() 로 바꾸면 종가 0 이 그럴듯하게 저장된다.
     stubKrx({ '20260826': fullDay(healthcareRow('20260826', '', '65.33', '3.10')) })
-    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))).rejects.toThrow(
+    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))).rejects.toThrow(
       /CLSPRC_IDX 파싱 실패/,
     )
   })
@@ -163,7 +168,7 @@ describe('fetchKrxIndexQuote — 문자열 → 숫자 변환', () => {
   it('CLSPRC_IDX 가 숫자가 아니면 실패다', async () => {
     withKey()
     stubKrx({ '20260826': fullDay(healthcareRow('20260826', 'N/A', '65.33', '3.10')) })
-    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))).rejects.toThrow(
+    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))).rejects.toThrow(
       /CLSPRC_IDX 파싱 실패/,
     )
   })
@@ -173,7 +178,7 @@ describe('fetchKrxIndexQuote — 문자열 → 숫자 변환', () => {
     const row = healthcareRow('20260826', '2173.53', '65.33', '3.10')
     delete (row as Record<string, unknown>).CMPPREVDD_IDX
     stubKrx({ '20260826': fullDay(row) })
-    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))).rejects.toThrow(
+    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))).rejects.toThrow(
       /CMPPREVDD_IDX 파싱 실패/,
     )
   })
@@ -183,8 +188,9 @@ describe('fetchKrxIndexQuote — 휴장일 거슬러 올라가기', () => {
   it('빈 응답이면 하루 거슬러 올라간다', async () => {
     withKey()
     // 실측 그대로: 20260827 은 0행, 20260826 은 51행.
+    // now 가 08-28 인 것은 **오늘 행을 쓰지 않기 때문**이다 — 조회는 어제(08-27)부터 시작한다.
     const { calls } = stubKrx({ '20260826': fullDay(healthcareRow('20260826', '2173.53', '65.33', '3.10')) })
-    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T19:00:00+09:00'))
+    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-28T19:00:00+09:00'))
     expect(calls).toEqual(['20260827', '20260826'])
     expect(q.close).toBeCloseTo(2173.53, 2)
   })
@@ -192,7 +198,7 @@ describe('fetchKrxIndexQuote — 휴장일 거슬러 올라가기', () => {
   it('연말 연휴처럼 여러 날이 비어 있어도 월 경계를 넘어 내려간다', async () => {
     withKey()
     const { calls } = stubKrx({ '20251230': fullDay(healthcareRow('20251230', '2392.04', '-6.67', '-0.28')) })
-    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-01-01T08:00:00+09:00'))
+    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-01-02T08:00:00+09:00'))
     expect(calls).toEqual(['20260101', '20251231', '20251230'])
     expect(q.close).toBeCloseTo(2392.04, 2)
   })
@@ -212,7 +218,7 @@ describe('fetchKrxIndexQuote — 휴장일 거슬러 올라가기', () => {
     // 이걸 휴장처럼 취급해 계속 내려가면 열흘 뒤 엉뚱한 사유가 남는다.
     const day = { OutBlock_1: fullDay(healthcareRow('20260826', '1', '1', '1')).OutBlock_1.filter(r => r.IDX_NM !== HEALTHCARE) }
     const { calls } = stubKrx({ '20260826': day })
-    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))).rejects.toThrow(
+    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))).rejects.toThrow(
       /응답 50행에 해당 지수가 없음/,
     )
     expect(calls).toEqual(['20260826'])
@@ -220,10 +226,71 @@ describe('fetchKrxIndexQuote — 휴장일 거슬러 올라가기', () => {
 
   it('기준일은 KST 다 — UTC 로 계산하면 하루가 밀린다', async () => {
     withKey()
-    // 2026-08-26T22:00Z 는 KST 로 08-27 07:00 이다.
+    // 2026-08-26T22:00Z 는 KST 로 08-27 07:00 이다. 오늘(08-27) 행은 쓰지 않으므로
+    // 조회는 08-26 부터 시작한다. UTC 로 읽었다면 오늘이 08-26 이 되어 08-25 부터 시작한다.
     const { calls } = stubKrx({ '20260826': fullDay(healthcareRow('20260826', '2173.53', '65.33', '3.10')) })
     await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T22:00:00Z'))
-    expect(calls[0]).toBe('20260827')
+    expect(calls[0]).toBe('20260826')
+    expect(calls[0]).not.toBe('20260825')
+  })
+})
+
+describe('fetchKrxIndexQuote — KST 오늘 행은 쓰지 않는다 (실행 시각 무관 불변식)', () => {
+  /**
+   * KRX 는 장 마감 후 당일치를 게시한다. 예전에는 조회가 KST 오늘부터 시작해서, 마감 후
+   * 재수집하면 **이 한 행만 오늘 날짜**를 집었다 — 나머지 22행이 금요일 기준인데 코스피200
+   * 헬스케어만 월요일이 되어 표 안에서 기준일이 어긋난다. 국내 네이버 경로와 같은 규칙으로
+   * 맞춘다(스펙 §3.0).
+   */
+  const FRI = fullDay(healthcareRow('20260828', '2113.20', '-18.60', '-0.87'))
+  const MON = fullDay(healthcareRow('20260831', '2098.40', '-14.80', '-0.70'))
+
+  it('오늘 행이 이미 게시돼 있어도 어제 행을 쓴다', async () => {
+    withKey()
+    const { calls } = stubKrx({ '20260831': MON, '20260828': FRI })
+    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-31T16:30:00+09:00'))
+
+    expect(q.asOf).toBe('2026-08-28') // 2026-08-31 이 아니다
+    expect(q.close).toBeCloseTo(2113.2, 2)
+    expect(q.prevClose).toBeCloseTo(2131.8, 2)
+    // 오늘치는 **아예 조회하지 않는다.** 08-31 은 월요일이라 주말(08-30·08-29)을
+    // 빈 응답으로 지나 금요일에 닿는다 — 그 경로가 곧 MAX_LOOKBACK_DAYS 가 있는 이유다.
+    expect(calls).toEqual(['20260830', '20260829', '20260828'])
+    expect(calls).not.toContain('20260831')
+  })
+
+  it('하루 어느 시각에 돌려도 답이 하나다', async () => {
+    const times = ['00:05', '07:40', '09:01', '13:00', '15:35', '16:30', '23:50']
+    const results: string[] = []
+    for (const t of times) {
+      withKey()
+      stubKrx({ '20260831': MON, '20260828': FRI })
+      const q = await fetchKrxIndexQuote(HEALTHCARE, new Date(`2026-08-31T${t}:00+09:00`))
+      // 소수점 이하는 부동소수 잔차가 남는다(2113.20 − (−18.60) = 2131.7999…).
+      // 불변식이 보려는 것은 값이 같은지이지 그 잔차가 아니다.
+      results.push(`${q.close.toFixed(2)}/${q.prevClose.toFixed(2)}/${q.asOf}`)
+      vi.unstubAllGlobals()
+    }
+    expect(new Set(results).size).toBe(1)
+    expect(results[0]).toBe('2113.20/2131.80/2026-08-28')
+  })
+
+  it('개장 전에는 동작이 달라지지 않는다 — 오늘 행이 아직 없으므로 결과가 같다', async () => {
+    withKey()
+    // 07:40 실측 상황: 오늘치는 아직 0행이다. 위 16:30 케이스와 같은 답이 나와야 한다.
+    const { calls } = stubKrx({ '20260828': FRI })
+    const q = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-31T07:40:00+09:00'))
+    expect(q.asOf).toBe('2026-08-28')
+    expect(q.close).toBeCloseTo(2113.2, 2)
+    expect(calls).toEqual(['20260830', '20260829', '20260828'])
+  })
+
+  it('연초 기준가는 이 규칙과 무관하다 — 전년 12/31 부터 찾는다', async () => {
+    withKey()
+    const { calls } = stubKrx({ '20251230': fullDay(healthcareRow('20251230', '2392.04', '-6.67', '-0.28')) })
+    const v = await fetchKrxIndexYtdBase(HEALTHCARE, 2026)
+    expect(v).toBeCloseTo(2392.04, 2)
+    expect(calls[0]).toBe('20251231') // 오늘과 무관하게 전년 말부터
   })
 })
 
@@ -231,7 +298,7 @@ describe('fetchKrxIndexQuote — 인증과 오류', () => {
   it('AUTH_KEY 가 없으면 네트워크를 치기 전에 실패한다', async () => {
     vi.stubEnv('KRX_AUTH_KEY', '')
     const { calls } = stubKrx({})
-    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))).rejects.toThrow(
+    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))).rejects.toThrow(
       /KRX_AUTH_KEY 없음/,
     )
     expect(calls).toHaveLength(0)
@@ -240,11 +307,11 @@ describe('fetchKrxIndexQuote — 인증과 오류', () => {
   it('키 값이 오류 메시지에 절대 실리지 않는다', async () => {
     const key = withKey('SUPER-SECRET-KRX-KEY-DO-NOT-LEAK')
     stubKrx({}, { status: 401 })
-    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))).rejects.toThrow(
+    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))).rejects.toThrow(
       /KRX HTTP 401 Unauthorized Key/,
     )
     // 던져진 메시지 전문을 다시 확인한다.
-    const err: unknown = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00')).catch(e => e)
+    const err: unknown = await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00')).catch(e => e)
     expect(err).toBeInstanceOf(Error)
     expect((err as Error).message).not.toContain(key)
   })
@@ -252,7 +319,7 @@ describe('fetchKrxIndexQuote — 인증과 오류', () => {
   it('키는 URL 이 아니라 헤더로 보낸다', async () => {
     const key = withKey()
     const { spy } = stubKrx({ '20260826': fullDay(healthcareRow('20260826', '2173.53', '65.33', '3.10')) })
-    await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))
+    await fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))
     const [url, init] = spy.mock.calls[0]
     expect(String(url)).not.toContain(key)
     expect(String(url)).toMatch(/^https:\/\/data-dbg\.krx\.co\.kr\//) // http 는 리다이렉트로 빠진다
@@ -262,14 +329,14 @@ describe('fetchKrxIndexQuote — 인증과 오류', () => {
   it('HTTP 오류는 휴장과 구분해 즉시 던진다 — 10번 재시도하지 않는다', async () => {
     withKey()
     const { calls } = stubKrx({}, { status: 401 })
-    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))).rejects.toThrow(/HTTP 401/)
+    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))).rejects.toThrow(/HTTP 401/)
     expect(calls).toHaveLength(1)
   })
 
   it('OutBlock_1 이 배열이 아니면 빈 하루로 보지 않고 실패한다', async () => {
     withKey()
     const { calls } = stubKrx({ '20260826': { respMsg: '점검 중' } })
-    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-26T10:00:00+09:00'))).rejects.toThrow(
+    await expect(fetchKrxIndexQuote(HEALTHCARE, new Date('2026-08-27T10:00:00+09:00'))).rejects.toThrow(
       /OutBlock_1 이 배열이 아님/,
     )
     expect(calls).toHaveLength(1)

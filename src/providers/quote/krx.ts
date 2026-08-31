@@ -146,9 +146,19 @@ async function findIndexRow(idxNm: string, from: string): Promise<KrxIndexRow> {
  * `isIndex` 면 null 을 준다). 표를 지수 4행끼리 일관되게 유지한다.
  */
 export async function fetchKrxIndexQuote(symbol: string, now: Date = new Date()): Promise<RawQuote> {
-  // 기준일은 KST 오늘이다. 08:00 브리프는 개장 전이라 오늘 행은 아직 없고, 위 루프가
-  // 전영업일로 내려간다(실측: 20260827 은 저녁에도 0행이었다).
-  const row = await findIndexRow(symbol, toBasDd(kstDateString(now)))
+  // **KST 오늘 행은 쓰지 않는다. 어제부터 거슬러 올라간다.**
+  //
+  // 국내 네이버 경로와 **같은 규칙**이다(스펙 §3.0). 전에는 오늘부터 시작했는데, 그러면
+  // KRX 가 당일치를 게시한 뒤(장 마감 후) 재수집할 때 **이 한 행만 오늘 날짜를 집는다.**
+  // 나머지 22행이 금요일 기준인데 코스피200 헬스케어만 월요일이 되어 표 안에서 기준일이
+  // 어긋나고, 그 차이는 화면에서 알아채기 어렵다.
+  //
+  // 개장 전에는 어차피 오늘 행이 없어(실측: 20260827 은 저녁에도 0행) 07:40 정기 실행의
+  // 결과는 바뀌지 않는다. 이 한 줄이 바꾸는 것은 **장중·마감 후 재수집**뿐이고, 그때도
+  // 아침과 같은 값이 나오게 하는 것이 목적이다.
+  //
+  // 연초 기준가(`fetchKrxIndexYtdBase`)는 전년 12/31 부터 찾으므로 이 규칙과 무관하다.
+  const row = await findIndexRow(symbol, shiftBasDd(toBasDd(kstDateString(now)), -1))
 
   const close = toNumber(row.CLSPRC_IDX)
   if (!Number.isFinite(close)) throw new QuoteError(symbol, `CLSPRC_IDX 파싱 실패: ${row.CLSPRC_IDX}`)
