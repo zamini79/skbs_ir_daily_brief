@@ -79,8 +79,19 @@ git push -u origin feature/ir-daily-brief
 5. Render 가 저장소 루트의 `render.yaml` 을 읽고 `ir-daily-brief` 웹 서비스 하나를 제안한다
 6. **Apply** 를 누르면 환경변수 10개를 하나씩 물어본다 → 3절
 
-`render.yaml` 에 리전이 `singapore` 로 적혀 있다. **리전은 나중에 못 바꾼다**
-(서비스를 다시 만들어야 한다). Supabase 프로젝트 리전과 맞추면 DB 왕복이 짧다.
+### 리전은 `singapore` 다 — 그대로 두어라
+
+`render.yaml` 에 `region: singapore` 가 적혀 있다. **리전은 나중에 못 바꾼다.**
+바꾸려면 서비스를 지우고 다시 만들어야 하므로 근거를 남겨 둔다.
+
+이 프로젝트의 Supabase 는 **ap-southeast-2(시드니)** 이고, Render 에는 시드니
+리전이 없다 — 고를 수 있는 곳은 oregon · ohio · virginia · frankfurt · singapore
+다섯 곳뿐이다. 그중 시드니에 가장 가까운 것이 싱가포르다.
+
+**사용자가 한국에 있다는 이유로 고른 것이 아니다.** 화면을 그릴 때마다 서버가
+DB 를 왕복하므로 붙여야 할 쪽은 브라우저가 아니라 DB 다. 브라우저와 Render
+사이의 거리는 한 번의 왕복이지만, Render 와 Supabase 사이의 거리는 페이지 한 장을
+그리는 동안 여러 번 곱해진다.
 
 ---
 
