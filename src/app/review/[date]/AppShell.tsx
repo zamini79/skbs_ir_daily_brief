@@ -6,7 +6,6 @@ import {
   adjacentBriefDates,
   listBriefDates,
   listRecentBriefDates,
-  runStatusLabel,
   type BriefDayMark,
 } from '@/db/repo'
 import { Calendar } from './Calendar'
@@ -30,6 +29,7 @@ const MARK_DOT: Record<BriefDayMark, string> = {
   DONE: 'bg-mark-done',
   PARTIAL: 'bg-mark-partial',
   RUNNING: 'bg-mark-running',
+  STALLED: 'bg-mark-stalled',
   FAILED: 'bg-mark-failed',
   UNKNOWN: 'bg-mark-unknown',
 }
@@ -109,7 +109,7 @@ export async function AppShell({
                     {/* 상태를 점 색에만 맡기지 않는다. 「부분 완료」가 「준비 완료」와
                         같아 보이면 안 되는데 색만으로는 훑을 때 놓치기 쉽다. */}
                     <span className="ml-auto text-[11px] text-sidebar-label">
-                      {runStatusLabel(r.status)}
+                      {r.label}
                     </span>
                   </Link>
                 </li>

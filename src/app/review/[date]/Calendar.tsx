@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { monthGrid, monthTitle, shiftMonth, WEEKDAY_LABELS } from '@/domain/calendar'
-import { runStatusLabel, type BriefDateEntry, type BriefDayMark } from '@/db/repo'
+import { type BriefDateEntry, type BriefDayMark } from '@/db/repo'
 
 /**
  * 사이드바의 월 달력.
@@ -13,12 +13,18 @@ import { runStatusLabel, type BriefDateEntry, type BriefDayMark } from '@/db/rep
  * 링크가 아니다(눌러도 아무 일이 없는 것보다 아예 누를 수 없는 편이 정직하다).
  * 있는 날짜도 완료/부분 완료/수집 중/실패를 점 색으로 갈라 두고, 그 달에 실제로
  * 나타난 표시만 아래 범례에 적는다.
+ *
+ * 「수집 중」은 **두 가지**로 갈린다(`STALLED`). 상태 문자열은 둘 다 `COLLECTING`
+ * 이지만, 몇 달 전에 죽은 실행을 오늘 아침에 시작한 실행과 같은 점으로 그리면
+ * 달력이 거짓말을 한다 — 그것도 담당자가 그 날짜를 열어 보지 않으므로 오래 사는
+ * 거짓말이다. 점 색과 글자를 **둘 다** 가른다(`briefDayMarkLabel`).
  */
 
 const MARK_DOT: Record<BriefDayMark, string> = {
   DONE: 'bg-mark-done',
   PARTIAL: 'bg-mark-partial',
   RUNNING: 'bg-mark-running',
+  STALLED: 'bg-mark-stalled',
   FAILED: 'bg-mark-failed',
   UNKNOWN: 'bg-mark-unknown',
 }
@@ -44,7 +50,7 @@ export function Calendar({
   const legend: Array<{ mark: BriefDayMark; label: string }> = []
   for (const e of entries) {
     if (legend.some(l => l.mark === e.mark)) continue
-    legend.push({ mark: e.mark, label: runStatusLabel(e.status) })
+    legend.push({ mark: e.mark, label: e.label })
   }
 
   return (
@@ -94,7 +100,7 @@ export function Calendar({
             <Link
               key={cell.date}
               href={`/review/${cell.date}`}
-              title={`${cell.date} · ${runStatusLabel(entry.status)}`}
+              title={`${cell.date} · ${entry.label}`}
               className={`relative mx-auto flex h-7 w-7 items-center justify-center rounded text-[12px] ${
                 isSelected
                   ? 'bg-sidebar-fg font-bold text-sidebar'

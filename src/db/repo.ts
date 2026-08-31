@@ -1,6 +1,7 @@
 import { prisma } from './client'
 import { changePct as calcChangePct } from '@/domain/calc'
 import { monthRange } from '@/domain/calendar'
+import { runProgressView } from '@/domain/runProgress'
 import type { Prisma } from '@prisma/client'
 
 export type RowState = 'NEWS_FAILED' | 'NO_NEWS' | 'OMITTED' | 'PENDING' | 'SELECTED' | 'STALE_SELECTION'
@@ -427,7 +428,12 @@ export type ClientRun = {
   runDate: string
   tradeDate: string
   status: string
+  /** 완료 사유. 진행 문구가 아니다 — 아래 progressDetail 과 칸이 나뉘어 있다. */
   statusDetail: string | null
+  /** 수집이 도는 동안의 단계 문구. 끝난 실행에서는 null. */
+  progressDetail: string | null
+  /** 실행 시작 시각(ms). 화면이 「멈춘 것으로 보이는지」를 이 값으로 판정한다. */
+  startedAtMs: number
 }
 
 /**
@@ -550,6 +556,8 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
       tradeDate: run.tradeDate,
       status: run.status,
       statusDetail: run.statusDetail,
+      progressDetail: run.progressDetail,
+      startedAtMs: run.startedAt.getTime(),
     },
     rows,
   }
@@ -573,7 +581,7 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
  * 다 됐다"고 거짓으로 말하게 된다. 모르면 모른다고 표시한다.
  * `PARTIAL` 을 `DONE` 과 합치지 않는 것도 같은 이유다 — 부분 완료는 완료가 아니다.
  */
-export type BriefDayMark = 'DONE' | 'PARTIAL' | 'RUNNING' | 'FAILED' | 'UNKNOWN'
+export type BriefDayMark = 'DONE' | 'PARTIAL' | 'RUNNING' | 'STALLED' | 'FAILED' | 'UNKNOWN'
 
 const DAY_MARK: Record<string, BriefDayMark> = {
   READY: 'DONE',
@@ -582,44 +590,89 @@ const DAY_MARK: Record<string, BriefDayMark> = {
   FAILED: 'FAILED',
 }
 
-export function briefDayMark(status: string): BriefDayMark {
+/**
+ * 달력·사이드바 점 하나의 뜻.
+ *
+ * **`STALLED` 가 `RUNNING` 과 갈라져 있다.** `status` 문자열만 보면 둘 다
+ * `COLLECTING` 이라, 몇 달 전에 죽은 실행이 오늘 07:40 에 막 시작한 실행과
+ * 똑같은 파란 점으로 그려진다. 달력은 훑어보는 화면이라 그 거짓말이 특히 오래 산다 —
+ * 담당자는 그 날짜를 열어 보지도 않는다. 판정 근거는 배너와 같은 함수다
+ * (`domain/runProgress.ts` 의 `runProgressView`).
+ */
+export function briefDayMark(
+  status: string,
+  /** 시작 시각을 모르면 생략한다. 그때는 COLLECTING 이 그냥 RUNNING 이다 —
+   * 멈췄는지 판단할 근거가 없으므로 멈췄다고 말하지 않는다. */
+  timing?: { startedAtMs: number; nowMs: number },
+): BriefDayMark {
+  if (status === 'COLLECTING' && timing !== undefined) {
+    const view = runProgressView({ status, ...timing, progressDetail: null })
+    return view.kind === 'STALLED' ? 'STALLED' : 'RUNNING'
+  }
   return DAY_MARK[status] ?? 'UNKNOWN'
+}
+
+const MARK_LABEL: Record<BriefDayMark, string> = {
+  DONE: '준비 완료',
+  PARTIAL: '부분 완료',
+  RUNNING: '수집 중',
+  STALLED: '수집 중 — 중단됐을 수 있음',
+  FAILED: '실패',
+  UNKNOWN: '',
+}
+
+/**
+ * 점 옆에 적는 말. **`runStatusLabel(status)` 를 쓰면 안 된다** — 그쪽은 원본 상태
+ * 문자열만 알아서 멈춘 실행에도 「수집 중」이라고 적는다. 점 색은 갈라 놓고 글자는
+ * 같으면 구분이 반쪽만 산다.
+ * `UNKNOWN` 은 우리가 모르는 상태 문자열이므로 **원문을 그대로** 보여준다.
+ */
+export function briefDayMarkLabel(mark: BriefDayMark, status: string): string {
+  return MARK_LABEL[mark] || status
 }
 
 export type BriefDateEntry = {
   /** BriefRun.runDate — 검수 화면 URL 키. */
   date: string
-  /** 원본 status 문자열. 화면은 runStatusLabel 로 사람 말로 바꿔 쓴다. */
+  /** 원본 status 문자열. 모르는 상태를 그대로 보여줘야 할 때 쓴다. */
   status: string
   mark: BriefDayMark
+  /** 화면에 적을 사람 말. mark 와 짝이다 — 색과 글자가 어긋나지 않게 여기서 함께 만든다. */
+  label: string
 }
 
-function toDateEntry(r: { runDate: string; status: string }): BriefDateEntry {
-  return { date: r.runDate, status: r.status, mark: briefDayMark(r.status) }
+function toDateEntry(
+  r: { runDate: string; status: string; startedAt: Date },
+  nowMs: number,
+): BriefDateEntry {
+  const mark = briefDayMark(r.status, { startedAtMs: r.startedAt.getTime(), nowMs })
+  return { date: r.runDate, status: r.status, mark, label: briefDayMarkLabel(mark, r.status) }
 }
 
 /**
  * 그 달에 브리프가 있는 날짜들. 23행을 다 읽지 않고 `runDate`·`status` 두 열만 받는다 —
  * 달력이 알아야 하는 것은 "있나"와 "다 됐나" 둘뿐이다.
  */
-export async function listBriefDates(yearMonth: string): Promise<BriefDateEntry[]> {
+export async function listBriefDates(yearMonth: string, now: Date = new Date()): Promise<BriefDateEntry[]> {
   const { first, last } = monthRange(yearMonth)
   const runs = await prisma.briefRun.findMany({
     where: { runDate: { gte: first, lte: last } },
-    select: { runDate: true, status: true },
+    select: { runDate: true, status: true, startedAt: true },
     orderBy: { runDate: 'asc' },
   })
-  return runs.map(toDateEntry)
+  const nowMs = now.getTime()
+  return runs.map(r => toDateEntry(r, nowMs))
 }
 
 /** 사이드바 「최근 브리프」. 최신순. */
-export async function listRecentBriefDates(limit: number): Promise<BriefDateEntry[]> {
+export async function listRecentBriefDates(limit: number, now: Date = new Date()): Promise<BriefDateEntry[]> {
   const runs = await prisma.briefRun.findMany({
-    select: { runDate: true, status: true },
+    select: { runDate: true, status: true, startedAt: true },
     orderBy: { runDate: 'desc' },
     take: limit,
   })
-  return runs.map(toDateEntry)
+  const nowMs = now.getTime()
+  return runs.map(r => toDateEntry(r, nowMs))
 }
 
 /**
@@ -642,4 +695,53 @@ export async function adjacentBriefDates(date: string): Promise<{ prev: string |
     }),
   ])
   return { prev: prev?.runDate ?? null, next: next?.runDate ?? null }
+}
+
+/* ------------------------------------------------------------------------ *
+ * 화면에서 수집을 직접 돌릴 때 버튼이 알아야 하는 것
+ * ------------------------------------------------------------------------ */
+
+/**
+ * 「수집 실행」 버튼이 판단에 쓰는 사실들.
+ *
+ * **보고 있는 날짜가 아니라 수집이 실제로 만들 날짜(`runDate` = KST 오늘)의 사실이다.**
+ * 담당자가 지난 날짜를 열어 둔 채 버튼을 눌러도 수집은 오늘 자로 돈다(시세 소스가
+ * 주는 값이 "직전 영업일 종가"뿐이라 과거 날짜를 다시 만들 방법이 애초에 없다).
+ * 경고 문구가 보고 있는 날짜의 선택 건수를 말하면, 실제로 덮어써질 날짜와 다른
+ * 날짜에 대해 경고하게 된다.
+ */
+export type CollectTarget = {
+  /** 수집이 만들/덮을 날짜. */
+  runDate: string
+  /** 그 날짜의 실행. 아직 한 번도 안 돌았으면 null. */
+  run: { status: string; statusDetail: string | null; progressDetail: string | null; startedAtMs: number } | null
+  /**
+   * 그 날짜에서 담당자가 이미 판단을 끝낸 행 수(PENDING 이 아닌 Selection).
+   * 재수집은 후보를 지우고 다시 만들므로 이 행들의 선택이 무효화된다
+   * (`needsPendingRevert` 가 PENDING 으로 되돌린다 — 직접 고친 텍스트는 살아남는다).
+   */
+  decidedRows: number
+}
+
+export async function getCollectTarget(runDate: string): Promise<CollectTarget> {
+  const [run, decidedRows] = await Promise.all([
+    prisma.briefRun.findUnique({
+      where: { runDate },
+      select: { status: true, statusDetail: true, progressDetail: true, startedAt: true },
+    }),
+    prisma.selection.count({ where: { run: { runDate }, decision: { not: 'PENDING' } } }),
+  ])
+
+  return {
+    runDate,
+    run: run
+      ? {
+          status: run.status,
+          statusDetail: run.statusDetail,
+          progressDetail: run.progressDetail,
+          startedAtMs: run.startedAt.getTime(),
+        }
+      : null,
+    decidedRows,
+  }
 }

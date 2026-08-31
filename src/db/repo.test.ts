@@ -12,9 +12,11 @@ import {
   marketCapBlankReason,
   quoteFailureReason,
   briefDayMark,
+  briefDayMarkLabel,
   type ClientCandidate,
   type RowState,
 } from './repo'
+import { STALLED_AFTER_MS } from '@/domain/runProgress'
 
 const ALL_ROW_STATES = ['NEWS_FAILED', 'NO_NEWS', 'OMITTED', 'PENDING', 'SELECTED', 'STALE_SELECTION'] as const
 
@@ -621,7 +623,7 @@ describe('briefDayMark', () => {
     expect(briefDayMark('PARTIAL')).toBe('PARTIAL')
     expect(briefDayMark('COLLECTING')).toBe('RUNNING')
     expect(briefDayMark('FAILED')).toBe('FAILED')
-    const marks = ['READY', 'PARTIAL', 'COLLECTING', 'FAILED'].map(briefDayMark)
+    const marks = ['READY', 'PARTIAL', 'COLLECTING', 'FAILED'].map(s => briefDayMark(s))
     expect(new Set(marks).size).toBe(4)
   })
 
@@ -634,5 +636,47 @@ describe('briefDayMark', () => {
     expect(briefDayMark('WHATEVER')).toBe('UNKNOWN')
     expect(briefDayMark('')).toBe('UNKNOWN')
     expect(briefDayMark('ready')).toBe('UNKNOWN') // 대소문자도 지어내 맞추지 않는다
+  })
+
+  it('시작한 지 얼마 안 된 COLLECTING 은 도는 중이다', () => {
+    expect(briefDayMark('COLLECTING', { startedAtMs: 0, nowMs: 202_000 })).toBe('RUNNING')
+  })
+
+  it('오래된 COLLECTING 은 도는 중과 다른 표시다 — 달력에서도 갈라야 한다', () => {
+    // 몇 달 전에 죽은 실행이 오늘 07:40 에 시작한 실행과 같은 점으로 그려지면,
+    // 담당자는 그 날짜를 열어 보지도 않은 채 「돌고 있구나」로 읽는다.
+    const stalled = briefDayMark('COLLECTING', { startedAtMs: 0, nowMs: STALLED_AFTER_MS })
+    expect(stalled).toBe('STALLED')
+    expect(stalled).not.toBe(briefDayMark('COLLECTING', { startedAtMs: 0, nowMs: 1000 }))
+  })
+
+  it('시작 시각을 모르면 멈췄다고 말하지 않는다', () => {
+    // 판단 근거가 없을 때 단정하지 않는다는 이 코드베이스의 규칙 그대로다.
+    expect(briefDayMark('COLLECTING')).toBe('RUNNING')
+  })
+
+  it('COLLECTING 이 아닌 상태는 시각을 줘도 판정이 바뀌지 않는다', () => {
+    expect(briefDayMark('READY', { startedAtMs: 0, nowMs: STALLED_AFTER_MS * 100 })).toBe('DONE')
+    expect(briefDayMark('FAILED', { startedAtMs: 0, nowMs: STALLED_AFTER_MS * 100 })).toBe('FAILED')
+  })
+})
+
+describe('briefDayMarkLabel', () => {
+  it('멈춘 것으로 보이는 실행에 「수집 중」이라고 적지 않는다', () => {
+    // 점 색만 가르고 글자는 같으면 구분이 반쪽만 산다.
+    expect(briefDayMarkLabel('RUNNING', 'COLLECTING')).toBe('수집 중')
+    expect(briefDayMarkLabel('STALLED', 'COLLECTING')).not.toBe('수집 중')
+    expect(briefDayMarkLabel('STALLED', 'COLLECTING')).toContain('중단됐을 수 있음')
+  })
+
+  it('표시마다 서로 다른 말을 쓴다', () => {
+    const labels = (['DONE', 'PARTIAL', 'RUNNING', 'STALLED', 'FAILED'] as const).map(m =>
+      briefDayMarkLabel(m, 'COLLECTING'),
+    )
+    expect(new Set(labels).size).toBe(labels.length)
+  })
+
+  it('모르는 상태는 원문을 그대로 보여준다 — 아는 척하지 않는다', () => {
+    expect(briefDayMarkLabel('UNKNOWN', 'WHATEVER')).toBe('WHATEVER')
   })
 })
