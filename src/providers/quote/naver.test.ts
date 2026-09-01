@@ -2,132 +2,183 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { fetchNaverWorldStock, fetchNaverStock, fetchNaverDomesticIndex } from './naver'
 import { classifyQuoteFailure } from './retry'
 
-// 해외 개별주(Wuxi 2269.HK). 실측(2026-08-27 / 2026-08-28 재확인)한 사실만 굳힌다:
-//   - **숫자가 전부 문자열이다**: closePrice "50.500", compareToPreviousClosePrice "-0.250".
-//   - 통화는 currencyType.code = "HKD".
-//   - localTradedAt 은 현지 시각이다: "2026-08-27T16:00:00+08:00".
-//   - fluctuationsRatio("-0.49")도 오지만 쓰지 않는다.
-//   - 경로는 /stock/{code}/basic 이다(지수의 /index/... 가 아니다).
-//   - GSK.L·SAN.PA·LONN.SW 는 HTTP 409 `Not Exist Master` 다.
+// 해외 개별주(Wuxi 2269.HK, Task 38). 이 결함은 국내(Task 35)와 같은 성질이다 —
+// `basic` 의 `compareToPreviousClosePrice` 는 "전영업일 대비"가 아니라 "오늘 지금까지의
+// 변동"이라 개장 전에는 항상 0 이고 `localTradedAt` 은 그래도 오늘 날짜로 온다. 크론이
+// 07:40 KST 인데 홍콩 개장은 10:30 KST 라 **정상 운영 시각에는 항상 개장 전**이다.
+// 그래서 시세는 일별 시세(`chart/foreign/item/{code}/day`)에서 뽑고, `basic` 은 통화
+// (`currencyType.code`)만 받는다. 실측(2026-09-01, 09:25 HKT = 개장 5분 전)의 계열
+// 꼬리를 그대로 픽스처로 쓴다:
+//
+//     20260824 48.6   20260825 52.2   20260826 50.75
+//     20260827 50.5   20260828 50.65  20260831 48.84   ← 마지막 완결 거래일
+//
+// 기대값: close=48.84(그대로) / prevClose=50.65(→ 전일대비 -1.81, -3.57%) /
+// asOf=2026-08-31(→ 아니라 2026-09-01 이 아니다).
 
-function wuxi(over: Record<string, unknown> = {}) {
+function foreignBar(localDate: string, closePrice: number) {
   return {
-    stockEndType: 'stock',
-    reutersCode: '2269.HK',
-    stockName: '야오밍바이오',
-    symbolCode: '02269',
-    closePrice: '50.500',
-    compareToPreviousClosePrice: '-0.250',
-    fluctuationsRatio: '-0.49',
-    localTradedAt: '2026-08-27T16:00:00+08:00',
+    localDate,
+    closePrice,
+    openPrice: closePrice,
+    highPrice: closePrice,
+    lowPrice: closePrice,
+    accumulatedTradingVolume: 0,
+  }
+}
+
+/** 실측 꼬리 그대로. 08-31(마지막 완결 거래일)까지만 있고 오늘(09-01) 행은 없다. */
+const WUXI_SERIES_PREOPEN = [
+  foreignBar('20260824', 48.6),
+  foreignBar('20260825', 52.2),
+  foreignBar('20260826', 50.75),
+  foreignBar('20260827', 50.5),
+  foreignBar('20260828', 50.65),
+  foreignBar('20260831', 48.84),
+]
+
+function wuxiBasic(over: Record<string, unknown> = {}) {
+  return {
     currencyType: { code: 'HKD', text: '홍콩 달러', name: 'HONG_KONG_DOLLAR' },
     stockExchangeType: { code: 'HKG', zoneId: 'Asia/Hong_Kong', nationType: 'HKG' },
-    marketStatus: 'CLOSE',
-    delayTime: 15,
     ...over,
   }
 }
 
-function stubNaver(body: unknown, status = 200) {
-  const spy = vi.fn(async (_url: string, _init?: RequestInit) =>
-    new Response(typeof body === 'string' ? body : JSON.stringify(body), {
-      status,
-      headers: { 'content-type': 'application/json' },
-    }),
-  )
+/**
+ * URL 로 갈라 응답하는 stub(국내 `stubDomestic`과 같은 방식). 해외 개별주도 엔드포인트가
+ * 둘(일별 시세·통화)이라 하나의 고정 응답으로는 검증이 안 된다.
+ */
+function stubWorldStock(opts: {
+  series?: unknown[] | { body: unknown; status: number }
+  basicBody?: unknown | { body: unknown; status: number }
+} = {}) {
+  const json = (v: unknown, fallback: unknown) => {
+    const x = v ?? fallback
+    const { body, status } =
+      x && typeof x === 'object' && !Array.isArray(x) && 'status' in (x as object)
+        ? (x as { body: unknown; status: number })
+        : { body: x, status: 200 }
+    return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+  }
+  const spy = vi.fn(async (url: string) => {
+    const u = String(url)
+    if (u.includes('/basic')) return json(opts.basicBody, wuxiBasic())
+    if (u.includes('/chart/foreign/item/')) return json(opts.series, WUXI_SERIES_PREOPEN)
+    throw new Error(`예상하지 못한 URL: ${u}`)
+  })
   vi.stubGlobal('fetch', spy)
   return spy
 }
 
 afterEach(() => vi.unstubAllGlobals())
 
-describe('fetchNaverWorldStock', () => {
-  it('문자열 숫자를 파싱하고 전일 종가를 뺄셈으로 구한다', async () => {
-    stubNaver(wuxi())
-    const q = await fetchNaverWorldStock('2269.HK')
-    expect(q.close).toBeCloseTo(50.5, 4)
-    expect(q.prevClose).toBeCloseTo(50.75, 4) // 50.500 − (−0.250)
+/** KST 시각 리터럴을 Date 로. "오늘"은 2026-09-01 이다(계열 픽스처와 맞춘다). */
+const kstWorld = (s: string) => new Date(`2026-09-01T${s}:00+09:00`)
+
+describe('fetchNaverWorldStock — 개장 전에도 전일대비가 0 이 되지 않는다', () => {
+  it('개장 전(09:25 HKT ≈ 10:25 KST) 불변식: 마지막 완결 거래일에서 뽑는다', async () => {
+    stubWorldStock()
+    const q = await fetchNaverWorldStock('2269.HK', kstWorld('10:25'))
+    expect(q.close).toBeCloseTo(48.84, 4)
+    expect(q.prevClose).toBeCloseTo(50.65, 4)
+    expect(q.close - q.prevClose).toBeCloseTo(-1.81, 2)
+    expect(q.asOf).toBe('2026-08-31')
+    expect(q.asOf).not.toBe('2026-09-01')
     expect(q.currency).toBe('HKD')
-    expect(q.asOf).toBe('2026-08-27')
   })
 
-  it('콤마가 섞인 문자열도 읽는다', async () => {
-    stubNaver(wuxi({ closePrice: '1,234.50', compareToPreviousClosePrice: '-12.50' }))
-    const q = await fetchNaverWorldStock('2269.HK')
-    expect(q.close).toBeCloseTo(1234.5, 4)
-    expect(q.prevClose).toBeCloseTo(1247, 4)
+  it('장중에 오늘 행이 섞여 와도 개장 전과 같은 값이다 — 실행 시각이 숫자를 바꾸지 않는다', async () => {
+    // 이 파일에서 가장 중요한 테스트다(스펙 §3.0). 홍콩장이 열려 오늘(09-01) 행이
+    // 진행 중인 현재가로 붙어도, 그 행은 버리고 마지막 완결 거래일(08-31)을 써야 한다.
+    const withTodayRow = [...WUXI_SERIES_PREOPEN, foreignBar('20260901', 47.0)]
+    stubWorldStock({ series: withTodayRow })
+    const q = await fetchNaverWorldStock('2269.HK', kstWorld('13:00'))
+    expect(q.close).toBeCloseTo(48.84, 4) // 47.0(진행 중인 오늘 값)이 아니다
+    expect(q.prevClose).toBeCloseTo(50.65, 4)
+    expect(q.asOf).toBe('2026-08-31')
   })
 
-  it('fluctuationsRatio 를 쓰지 않는다 — 등락률은 domain/calc.ts 가 계산한다', async () => {
-    // 응답의 등락률을 일부러 모순되게 둔다. 그걸 쓴다면 전일 종가가 달라진다.
-    stubNaver(wuxi({ fluctuationsRatio: '99.99' }))
-    const q = await fetchNaverWorldStock('2269.HK')
-    expect(q.prevClose).toBeCloseTo(50.75, 4)
-    expect(Object.keys(q).sort()).toEqual(['asOf', 'close', 'currency', 'prevClose'])
+  it('거래일이 하루뿐이면 전일대비를 지어내지 않고 실패한다', async () => {
+    stubWorldStock({ series: [foreignBar('20260831', 48.84)] })
+    await expect(fetchNaverWorldStock('2269.HK', kstWorld('10:25'))).rejects.toThrow(
+      /하루뿐이라 전일 종가가 없음/,
+    )
   })
 
-  it('기준일은 localTradedAt 앞 10자다 — Date 로 파싱해 KST 로 밀지 않는다', async () => {
-    // 이 함수는 홍콩만 쓰는 게 아니다. 뉴욕 시각(-04:00)은 KST 로 다음 날이 된다:
-    // 2026-08-27T16:39:23-04:00 → UTC 20:39 → KST 2026-08-28 05:39.
-    // 그 시각의 거래일은 어디까지나 08-27 이다. 하루 밀면 담당자가 「어제 값이
-    // 오늘로 찍혔다」고 읽는다.
-    stubNaver(wuxi({ localTradedAt: '2026-08-27T16:39:23-04:00' }))
-    expect((await fetchNaverWorldStock('X')).asOf).toBe('2026-08-27')
+  it('거래일이 하나도 없으면 실패한다', async () => {
+    stubWorldStock({ series: [] })
+    await expect(fetchNaverWorldStock('2269.HK', kstWorld('10:25'))).rejects.toThrow(/거래일이 없음/)
   })
 
-  it('연말 경계에서도 기준일이 밀리지 않는다', async () => {
-    // 2026-12-31T16:36:05-05:00 → UTC 21:36 → KST 2027-01-01 06:36. **연도까지 바뀐다.**
-    // ytdBase.ts 의 naverIndexYtdBase 가 문자열을 그대로 읽는 이유와 같은 값이다.
-    // 연도가 밀리면 연초대비 기준가 비교가 통째로 어긋난다.
-    stubNaver(wuxi({ localTradedAt: '2026-12-31T16:36:05-05:00' }))
-    expect((await fetchNaverWorldStock('X')).asOf).toBe('2026-12-31')
-
-    // 홍콩(+08:00)에서도 늦은 시각이면 KST 로는 다음 날이 된다.
-    stubNaver(wuxi({ localTradedAt: '2026-12-31T23:30:00+08:00' }))
-    expect((await fetchNaverWorldStock('2269.HK')).asOf).toBe('2026-12-31')
+  it('통화는 basic 의 currencyType.code 에서 온다 — 하드코딩이 아니다', async () => {
+    // basic 이 다른 통화를 주면 결과도 그 통화여야 한다. 시드에 'HKD' 를 박아 뒀다면
+    // 이 테스트가 깨진다.
+    stubWorldStock({ basicBody: wuxiBasic({ currencyType: { code: 'USD', text: '미국 달러' } }) })
+    const q = await fetchNaverWorldStock('2269.HK', kstWorld('10:25'))
+    expect(q.currency).toBe('USD')
   })
 
-  it('지수가 아니라 종목 경로를 부른다', async () => {
-    const spy = stubNaver(wuxi())
-    await fetchNaverWorldStock('2269.HK')
-    const url = String(spy.mock.calls[0][0])
-    expect(url).toBe('https://api.stock.naver.com/stock/2269.HK/basic')
-    expect(url).not.toContain('/index/')
+  it('통화가 없으면 실패한다 — 시드 통화로 슬쩍 채우지 않는다', async () => {
+    stubWorldStock({ basicBody: wuxiBasic({ currencyType: null }) })
+    await expect(fetchNaverWorldStock('2269.HK', kstWorld('10:25'))).rejects.toThrow(
+      /currencyType.code 없음/,
+    )
+  })
+
+  it('basic 이 실패하면 시세가 멀쩡해도 전체가 실패한다 — 통화 없이 내보내지 않는다', async () => {
+    stubWorldStock({ basicBody: { body: {}, status: 500 } })
+    await expect(fetchNaverWorldStock('2269.HK', kstWorld('10:25'))).rejects.toThrow(/HTTP 500/)
+  })
+
+  it('일별 시세 응답이 배열이 아니면 실패한다', async () => {
+    stubWorldStock({ series: { body: { code: 'ok' }, status: 200 } })
+    await expect(fetchNaverWorldStock('2269.HK', kstWorld('10:25'))).rejects.toThrow(
+      /응답이 배열이 아님/,
+    )
+  })
+
+  it('localDate·closePrice 가 파싱되지 않으면 실패한다', async () => {
+    stubWorldStock({ series: [{ localDate: '2026-08-31', closePrice: 48.84 }] })
+    await expect(fetchNaverWorldStock('2269.HK', kstWorld('10:25'))).rejects.toThrow(
+      /localDate 파싱 실패/,
+    )
+    stubWorldStock({ series: [{ localDate: '20260831', closePrice: 'NaN' }] })
+    await expect(fetchNaverWorldStock('2269.HK', kstWorld('10:25'))).rejects.toThrow(
+      /closePrice 파싱 실패/,
+    )
+  })
+
+  it('종목 경로(/stock/.../basic)와 일별 시세 경로를 각각 부른다 — 지수 경로가 아니다', async () => {
+    const spy = stubWorldStock()
+    await fetchNaverWorldStock('2269.HK', kstWorld('10:25'))
+    const urls = spy.mock.calls.map(c => String(c[0]))
+    expect(urls.some(u => u === 'https://api.stock.naver.com/stock/2269.HK/basic')).toBe(true)
+    expect(urls.some(u => u.startsWith('https://api.stock.naver.com/chart/foreign/item/2269.HK/day'))).toBe(
+      true,
+    )
+    expect(urls.every(u => !u.includes('/index/'))).toBe(true)
+  })
+
+  it('조회 창은 40일이고 endDateTime 은 KST 오늘이다', async () => {
+    const spy = stubWorldStock()
+    await fetchNaverWorldStock('2269.HK', kstWorld('10:25'))
+    const url = String(spy.mock.calls.find(c => String(c[0]).includes('/chart/foreign/'))![0])
+    expect(url).toContain('startDateTime=202607230000') // 09-01 − 40일
+    expect(url).toContain('endDateTime=202609010000')
   })
 
   it('네이버에 없는 심볼(409 Not Exist Master)은 실패로 남고 재시도하지 않는다', async () => {
-    // GSK.L·SAN.PA·LONN.SW 가 이 경우다. 재시도해도 같은 답이 온다.
-    stubNaver({ code: 'StockConflict', message: 'Not Exist Master [GSK.L]' }, 409)
-    const e = (await fetchNaverWorldStock('GSK.L').catch(err => err)) as Error
+    // GSK.L·SAN.PA·LONN.SW 가 이 경우다. 일별 시세부터 먼저 부르므로 거기서 걸린다.
+    stubWorldStock({ series: { body: { code: 'StockConflict', message: 'Not Exist Master [GSK.L]' }, status: 409 } })
+    const e = (await fetchNaverWorldStock('GSK.L', kstWorld('10:25')).catch(err => err)) as Error
     expect(e.message).toMatch(/HTTP 409/)
     expect(classifyQuoteFailure(e)).toBe('permanent')
   })
 
-  it('통화가 없으면 실패한다 — 시드 통화로 슬쩍 채우지 않는다', async () => {
-    stubNaver(wuxi({ currencyType: null }))
-    await expect(fetchNaverWorldStock('2269.HK')).rejects.toThrow(/currencyType.code 없음/)
-  })
-
-  it('종가나 전일대비가 비면 실패한다 — 0 으로 둔갑하지 않는다', async () => {
-    stubNaver(wuxi({ closePrice: '' }))
-    await expect(fetchNaverWorldStock('2269.HK')).rejects.toThrow(/closePrice 파싱 실패/)
-    // 전일대비를 0 으로 읽으면 prevClose === close 가 되어 「보합」으로 찍힌다.
-    stubNaver(wuxi({ compareToPreviousClosePrice: null }))
-    await expect(fetchNaverWorldStock('2269.HK')).rejects.toThrow(
-      /compareToPreviousClosePrice 파싱 실패/,
-    )
-  })
-
-  it('localTradedAt 이 없거나 형식이 다르면 실패한다', async () => {
-    stubNaver(wuxi({ localTradedAt: undefined }))
-    await expect(fetchNaverWorldStock('2269.HK')).rejects.toThrow(/localTradedAt 파싱 실패/)
-    stubNaver(wuxi({ localTradedAt: '20260827' }))
-    await expect(fetchNaverWorldStock('2269.HK')).rejects.toThrow(/localTradedAt 파싱 실패/)
-  })
-
-  it('5xx 는 일시적 실패로 분류돼 재시도 대상이 된다', async () => {
-    stubNaver('', 503)
-    const e = (await fetchNaverWorldStock('2269.HK').catch(err => err)) as Error
+  it('일별 시세 5xx 는 일시적 실패로 분류돼 재시도 대상이 된다', async () => {
+    stubWorldStock({ series: { body: '', status: 503 } })
+    const e = (await fetchNaverWorldStock('2269.HK', kstWorld('10:25')).catch(err => err)) as Error
     expect(classifyQuoteFailure(e)).toBe('transient')
   })
 })

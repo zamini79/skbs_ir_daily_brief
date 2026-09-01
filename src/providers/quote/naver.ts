@@ -129,6 +129,17 @@ async function fetchLastTwoSessions(
     .map(r => ({ date: fromCompactYmd(r.date), close: r.close }))
     .sort((a, b) => a.date.localeCompare(b.date))
 
+  return pickLastTwoBars(symbol, bars)
+}
+
+/**
+ * 정렬된(오름차순) 완결 거래일 배열에서 마지막 두 개를 뽑는다.
+ *
+ * 국내(`fetchLastTwoSessions`)와 해외 개별주(`fetchForeignDailySeries` 를 쓰는
+ * `fetchNaverWorldStock`, Task 38)가 이 판정만은 공유한다 — 엔드포인트·스키마는
+ * 달라도 "거래일이 몇 개 남았을 때 무엇을 할지"는 같은 규칙이기 때문이다.
+ */
+function pickLastTwoBars(symbol: string, bars: DailyBar[]): { last: DailyBar; prev: DailyBar } {
   if (bars.length === 0) {
     throw new QuoteError(symbol, `최근 ${SERIES_WINDOW_DAYS}일 일별 시세에 거래일이 없음`)
   }
@@ -263,51 +274,97 @@ export async function fetchNaverDomesticIndex(code: string, now: Date = new Date
 }
 
 /**
- * 해외 개별주(홍콩 2269.HK — Wuxi). marketstack 에서 옮겨 왔다.
+ * 해외 개별주(홍콩 2269.HK — Wuxi)의 일별 시세에서 **마지막 두 완결 거래일**을 뽑는다.
+ * 규칙은 `fetchLastTwoSessions`(Task 35)와 같다 — KST 오늘 날짜의 행은 언제나 버린다.
+ * 이유도 같다: 크론이 07:40 KST 인데 홍콩거래소 개장은 09:30 HKT(= 10:30 KST) 라
+ * **정상 운영 시각에는 항상 개장 전**이다(Task 38 실측). 시각으로 분기하지 않는
+ * 이유도 위 주석과 같다 — 휴장일에 다시 틀린다.
  *
- * **왜 별도 파일이 아니라 여기인가**(Task 31 판단 근거): 응답이 국내 종목과 다른 구조가
- * 아니라 **같은 계열**이다 — 숫자가 전부 문자열이고, `closePrice`·
- * `compareToPreviousClosePrice`·`localTradedAt` 키가 위 국내 지수 경로와 그대로 같으며,
- * 호스트도 이미 이 파일이 쓰는 `api.stock.naver.com` 이다. 별도 파일로 빼면 `HEADERS`·
- * `getJson`(StockConflict 판정 포함)·`asOfFrom` 을 복제하거나 import 로 되가져와야 하고,
+ * **엔드포인트·스키마가 국내와 다르다.** `chart/foreign/item/{code}/day` 는 JSON
+ * **배열**을 그대로 반환하고, 한 행이 `{"localDate":"20260831","closePrice":48.84,...}`
+ * 다 — 숫자가 **문자열이 아니라 number** 다(`siseJson.naver` 와 반대). 그래서
+ * `parseNaverSiseJson`/`SERIES_HEADERS` 를 재사용하지 않는다: 헤더는 호스트가
+ * `api.stock.naver.com`(이 파일의 `basic`·`chart/foreign/item` 이 다 같은 호스트다)
+ * 이라 `finance.naver.com` 용 `SERIES_HEADERS` 가 아니라 이 파일의 `HEADERS` 가
+ * 맞다(Task 38 실측). `getJson` 을 그대로 쓴다 — `HTTP {status}` 형식과
+ * `StockConflict` 판정을 여기서도 그대로 받는다.
+ *
+ * 거래일 판정(0 개·1 개일 때 무엇을 할지)은 국내와 같은 규칙이라 `pickLastTwoBars`
+ * 를 공유한다. 억지로 하나의 함수로 합치지 않은 이유는 파싱·엔드포인트가 다르기
+ * 때문이다 — 네이버가 한쪽 스키마를 바꿔도 고칠 자리가 하나로 남는다.
+ */
+async function fetchForeignDailySeries(code: string, now: Date): Promise<DailyBar[]> {
+  const todayKst = kstDateString(now)
+  const startKst = kstDateString(new Date(now.getTime() - SERIES_WINDOW_DAYS * 86_400_000))
+  const today = toCompactYmd(todayKst)
+
+  const url =
+    `https://api.stock.naver.com/chart/foreign/item/${encodeURIComponent(code)}/day` +
+    `?startDateTime=${toCompactYmd(startKst)}0000&endDateTime=${today}0000`
+
+  const json = await getJson(url, code)
+  if (!Array.isArray(json)) throw new QuoteError(code, '일별 시세 응답이 배열이 아님')
+
+  return (json as unknown[])
+    .map(row => {
+      const r = row as { localDate?: unknown; closePrice?: unknown }
+      if (typeof r.localDate !== 'string' || !/^\d{8}$/.test(r.localDate)) {
+        throw new QuoteError(code, `localDate 파싱 실패: ${JSON.stringify(r.localDate)}`)
+      }
+      const close = Number(r.closePrice)
+      if (!Number.isFinite(close) || close <= 0) {
+        throw new QuoteError(code, `closePrice 파싱 실패: ${JSON.stringify(r.closePrice)}`)
+      }
+      return { date: r.localDate, close }
+    })
+    .filter(r => r.date < today) // 오늘 행 제외 — 위 "언제나 버린다" 참고
+    .map(r => ({ date: fromCompactYmd(r.date), close: r.close }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+}
+
+/**
+ * 해외 개별주(홍콩 2269.HK — Wuxi). marketstack 에서 옮겨 왔다(Task 31).
+ *
+ * **왜 별도 파일이 아니라 여기인가**: `basic` 호출은 국내 지수 경로와 같은 계열이다
+ * (`HEADERS`·`getJson`(StockConflict 판정 포함)·호스트 `api.stock.naver.com` 을
+ * 그대로 공유한다). 별도 파일로 빼면 이들을 복제하거나 import 로 되가져와야 하고,
  * 네이버가 스키마를 바꿀 때 고쳐야 할 자리가 두 곳으로 늘어난다. 한 벤더 = 한 파일이
  * 스펙 §4 의 "소스가 바뀌어도 providers/ 하위 파일 하나만 교체한다"에 더 맞는다.
  *
- * **경로는 `/stock/{code}/basic` 이고 지수 경로(`/index/...`)와 다르다.**
+ * **왜 두 엔드포인트를 부르는가**(Task 38): 시세(종가·전일종가·기준일)는 일별 시세
+ * (`fetchForeignDailySeries`)에서, 통화(`currencyType.code`)는 `basic` 에서 받는다.
+ * `basic` 은 일별 시세에 없는 필드 하나 때문에 남겨 뒀다 — 통화를 provider 안에
+ * 하드코딩하면 `collectHelpers.currencyMismatchReason` 이 자기 자신을 검사하게 되어
+ * 무력해진다(기존 결정, Task 31). 종목이 하나뿐이라 두 번 호출하는 비용은 무의미하다.
+ * `basic` 의 `closePrice`·`compareToPreviousClosePrice`·`localTradedAt` 은 더 이상
+ * 읽지 않는다 — 그 값들이 이 결함의 원인이었다(아래 §"실패 사례" 참고).
  *
- * 심볼 주의(실측 2026-08-28):
+ * ## 실패 사례 (2026-09-01 실측)
+ *
+ * 개장 5분 전(09:25 HKT) `basic` 응답은 `compareToPreviousClosePrice = 0.000`,
+ * `localTradedAt` 이 **오늘**이었다 — `fetchLastTwoSessions` 위 주석의 국내 결함과
+ * 정확히 같다. `closePrice`(48.84)는 08-31 종가로 맞았지만 변동값과 기준일이 거짓이라
+ * 매일 아침 전일대비 0 / 0.00% 가 메일에 나갔다. 일별 시세로 옮기고 나면 같은 시각
+ * 응답의 마지막 행이 `20260831`(마감된 거래일)이라 08-31 종가/기준일이 그대로 나오고,
+ * 그 앞 행 `20260828`(50.65)로 전일대비가 정상 계산된다.
+ *
+ * 심볼 주의(Task 31 실측, 2026-08-28):
  *   - `GSK.L`·`SAN.PA`·`LONN.SW` 는 네이버에 없다 — HTTP 409 `Not Exist Master`.
  *   - 접미사 없는 `GSK`·`SAN` 은 **미국 ADR 이라 값이 다르다. 쓰면 안 된다.**
  *
  * `fluctuationsRatio`(네이버가 준 등락률)는 일부러 쓰지 않는다 — 전 종목을
  * `domain/calc.ts` 의 `changePct` 로 계산한다(krx.ts 가 `FLUC_RT` 를 안 쓰는 것과
- * 같은 이유). 전일 종가는 `closePrice - compareToPreviousClosePrice` 로 구한다.
- *
- * 통화는 응답(`currencyType.code`)에서 받는다. 시드값을 provider 안에 하드코딩하면
- * `collectHelpers.currencyMismatchReason` 이 자기 자신을 검사하게 되어 무력해진다.
+ * 같은 이유).
  */
-export async function fetchNaverWorldStock(code: string): Promise<RawQuote> {
+export async function fetchNaverWorldStock(code: string, now: Date = new Date()): Promise<RawQuote> {
+  const bars = await fetchForeignDailySeries(code, now)
+  const { last, prev } = pickLastTwoBars(code, bars)
+
   const j = await getJson(`https://api.stock.naver.com/stock/${code}/basic`, code)
-
-  const close = parseKoreanNumber(j.closePrice)
-  const diff = parseKoreanNumber(j.compareToPreviousClosePrice)
-  if (!Number.isFinite(close)) throw new QuoteError(code, `closePrice 파싱 실패: ${j.closePrice}`)
-  if (!Number.isFinite(diff)) {
-    throw new QuoteError(code, `compareToPreviousClosePrice 파싱 실패: ${j.compareToPreviousClosePrice}`)
-  }
-
   const currency = typeof j.currencyType?.code === 'string' ? j.currencyType.code.trim() : ''
   if (currency === '') throw new QuoteError(code, 'currencyType.code 없음')
 
-  // `localTradedAt` 은 현지 시각이다("2026-08-27T16:00:00+08:00"). 앞 10자를 문자열
-  // 그대로 쓴다 — `new Date()` 로 파싱하면 `+08:00` 이 KST 로 옮겨지며 날짜가 밀린다.
-  // (ytdBase.ts 의 naverIndexYtdBase 가 같은 이유로 문자열을 그대로 읽는다.)
-  const asOf = asOfFrom(j.localTradedAt)
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) {
-    throw new QuoteError(code, `localTradedAt 파싱 실패: ${j.localTradedAt}`)
-  }
-
-  return { close, prevClose: close - diff, currency, asOf }
+  return { close: last.close, prevClose: prev.close, currency, asOf: last.date }
 }
 
 /** 해외 지수(.INX/.IXIC). stockItemTotalInfos 안에 전일 종가가 있다. */
