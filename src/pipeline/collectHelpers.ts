@@ -190,9 +190,44 @@ export function computeSameEventAsRank(
 export const MIN_BODY_CHARS_FOR_SUMMARY = 20
 
 /**
+ * 요약 단계의 마감 시한 판정.
+ *
+ * 시계를 주입받는 이유는 테스트가 20분을 실제로 기다리지 않기 위해서다. 값은
+ * `SUMMARY_DEADLINE_MS`(domain/runProgress.ts)에서 오고, 그 상수 옆에 왜 20분인지와
+ * **왜 `STALLED_AFTER_MS` 보다 작아야 하는지**가 적혀 있다.
+ *
+ * **경계는 `>=` 다.** 정확히 마감 시각이면 지난 것으로 본다 — 어느 쪽인지 코드로
+ * 못 읽으면 테스트가 못 고정한다(`runProgressView` 와 같은 규칙).
+ */
+export type Deadline = { exceeded: () => boolean }
+
+export function createDeadline(
+  startedAtMs: number,
+  budgetMs: number,
+  now: () => number = Date.now,
+): Deadline {
+  return { exceeded: () => now() - startedAtMs >= budgetMs }
+}
+
+/**
  * Gemini 에러 메시지가 할당량/속도 제한 소진을 뜻하는지 판별한다.
  * gemini.ts 는 `gemini HTTP {status}: {본문}` 형태로 던지므로 상태 코드와
  * 구글의 표준 사유 문자열을 함께 본다.
+ *
+ * ⚠ **지금 이 판정에 걸리는 경로는 사실상 없다. 살아 있는 안전장치로 읽지 마라.**
+ * `summarize()` 가 던지는 메시지는 (a) 모델 이름과 한국어 사유 라벨로만 이뤄진
+ * 「모든 모델이 실패했다 (…)」, (b) 「모든 모델의 쿼터가 소진됐다 (시도: …)」,
+ * (c) `other` 로 분류된 실패의 `gemini HTTP {status}` 인데, 429·RESOURCE_EXHAUSTED 는
+ * `other` 가 아니므로 (c) 에도 오지 않는다. 이 사실은 2026-09-01 변경 **이전에도**
+ * 같았다(그때도 429 는 `quota` 로 분류돼 던져지지 않았다) — 이번 변경이 만든 상태가
+ * 아니다.
+ *
+ * **일부러 고치지 않았다.** 이 판정이 실제로 걸리면 `guard.tripped` 가 서고, 남은
+ * 후보 전부가 요약을 **시도조차 하지 않고** 발췌로 떨어진다. 그것이 바로 2026-09-01
+ * 작업이 없애려던 결과다. 곱셈을 끊는 일은 대신 `RateLimitBudget`(재시도 대기 총량)과
+ * 요약 단계 마감(`SUMMARY_DEADLINE_MS`)이 맡는다 — 둘 다 **재시도만 줄이고 시도 자체는
+ * 남긴다.** 하루치가 정말 전부 소진된 날은 `candidates.length === 0` 경로가 네트워크
+ * 호출 없이 즉시 던지므로 비용도 없다.
  */
 export function isQuotaExhaustedMessage(message: string): boolean {
   return /\b429\b|RESOURCE_EXHAUSTED/i.test(message)
@@ -217,7 +252,9 @@ export type SummarizeAttempt =
  * - 이미 이번 실행에서 할당량 소진이 감지됐으면(guard.tripped) 호출하지 않는다 —
  *   죽은 할당량에 나머지를 전부 쏘고 매번 실패시키지 않는다. 재시도/백오프는 하지 않는다.
  * - summarizeFn 이 던지면 실패로 기록하고, 메시지가 할당량 소진을 뜻하면 guard 를 트립시켜
- *   이후 호출들이 스스로 건너뛰게 만든다.
+ *   이후 호출들이 스스로 건너뛰게 만든다. **다만 `isQuotaExhaustedMessage` 에 걸리는
+ *   메시지가 실제로는 오지 않는다** — 그 함수의 ⚠ 주석을 함께 읽어라. 이 갈래는
+ *   현재 죽어 있고, 그것이 의도된 상태다.
  */
 export async function attemptSummary(
   args: { title: string; body: string },
@@ -276,13 +313,15 @@ export function computeRunStatus(
   fxFailed = 0,
   quoteFailed = 0,
   newsRecordFailed = 0,
+  summariesSkippedDeadline = 0,
 ): 'READY' | 'PARTIAL' {
   return summariesFailed > 0 ||
     ytdBaseFailed > 0 ||
     newsFailed > 0 ||
     fxFailed > 0 ||
     quoteFailed > 0 ||
-    newsRecordFailed > 0
+    newsRecordFailed > 0 ||
+    summariesSkippedDeadline > 0
     ? 'PARTIAL'
     : 'READY'
 }
@@ -307,6 +346,13 @@ export function buildStatusDetail(counts: {
   newsFailed: number
   /** 기본값 0 — 이 카운터가 생기기 전 호출부(테스트 포함)와의 호환용. */
   newsRecordFailed?: number
+  /**
+   * 요약 단계 마감에 걸려 **시도하지 못한** 후보 수. 기본값 0.
+   * `summariesFailed` 와 **반드시 갈라 적는다** — 실패한 것과 시간이 없어 안 한 것은
+   * 담당자가 할 일이 다르다(전자는 원인을 봐야 하고, 후자는 다시 돌리면 된다).
+   * 합쳐 세면 그 구분이 영영 사라진다.
+   */
+  summariesSkippedDeadline?: number
   missingCurrencies: string[]
 }): string | null {
   const parts: string[] = []
@@ -320,6 +366,11 @@ export function buildStatusDetail(counts: {
     // 문구가 "검색 실패"와 헷갈리면 안 된다. 이쪽은 검색은 했는데 그 결과를 남기지
     // 못한 것이고, 그래서 그 행의 「기사 없음」 표시를 믿을 수 없다는 뜻이다.
     parts.push(`뉴스 상태 기록 실패 ${counts.newsRecordFailed}종목 (해당 행의 「기사 없음」은 근거 없음)`)
+  }
+  if ((counts.summariesSkippedDeadline ?? 0) > 0) {
+    parts.push(
+      `요약 시간 초과로 ${counts.summariesSkippedDeadline}건 미생성(후보 ${counts.candidatesCreated}건 중, 재실행하면 채워집니다)`,
+    )
   }
   if (counts.missingCurrencies.length > 0) {
     parts.push(`환율 미확보: ${counts.missingCurrencies.join(', ')} (시가총액 공란)`)

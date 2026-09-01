@@ -10,7 +10,10 @@ import {
   classifyFailure,
   exhaustedModels,
   redactKey,
+  RESPONSE_TIMEOUT_MS,
+  RATE_LIMIT_DELAYS_MS,
 } from './gemini'
+import { createRateLimitBudget } from './rateLimitBudget'
 
 beforeEach(() => {
   process.env.GEMINI_API_KEY = 'test-key'
@@ -453,6 +456,101 @@ describe('모델 폴백 체인', () => {
 
     expect(calledUrls.filter(u => u.includes(MODEL_CHAIN[0]))).toHaveLength(1)
     expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(true)
+  })
+
+  // ── 실행 단위 차단기: 후보 수만큼의 곱셈을 끊는다 ────────────────────────
+  //
+  // 판정을 고치면서 `exhaustedModels` 가 겸하던 차단기가 함께 꺼졌다. 판정 불가 429 가
+  // 계속 오는 날 후보 42건이면 882회 호출 / 약 4.9시간이 된다. 예산이 그 곱셈을 끊되,
+  // **재시도만 끊고 시도 자체는 남긴다**(rateLimitBudget.ts).
+
+  it('예산이 남아 있으면 예전과 똑같이 재시도한다 — 평상시 동작을 바꾸지 않는다', async () => {
+    // 오늘 실측(후보 37건, 실패 0)처럼 분당 한도가 가끔 나는 정도로는 발동하면 안 된다.
+    const budget = createRateLimitBudget(10 * 60 * 1000)
+    let hits = 0
+    vi.stubGlobal('fetch', vi.fn(async () => (++hits === 1 ? perMinuteResponse() : okResponse())))
+
+    const r = await summarize('제목', '본문', { sleep: async () => {}, budget })
+
+    expect(r.model).toBe(MODEL_CHAIN[0])
+    expect(budget.deniedCount).toBe(0)
+  })
+
+  it('예산이 없으면 재시도하지 않고 다음 모델로 간다', async () => {
+    const budget = createRateLimitBudget(0)
+    const calledUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calledUrls.push(url)
+      return url.includes(MODEL_CHAIN[0]) ? perMinuteResponse() : okResponse()
+    }))
+
+    const r = await summarize('제목', '본문', { sleep: async () => {}, budget })
+
+    // 1순위를 **한 번만** 두드리고 넘어간다(예산이 있으면 세 번이었다).
+    expect(calledUrls.filter(u => u.includes(MODEL_CHAIN[0]))).toHaveLength(1)
+    expect(r.model).toBe(MODEL_CHAIN[1])
+    expect(budget.deniedCount).toBe(1)
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(false)
+  })
+
+  it('예산이 없어도 **모든 모델을 한 번씩은 시도한다** — 발췌로 조기 강등하지 않는다', async () => {
+    // "재시도를 줄인다"이지 "시도를 그만둔다"가 아니다. 마지막 모델이 살아 있으면
+    // 예산이 0이어도 정상 요약이 나와야 한다.
+    const budget = createRateLimitBudget(0)
+    const last = MODEL_CHAIN[MODEL_CHAIN.length - 1]
+    const fetchMock = vi.fn(async (url: string) => (url.includes(last) ? okResponse() : perMinuteResponse()))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await summarize('제목', '본문', { sleep: async () => {}, budget })
+
+    expect(r.model).toBe(last)
+    expect(fetchMock).toHaveBeenCalledTimes(MODEL_CHAIN.length)
+  })
+
+  it('예산이 소진되면 사유가 문구에 남는다 — 조용히 느슨해지지 않는다', async () => {
+    const budget = createRateLimitBudget(0)
+    vi.stubGlobal('fetch', vi.fn(async () => perMinuteResponse()))
+
+    let error: unknown
+    try {
+      await summarize('제목', '본문', { sleep: async () => {}, budget })
+    } catch (e) {
+      error = e
+    }
+
+    const message = (error as Error).message
+    // 이 문구가 summaryError 로 DB·화면에 남는다.
+    expect(message).toContain('실행 재시도 예산 소진')
+    // 「재시도를 다 썼는데도 걸렸다」와 갈라 적는다 — 운영자가 할 일이 다르다.
+    expect(message).not.toContain('재시도 3회 후에도')
+    expect(exhaustedModels.size).toBe(0)
+  })
+
+  it('예산은 summarize() 호출 사이에 공유돼 곱셈을 끊는다', async () => {
+    // 이것이 blocker 의 핵심이다: 후보가 늘어도 대기 총량이 늘지 않아야 한다.
+    const budget = createRateLimitBudget(20_000) // 대기 한 번 분량만
+    const waits: number[] = []
+    const sleep = async (ms: number) => { waits.push(ms) }
+    vi.stubGlobal('fetch', vi.fn(async () => perMinuteResponse()))
+
+    for (let candidate = 0; candidate < 5; candidate++) {
+      await summarize(`제목${candidate}`, '본문', { sleep, budget }).catch(() => {})
+    }
+
+    // 후보 5건이지만 실제로 기다린 것은 예산이 허락한 한 번뿐이다.
+    expect(waits).toEqual([20_000])
+    expect(budget.spentMs).toBe(20_000)
+    expect(budget.deniedCount).toBeGreaterThan(0)
+  })
+
+  it('예산을 넘기지 않으면 호출마다 새 예산이라 예전과 같이 동작한다', async () => {
+    // 기본값이 안전한 쪽인지 확인한다 — 체인 7개 × 60초 < 기본 예산 600초.
+    let hits = 0
+    vi.stubGlobal('fetch', vi.fn(async () => (++hits === 1 ? perMinuteResponse() : okResponse())))
+
+    const r = await summarize('제목', '본문', { sleep: async () => {} })
+
+    expect(r.model).toBe(MODEL_CHAIN[0])
   })
 
   it('발췌로 떨어지기 전에 체인 전원을 재시도까지 다 쓴다', async () => {
@@ -919,6 +1017,28 @@ describe('fetch 가 던졌을 때 (타임아웃·네트워크)', () => {
 
     await expect(summarize('제목', '본문')).rejects.toThrow(/x is not a function/)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('되돌리지 말아야 할 값 (실측으로 산 것들)', () => {
+  it('응답 타임아웃은 180초다 — 60초에서는 체인 1순위가 항상 헛돌았다(실측 79.6초)', () => {
+    expect(RESPONSE_TIMEOUT_MS).toBe(180_000)
+  })
+
+  it('그 값이 실제 요청에 실린다 — 상수만 남기고 호출부를 되돌리는 것을 막는다', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: '{"numeric":"수치임","context":"배경임"}' }] } }],
+    }), { status: 200 })))
+
+    await summarize('제목', '본문')
+
+    expect(timeoutSpy).toHaveBeenCalledWith(RESPONSE_TIMEOUT_MS)
+    timeoutSpy.mockRestore()
+  })
+
+  it('분당 한도 재시도 대기는 20초 → 40초다 — 두 번째면 첫 실패로부터 60초가 지난다', () => {
+    expect(RATE_LIMIT_DELAYS_MS).toEqual([20_000, 40_000])
   })
 })
 

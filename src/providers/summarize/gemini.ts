@@ -2,6 +2,7 @@ import { charLength, truncateAtSentence } from '@/domain/text'
 import { kstDateString } from '@/domain/date'
 import { buildPrompt, MAX_SUMMARY_CHARS } from './prompt'
 import { isTransientNetworkError } from '../transientNetwork'
+import { createRateLimitBudget, type RateLimitBudget } from './rateLimitBudget'
 
 /**
  * 요약 모델 폴백 체인.
@@ -206,8 +207,18 @@ function resetExhaustedModelsIfNewDay(): void {
  */
 type FailureClass = 'quota' | 'rate-limit' | 'unavailable' | 'no-response' | 'other'
 
-/** 체인을 넘기거나 재시도할 때 남기는 사유. `other` 는 던지므로 여기 없다. */
+/** 한 번의 시도가 끝났을 때의 사유. `other` 는 던지므로 여기 없다. */
 type SkipReason = Exclude<FailureClass, 'other'>
+
+/**
+ * 체인을 넘긴 사유. `SkipReason` 에 **실행 예산 소진**을 더한 것이다.
+ *
+ * `rate-limit` 과 갈라 적는다. 둘 다 분당 한도지만 운영자가 할 일이 다르다 —
+ * 전자는 "재시도를 다 썼는데도 계속 걸렸다"(구글이 붐볐다)이고, 후자는 "우리가
+ * 이 실행에서 재시도에 쓸 시간을 다 썼다"(오늘 후보가 많거나 하루 종일 붐볐다)다.
+ * 합쳐 적으면 예산이 걸린 날을 알아볼 수 없고, 그러면 예산 값을 조정할 근거도 없다.
+ */
+type ChainSkipReason = SkipReason | 'rate-limit-budget'
 
 /**
  * 외부 응답 문자열에서 API 키를 지운다. 키는 쿼리스트링(`?key=...`)으로 나가므로
@@ -263,6 +274,11 @@ const PER_MINUTE_QUOTA_PATTERN = /GenerateRequestsPerMinute/i
  * 잃고 화면에 「본문 발췌」가 나간다.** 하루를 분당으로 잘못 읽으면 같은 모델을 두 번
  * 더 두드리고 다음 모델로 갈 뿐이다(새벽 무인 배치라 그 대기는 비용이 아니다).
  * 그래서 확정 신호가 없는 429·`RESOURCE_EXHAUSTED` 는 **재시도 가능한 쪽**으로 둔다.
+ *
+ * 이 관대함에는 **상한이 붙어 있다.** `'rate-limit'` 으로 분류된 것은 종류를 가리지
+ * 않고 전부 같은 재시도 루프를 지나고, 그 루프는 실행 단위 `RateLimitBudget` 을 먼저
+ * 묻는다. 그래서 상태 코드가 400인데 본문에 `RESOURCE_EXHAUSTED` 가 실려 오는 것처럼
+ * **드물고 애매한 입구**로도 후보 수만큼의 곱셈이 생기지 않는다(rateLimitBudget.ts).
  */
 export function classifyFailure(status: number, detail: string): FailureClass {
   // 상태 코드보다 먼저 본다 — 위 주석의 "429 안에 두 실패가 들어 있다" 참고.
@@ -422,7 +438,7 @@ export function enforceLimit(s: string): string {
  * 이유는 이 배치가 **새벽 무인 실행**이기 때문이다(2026-09-01 사용자 결정, 설계 §8.1.8) —
  * 담당자가 기다리는 시간이 아니다. 성능을 이유로 줄이지 마라.
  */
-const RATE_LIMIT_DELAYS_MS = [20_000, 40_000]
+export const RATE_LIMIT_DELAYS_MS = [20_000, 40_000]
 
 /** 한 모델당 총 시도 횟수(최초 1회 + 재시도 2회). `quote/retry.ts` 의 MAX_ATTEMPTS 와 같은 뜻이다. */
 const RATE_LIMIT_MAX_ATTEMPTS = RATE_LIMIT_DELAYS_MS.length + 1
@@ -435,7 +451,7 @@ const RATE_LIMIT_MAX_ATTEMPTS = RATE_LIMIT_DELAYS_MS.length + 1
  * 그 부하가 1분 안에 뒤 모델로 몰려 분당 한도를 더 잘 때렸다. 새벽 무인 배치라
  * 기다림이 비용이 아니므로 **받아내는 쪽**을 택한다(설계 §8.1.8).
  */
-const RESPONSE_TIMEOUT_MS = 180_000
+export const RESPONSE_TIMEOUT_MS = 180_000
 
 const realSleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 
@@ -445,6 +461,16 @@ export type SummarizeOptions = {
    * 않는다 — `quote/retry.ts` 의 `withQuoteRetry(…, sleep)` 과 같은 방식이다.
    */
   sleep?: (ms: number) => Promise<void>
+  /**
+   * 분당 한도 재시도에 쓸 수 있는 대기 시간의 총량.
+   *
+   * **호출부가 실행 전체를 묶는 하나를 넘겨야 뜻이 있다.** 넘기지 않으면 이 호출
+   * 하나만 감싸는 새 예산이 생기는데, 그건 예전과 같은 동작이다(체인 7개 × 60초 =
+   * 420초 < 예산 600초라 한 번도 걸리지 않는다). 후보 수만큼 곱해지는 것을 끊는
+   * 것이 목적이므로 파이프라인이 실행당 하나를 만들어 모든 후보에 같은 것을 넘긴다
+   * (collect.ts). 자세한 근거는 rateLimitBudget.ts.
+   */
+  budget?: RateLimitBudget
 }
 
 export async function summarize(
@@ -453,6 +479,7 @@ export async function summarize(
   opts: SummarizeOptions = {},
 ): Promise<SummarySet> {
   const sleep = opts.sleep ?? realSleep
+  const budget = opts.budget ?? createRateLimitBudget()
   const envKey = process.env.GEMINI_API_KEY
   if (!envKey) throw new Error('GEMINI_API_KEY 없음')
   // 위 throw 로 좁힌 타입은 아래 attemptModel(클로저) 안까지 따라가지 않는다.
@@ -484,7 +511,7 @@ export async function summarize(
 
   // 이번 summarize() 호출 안에서 건너뛴 모델과 사유를 기록해 둔다. 전부
   // 실패하면 "무엇이 왜 실패했는지"를 07:40 무인 실행에서도 알 수 있어야 한다.
-  const skipped: Array<{ model: string; reason: SkipReason }> = []
+  const skipped: Array<{ model: string; reason: ChainSkipReason }> = []
 
   /**
    * 한 모델에 **한 번** 물어본다. 성공하면 요약을, 체인을 넘기거나 재시도할 만한
@@ -619,6 +646,16 @@ export async function summarize(
         break
       }
       const delay = RATE_LIMIT_DELAYS_MS[attempt - 1]
+      if (!budget.tryConsume(delay)) {
+        // 이 실행이 재시도 대기에 쓸 시간을 다 썼다. **요약을 그만두는 것이 아니라
+        // 재시도만 그만둔다** — 이 모델은 여기서 접고 다음 모델을 한 번씩 두드린다.
+        // 그래야 남은 후보가 발췌로 조기 강등되지 않는다(rateLimitBudget.ts).
+        console.warn(
+          `[gemini] ${model}: 분당 한도 — 실행 재시도 예산(${budget.totalMs}ms) 소진, 재시도 없이 다음 모델로`,
+        )
+        skipped.push({ model, reason: 'rate-limit-budget' })
+        break
+      }
       // 재시도는 **로그에 남긴다**. 남기지 않으면 매 후보마다 1분씩 기다려 겨우
       // 붙는 상태가 "가끔 느린 정상"으로 보인다(quote/retry.ts 와 같은 근거).
       console.warn(
@@ -636,12 +673,18 @@ export async function summarize(
   // 뭉뚱그린 것이 애초의 결함이고, 문구에서 다시 뭉뚱그리면 진단이 되돌아간다.
   const quotaExhausted = skipped.filter(s => s.reason === 'quota').map(s => s.model)
   const rateLimited = skipped.filter(s => s.reason === 'rate-limit').map(s => s.model)
+  const budgetSpent = skipped.filter(s => s.reason === 'rate-limit-budget').map(s => s.model)
   const unavailable = skipped.filter(s => s.reason === 'unavailable').map(s => s.model)
   const noResponse = skipped.filter(s => s.reason === 'no-response').map(s => s.model)
   const detailParts: string[] = []
   if (quotaExhausted.length > 0) detailParts.push(`쿼터 소진: ${quotaExhausted.join(', ')}`)
   if (rateLimited.length > 0) {
     detailParts.push(`분당 한도(재시도 ${RATE_LIMIT_MAX_ATTEMPTS}회 후에도): ${rateLimited.join(', ')}`)
+  }
+  if (budgetSpent.length > 0) {
+    // 이 문구가 summaryError 로 DB 와 화면에 남는다 — 예산이 걸린 날을 조용히
+    // 넘기지 않기 위해서다. 카운터는 파이프라인이 따로 센다(collect.ts).
+    detailParts.push(`분당 한도(실행 재시도 예산 소진, 재시도 없음): ${budgetSpent.join(', ')}`)
   }
   if (unavailable.length > 0) detailParts.push(`일시적 이용 불가: ${unavailable.join(', ')}`)
   if (noResponse.length > 0) detailParts.push(`응답 없음(타임아웃·네트워크): ${noResponse.join(', ')}`)

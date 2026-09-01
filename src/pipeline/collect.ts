@@ -7,10 +7,12 @@ import { fetchYtdBase } from '@/providers/quote/ytdBase'
 import { searchNaverNews } from '@/providers/news/naver'
 import { fetchArticleBody } from '@/providers/news/article'
 import { topClusters, filterByTitleMention } from './cluster'
-import { summarize, type SummarySet } from '@/providers/summarize/gemini'
+import { summarize } from '@/providers/summarize/gemini'
+import { createRateLimitBudget } from '@/providers/summarize/rateLimitBudget'
 import { SUMMARY_VARIANTS } from '@/providers/summarize/prompt'
 import { pLimit } from './limit'
 import { createPacer } from './pacer'
+import { SUMMARY_CONCURRENCY, SUMMARY_MIN_INTERVAL_MS, pacedSummarizer } from './summaryPolicy'
 import {
   resolveAliases,
   wantsMarketWrapNews,
@@ -25,11 +27,13 @@ import {
   computeRunStatus,
   buildStatusDetail,
   isolate,
+  createDeadline,
   needsPendingRevert,
   buildFallbackSummaries,
   briefRunStartData,
 } from './collectHelpers'
 import { createProgressReporter } from './progressReporter'
+import { SUMMARY_DEADLINE_MS } from '@/domain/runProgress'
 
 /** 본문이 짧아 요약 자체를 시도하지 않은 경우의 사유 — 화면에 "사유 미기록"으로
  * 뜨지 않도록 남긴다. summariesFailed 에는 넣지 않는다(의도된 결정이지 장애가 아니다). */
@@ -37,30 +41,8 @@ const EMPTY_BODY_REASON = '본문이 너무 짧아 요약을 생략함'
 /** 할당량 소진 이후 아예 시도하지 않고 건너뛴 경우의 사유. */
 const QUOTA_EXHAUSTED_REASON = '할당량 소진 이후 요약을 건너뜀'
 
-/**
- * 요약 호출의 동시성과 최소 간격. **둘을 같이 읽어라** — 하나만 되돌리면 나머지
- * 하나가 뜻을 잃는다.
- *
- * 2026-09-01 이전에는 동시성 4, 간격 없음이었다. 응답이 오는 즉시 다음을 쏘므로
- * 순간 속도가 분당 한도를 넘었고, 그날 재수집에서 **후보 42건 중 요약 20건이
- * 실패해 화면 8행에 「본문 발췌」가 나갔다.** 같은 날 후보 29건짜리 첫 실행은
- * 실패 0이었다 — 부하에 따라 터지는 결함이다.
- *
- * 실측 기준선(2026-09-01): 한 모델에 25건을 동시에 던지니 200 이 17건, 429 가 8건
- * 이었고 8건 전부 `GenerateRequestsPerMinutePerProjectPerModel-FreeTier` 였다.
- * 즉 한 모델의 분당 상한은 대략 15~17이다. 여유를 크게 두어 **분당 10회**를
- * 목표로 한다.
- *
- * **성능을 이유로 되돌리지 마라.** 이 시스템은 담당자가 출근하기 전 새벽에 도는
- * 무인 배치이므로 수집이 몇 분 더 걸리는 것은 비용이 아니다(2026-09-01 사용자
- * 결정, 설계 §8.1.8). 반대로 「본문 발췌」는 담당자가 화면에서 바로 보는 비용이다.
- *
- * NEWS_CONCURRENCY(아래)와 혼동하지 마라 — 그쪽은 속도가 아니라 실패 분포 때문에
- * 정해진 값이고 근거가 다르다.
- */
-const SUMMARY_CONCURRENCY = 1
-/** 분당 10회 = 호출 간 6초. 위 주석의 실측이 근거다. */
-const SUMMARY_MIN_INTERVAL_MS = 6_000
+/** 마감에 걸려 요약을 시작조차 못한 후보의 사유. summariesFailed 와 갈라 센다. */
+const DEADLINE_REASON = '요약 단계 마감 시간 초과로 생성하지 못함(재실행하면 채워집니다)'
 
 /**
  * 네이버 검색 API 는 순간 속도 제한이 있다(일일 한도와 별개 — 하루 총 호출은 100회 남짓인데도
@@ -118,6 +100,10 @@ export type CollectionResult = {
   summariesGenerated: number
   summariesSkippedEmptyBody: number
   summariesFailed: number
+  /** 요약 단계 마감에 걸려 **시도하지 못한** 후보 수. 실패가 아니다 — 갈라 센다. */
+  summariesSkippedDeadline: number
+  /** 실행 재시도 예산이 모자라 분당 한도 재시도를 포기한 횟수. 0이 아니면 그날 붐볐다는 뜻. */
+  rateLimitRetriesDenied: number
   bodyCrawlFailed: number
   ytdBaseFailed: number
   newsFailed: number
@@ -167,16 +153,24 @@ async function markRunFailed(runDate: string, error: unknown): Promise<void> {
  * 수집 실행. 크론 라우트와 화면의 「수집 실행」 버튼이 **둘 다 이 함수 하나**를 부른다
  * (수집 로직을 두 벌로 만들지 않는다 — 설계 문서 §4.1-3).
  */
-export async function runCollection(now: Date): Promise<CollectionResult> {
+export type CollectionOptions = {
+  /**
+   * 요약 단계 마감 시한. 기본값은 `SUMMARY_DEADLINE_MS`(domain/runProgress.ts)이고,
+   * 주입할 수 있게 둔 것은 테스트가 20분을 실제로 기다리지 않기 위해서다.
+   */
+  summaryDeadlineMs?: number
+}
+
+export async function runCollection(now: Date, opts: CollectionOptions = {}): Promise<CollectionResult> {
   try {
-    return await collect(now)
+    return await collect(now, opts)
   } catch (e) {
     await markRunFailed(kstDateString(now), e)
     throw e
   }
 }
 
-async function collect(now: Date): Promise<CollectionResult> {
+async function collect(now: Date, opts: CollectionOptions = {}): Promise<CollectionResult> {
   const runDate = kstDateString(now)
   const year = Number(runDate.slice(0, 4))
 
@@ -190,7 +184,8 @@ async function collect(now: Date): Promise<CollectionResult> {
   })
 
   /**
-   * 단계마다 `BriefRun.progressDetail` 을 갱신한다. 실측 202초짜리 작업이라
+   * 단계마다 `BriefRun.progressDetail` 을 갱신한다. 실측 457.7초짜리 작업이라
+   * (2026-09-01, 후보 37건. 감속 이전에는 202초였다)
    * 아무 표시도 없으면 화면은 "고장 났다"와 구별되지 않는다.
    *
    * 쓰기는 뒤에서 돌고 수집을 붙잡지 않는다(progressReporter.ts 참고).
@@ -486,7 +481,27 @@ async function collect(now: Date): Promise<CollectionResult> {
 
   // 이번 실행 전체가 공유하는 할당량 가드. 첫 429/RESOURCE_EXHAUSTED 이후로는
   // 죽은 할당량에 나머지 후보를 계속 쏘지 않고 곧바로 실패로 기록한다.
+  // (⚠ 이 가드는 현재 실제로는 트립되지 않는다 — collectHelpers 의
+  //  isQuotaExhaustedMessage 주석 참고. 곱셈을 끊는 일은 rateLimitBudget 과
+  //  아래 마감 시한이 맡는다.)
   const quotaGuard = createQuotaGuard()
+
+  /**
+   * 요약 단계의 마감 시한.
+   *
+   * **플랫폼이 죽이기를 기다리지 않고 스스로 멈춘다.** 하드 킬을 당하면 runCollection
+   * 의 catch 가 돌지 못해 이 행이 `COLLECTING` 인 채로 남고, 카운터는 하나도 기록되지
+   * 않으며, 절반쯤 저장된 후보가 화면에 정상처럼 보인다. 마감은 그 조용한 죽음을
+   * **큰 소리의 부분 완료**로 바꾼다 — 아래 루프는 마감 뒤에도 정상 종료 경로를 그대로
+   * 타고 status·statusDetail·카운터를 쓴다.
+   *
+   * 시작점은 이 함수가 시작한 시각이 아니라 **요약 단계에 들어온 시각**이다. 앞
+   * 단계(시세·뉴스)가 느렸다고 요약 예산을 깎으면, 정작 마감을 만든 이유(요약이
+   * 실행 시간의 대부분이다)와 어긋난다.
+   */
+  const summaryDeadline = createDeadline(Date.now(), opts.summaryDeadlineMs ?? SUMMARY_DEADLINE_MS)
+  /** 마감에 걸려 **시도하지 못한** 후보 수. summariesFailed 와 절대 합치지 않는다. */
+  let summariesSkippedDeadline = 0
 
   /**
    * 이번 실행에서 처리할 후보의 **총 개수**. 지어낸 값이 아니라 방금 뽑아 놓은
@@ -517,10 +532,14 @@ async function collect(now: Date): Promise<CollectionResult> {
    * 갖고 있고, 여기서 다시 판정하면 두 곳이 어긋난다).
    */
   const summaryPace = createPacer(SUMMARY_MIN_INTERVAL_MS)
-  const pacedSummarize = async (t: string, b: string): Promise<SummarySet> => {
-    await summaryPace()
-    return summarize(t, b)
-  }
+  /**
+   * **이 실행 전체가 공유하는** 분당 한도 재시도 예산. 후보마다 새로 만들면 아무것도
+   * 막지 못한다 — 끊으려는 것이 바로 후보 수만큼의 곱셈이다(rateLimitBudget.ts).
+   */
+  const rateLimitBudget = createRateLimitBudget()
+  const pacedSummarize = pacedSummarizer(summaryPace, (t: string, b: string) =>
+    summarize(t, b, { budget: rateLimitBudget }),
+  )
   await Promise.all(
     perInstrument.flatMap(({ inst, clusters }) => {
       const sameEventMap = computeSameEventAsRank(
@@ -554,6 +573,32 @@ async function collect(now: Date): Promise<CollectionResult> {
               // 제목만 남긴다. 기사 URL 은 싣지 않는다(로그 규칙 — providers 전반).
               console.error(`[article] ${c.representative.title}: ${body.crawlFailure}`)
             }
+            // **마감 확인은 요약 호출 바로 앞이다.** 본문 수집까지는 마치게 두는데,
+            // 그 본문이 있어야 발췌 대체 요약이라도 채워 행이 빈칸으로 남지 않기
+            // 때문이다. 아끼려는 것은 뒤에 오는 비싼 부분(6초 간격 + Gemini 호출 +
+            // 분당 한도 재시도)이다.
+            if (summaryDeadline.exceeded()) {
+              await prisma.newsCandidate.update({
+                where: { id: candidate.id },
+                data: { summaryError: DEADLINE_REASON },
+              })
+              const deadlineFallbacks = buildFallbackSummaries(body.text, c.representative.description)
+              if (deadlineFallbacks.length > 0) {
+                await prisma.newsSummary.createMany({
+                  data: deadlineFallbacks.map((text, i) => ({
+                    candidateId: candidate.id,
+                    variant: SUMMARY_VARIANTS[i].variant,
+                    text,
+                    isFallback: true,
+                  })),
+                })
+              }
+              // summariesFailed 가 아니다. 실패한 것이 아니라 시간이 없어 시도하지
+              // 않은 것이고, 둘을 합치면 담당자가 원인을 가릴 수 없다.
+              summariesSkippedDeadline++
+              return
+            }
+
             const attempt = await attemptSummary(
               { title: c.representative.title, body: body.text },
               quotaGuard,
@@ -633,7 +678,17 @@ async function collect(now: Date): Promise<CollectionResult> {
   // 문구 조립은 collectHelpers 의 순수 함수에 두고 테스트가 짝을 지킨다.
   // **quoteFallbackUsed 는 일부러 여기에 없다** — 값을 얻은 행이므로 배너를 흔들지
   // 않는다. 대신 행 배지·로그·크론 응답에 남는다(위 quoteFallbackUsed 선언부 참고).
-  const status = computeRunStatus(summariesFailed, ytdBaseFailed, newsFailed, fxFailed, quoteFailed, newsRecordFailed)
+  // 마감으로 못 한 건이 있으면 「준비 완료」일 수 없다 — 초록 배너 아래에 빈 요약을
+  // 두는 것이 이 저장소가 반복해서 고쳐 온 결함이다.
+  const status = computeRunStatus(
+    summariesFailed,
+    ytdBaseFailed,
+    newsFailed,
+    fxFailed,
+    quoteFailed,
+    newsRecordFailed,
+    summariesSkippedDeadline,
+  )
   const statusDetail = buildStatusDetail({
     quoteFailed,
     summariesFailed,
@@ -641,10 +696,21 @@ async function collect(now: Date): Promise<CollectionResult> {
     ytdBaseFailed,
     newsFailed,
     newsRecordFailed,
+    summariesSkippedDeadline,
     missingCurrencies,
   })
   // 완료 상태를 적기 **전에** 진행 리포터를 닫는다. 닫지 않으면 뒤에서 돌던 마지막
   // 진행 쓰기가 이 update 뒤에 도착해, 끝난 실행에 「마무리 중」이 다시 붙는다.
+  // 차단기가 걸린 날은 **조용히 지나가지 않는다.** 카운터는 DB(statusDetail)와 크론
+  // 응답에 남고, 예산 쪽은 사유 문구가 후보별 summaryError 에 남는다. 여기서는 실행
+  // 단위 요약을 로그에 한 줄 남겨 운영자가 그날의 성격을 바로 알 수 있게 한다.
+  if (rateLimitBudget.deniedCount > 0 || summariesSkippedDeadline > 0) {
+    console.error(
+      `[collect] 분당 한도 재시도 예산 ${rateLimitBudget.spentMs}/${rateLimitBudget.totalMs}ms 사용, ` +
+        `재시도 거절 ${rateLimitBudget.deniedCount}회, 마감으로 미생성 ${summariesSkippedDeadline}건`,
+    )
+  }
+
   await progress.close()
 
   await prisma.briefRun.update({
@@ -655,5 +721,5 @@ async function collect(now: Date): Promise<CollectionResult> {
     data: { status, statusDetail, progressDetail: null, finishedAt: new Date() },
   })
 
-  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, bodyCrawlFailed, ytdBaseFailed, newsFailed, newsRecordFailed, fxFailed, quoteFailed, quoteFallbackUsed }
+  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, summariesSkippedDeadline, rateLimitRetriesDenied: rateLimitBudget.deniedCount, bodyCrawlFailed, ytdBaseFailed, newsFailed, newsRecordFailed, fxFailed, quoteFailed, quoteFallbackUsed }
 }

@@ -19,6 +19,7 @@ import {
   needsPendingRevert,
   buildFallbackSummaries,
   briefRunStartData,
+  createDeadline,
 } from './collectHelpers'
 import { SUMMARY_VARIANTS } from '@/providers/summarize/prompt'
 
@@ -352,6 +353,42 @@ describe('attemptSummary', () => {
   })
 })
 
+describe('createDeadline', () => {
+  it('예산 안이면 지나지 않았다', () => {
+    let t = 1000
+    const d = createDeadline(1000, 60_000, () => t)
+
+    t = 1000 + 59_999
+    expect(d.exceeded()).toBe(false)
+  })
+
+  it('경계는 >= 다 — 정확히 마감이면 지난 것으로 본다', () => {
+    let t = 1000
+    const d = createDeadline(1000, 60_000, () => t)
+
+    t = 1000 + 60_000
+    expect(d.exceeded()).toBe(true)
+  })
+
+  it('시계를 주입받는다 — 테스트가 실제로 20분을 기다리지 않는다', () => {
+    let t = 0
+    const d = createDeadline(0, 20 * 60 * 1000, () => t)
+
+    expect(d.exceeded()).toBe(false)
+    t = 21 * 60 * 1000
+    expect(d.exceeded()).toBe(true)
+  })
+
+  it('한 번 지나면 계속 지난 상태다 — 되돌아가지 않는다', () => {
+    let t = 100_000
+    const d = createDeadline(0, 60_000, () => t)
+
+    expect(d.exceeded()).toBe(true)
+    t = 200_000
+    expect(d.exceeded()).toBe(true)
+  })
+})
+
 describe('computeRunStatus', () => {
   it('요약 실패가 하나라도 있으면 PARTIAL이다', () => {
     expect(computeRunStatus(1)).toBe('PARTIAL')
@@ -422,6 +459,14 @@ describe('computeRunStatus', () => {
     expect(computeRunStatus(0, 0, 0, 0)).toBe('READY')
     expect(computeRunStatus(0, 0, 0, 1)).toBe('PARTIAL')
   })
+
+  it('마감으로 못 한 건이 있으면 PARTIAL 이다 — 초록 배너 아래 빈 요약을 두지 않는다', () => {
+    expect(computeRunStatus(0, 0, 0, 0, 0, 0, 4)).toBe('PARTIAL')
+  })
+
+  it('마감 카운터가 0이면 다른 조건에 영향을 주지 않는다', () => {
+    expect(computeRunStatus(0, 0, 0, 0, 0, 0, 0)).toBe('READY')
+  })
 })
 
 describe('buildStatusDetail', () => {
@@ -437,6 +482,19 @@ describe('buildStatusDetail', () => {
 
   it('실패가 없으면 null 이다 — 배너에 붙일 말이 없다', () => {
     expect(buildStatusDetail(clean)).toBeNull()
+  })
+
+  it('마감으로 못 한 건을 「실패」와 다른 말로 적는다', () => {
+    const d = buildStatusDetail({ ...clean, summariesSkippedDeadline: 7 })
+    expect(d).toContain('요약 시간 초과로 7건 미생성')
+    // "실패"라고 말하면 담당자가 원인을 찾으러 간다. 이쪽은 다시 돌리면 되는 일이다.
+    expect(d).not.toContain('요약 7건 실패')
+  })
+
+  it('요약 실패와 마감 미생성을 **갈라서** 적는다 — 할 일이 다르다', () => {
+    const d = buildStatusDetail({ ...clean, summariesFailed: 3, summariesSkippedDeadline: 7 })
+    expect(d).toContain('요약 3건 실패')
+    expect(d).toContain('요약 시간 초과로 7건 미생성')
   })
 
   it('시세 실패를 종목 수와 함께 말한다', () => {

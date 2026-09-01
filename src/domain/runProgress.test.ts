@@ -3,6 +3,7 @@ import {
   COLLECTION_STEPS,
   PROGRESS_POLL_MS,
   STALLED_AFTER_MS,
+  SUMMARY_DEADLINE_MS,
   formatElapsed,
   formatProgress,
   progressHeadline,
@@ -10,6 +11,31 @@ import {
   shouldPollProgress,
   stalledNotice,
 } from './runProgress'
+
+/**
+ * 이 블록은 문구가 아니라 **두 상수의 관계**를 지킨다.
+ *
+ * `STALLED_AFTER_MS` 는 화면 문구만 정하지 않는다 — `claimRun`(review/[date]/actions.ts)이
+ * 이것을 **선점 조건**으로도 쓴다. 살아 있는 실행이 이 선을 넘을 수 있으면 담당자가
+ * 「수집 실행」을 눌렀을 때 선점이 성공해 같은 날짜에 두 수집이 동시에 돌고, 서로의
+ * 후보를 지우며 덮어쓴다. 요약 마감이 그보다 먼저 오면 그 상태가 구조적으로 생기지
+ * 않는다. 두 상수가 서로를 모르면 언젠가 한쪽만 바뀐다 — 그때 이 테스트가 잡는다.
+ */
+describe('실행 시간 상수의 불변식', () => {
+  it('정지 임계값이 요약 마감보다 크다 — 살아 있는 실행은 결코 선점되지 않는다', () => {
+    expect(STALLED_AFTER_MS).toBeGreaterThan(SUMMARY_DEADLINE_MS)
+  })
+
+  it('두 값 사이에 여유가 있다 — 마감 뒤 정상 종료(DB 쓰기)까지 끝낼 시간', () => {
+    expect(STALLED_AFTER_MS - SUMMARY_DEADLINE_MS).toBeGreaterThanOrEqual(5 * 60 * 1000)
+  })
+
+  it('둘 다 실측 457.7초보다 넉넉하다 — 멀쩡한 실행에 「중단됐을 수 있습니다」가 붙지 않는다', () => {
+    const measuredMs = 457_700
+    expect(SUMMARY_DEADLINE_MS).toBeGreaterThan(measuredMs * 2)
+    expect(STALLED_AFTER_MS).toBeGreaterThan(measuredMs * 2)
+  })
+})
 
 describe('formatProgress', () => {
   it('셀 수 있는 단계는 건수를 붙인다', () => {
