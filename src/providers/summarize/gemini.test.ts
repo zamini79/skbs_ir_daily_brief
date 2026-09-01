@@ -197,9 +197,36 @@ describe('summarize', () => {
 })
 
 describe('모델 폴백 체인', () => {
-  function quotaResponse() {
+  /**
+   * **하루치 소진**의 실측 형태. quotaId 가 `...PerDay...` 다 — 기다려도 오늘은
+   * 풀리지 않으므로 이것만 exhaustedModels 에 기록된다.
+   */
+  function dailyQuotaResponse() {
+    return new Response(JSON.stringify({
+      error: {
+        status: 'RESOURCE_EXHAUSTED',
+        details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] }],
+      },
+    }), { status: 429 })
+  }
+  /**
+   * **분당 한도**의 실측 형태(2026-09-01, 한 모델에 25건 동시 투입 시 받은 429 여덟 건이
+   * 전부 이 quotaId 였다). 기다리면 풀린다.
+   */
+  function perMinuteResponse() {
+    return new Response(JSON.stringify({
+      error: {
+        status: 'RESOURCE_EXHAUSTED',
+        details: [{ violations: [{ quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' }] }],
+      },
+    }), { status: 429 })
+  }
+  /** quotaId 가 없어 **어느 쪽인지 판정할 수 없는** 429. */
+  function indeterminateQuotaResponse() {
     return new Response(JSON.stringify({ error: { status: 'RESOURCE_EXHAUSTED' } }), { status: 429 })
   }
+  /** 테스트가 실제로 20초를 기다리지 않도록 대기를 주입한다. */
+  const noSleep = { sleep: async () => {} }
   function okResponse() {
     return new Response(JSON.stringify({
       candidates: [{ content: { parts: [
@@ -208,14 +235,14 @@ describe('모델 폴백 체인', () => {
     }), { status: 200 })
   }
 
-  it('첫 모델이 429면 다음 모델로 넘어가 정상 응답을 돌려준다', async () => {
+  it('첫 모델이 하루치 소진이면 다음 모델로 넘어가 정상 응답을 돌려준다', async () => {
     const calledUrls: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       calledUrls.push(url)
-      return url.includes(MODEL_CHAIN[0]) ? quotaResponse() : okResponse()
+      return url.includes(MODEL_CHAIN[0]) ? dailyQuotaResponse() : okResponse()
     }))
 
-    const r = await summarize('제목', '본문')
+    const r = await summarize('제목', '본문', noSleep)
 
     expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[1] })
     expect(calledUrls).toHaveLength(2)
@@ -233,13 +260,13 @@ describe('모델 폴백 체인', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('모든 모델이 429면 체인 전체를 실제로 두드리고, 시도한 모델 이름을 모두 담아 던진다', async () => {
-    const fetchMock = vi.fn(async () => quotaResponse())
+  it('모든 모델이 하루치 소진이면 체인 전체를 실제로 두드리고, 시도한 모델 이름을 모두 담아 던진다', async () => {
+    const fetchMock = vi.fn(async () => dailyQuotaResponse())
     vi.stubGlobal('fetch', fetchMock)
 
     let error: unknown
     try {
-      await summarize('제목', '본문')
+      await summarize('제목', '본문', noSleep)
     } catch (e) {
       error = e
     }
@@ -257,13 +284,13 @@ describe('모델 폴백 체인', () => {
     const calledUrls: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       calledUrls.push(url)
-      return url.includes(MODEL_CHAIN[0]) ? quotaResponse() : okResponse()
+      return url.includes(MODEL_CHAIN[0]) ? dailyQuotaResponse() : okResponse()
     }))
 
-    await summarize('제목1', '본문1')
+    await summarize('제목1', '본문1', noSleep)
     const callsAfterFirst = calledUrls.length
 
-    await summarize('제목2', '본문2')
+    await summarize('제목2', '본문2', noSleep)
 
     const firstModelHits = calledUrls.filter(u => u.includes(MODEL_CHAIN[0])).length
     expect(firstModelHits).toBe(1)
@@ -344,14 +371,123 @@ describe('모델 폴백 체인', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('429와 503이 섞여 전부 실패하면 에러 메시지가 두 범주를 구분한다', async () => {
+  // ── 분당 한도: 버리지 않고 기다렸다 같은 모델을 다시 부른다 ──────────────
+  //
+  // 2026-09-01 이전에는 429 를 전부 하루치 소진으로 읽어 그 모델을 남은 하루 내내
+  // 체인에서 뺐다. 실제로는 1분이면 풀릴 분당 한도였고, 체인 6~7개가 그렇게 통째로
+  // 빠지면서 후보 42건 중 20건이 「본문 발췌」로 떨어졌다. 아래가 그 회귀 방지선이다.
+
+  it('분당 한도면 같은 모델을 다시 부르고, 소진으로 기록하지 않는다', async () => {
+    const calledUrls: string[] = []
+    let hits = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calledUrls.push(url)
+      return ++hits === 1 ? perMinuteResponse() : okResponse()
+    }))
+
+    const r = await summarize('제목', '본문', noSleep)
+
+    // 다음 모델로 도망가지 않았다 — 두 번 다 1순위 모델이다.
+    expect(calledUrls).toHaveLength(2)
+    expect(calledUrls[0]).toContain(MODEL_CHAIN[0])
+    expect(calledUrls[1]).toContain(MODEL_CHAIN[0])
+    expect(r.model).toBe(MODEL_CHAIN[0])
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(false)
+  })
+
+  it('첫 시도가 분당 한도여도 발췌로 떨어지지 않고 정상 요약을 돌려준다', async () => {
+    // 사용자에게 보인 결함 그대로의 모양: 첫 429 한 번에 요약을 포기했다.
+    let hits = 0
+    vi.stubGlobal('fetch', vi.fn(async () => (++hits === 1 ? perMinuteResponse() : okResponse())))
+
+    const r = await summarize('제목', '본문', noSleep)
+
+    expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[0] })
+  })
+
+  it('재시도 대기가 주입한 sleep 으로만 일어난다 — 실제로 기다리지 않는다', async () => {
+    const waits: number[] = []
+    let hits = 0
+    vi.stubGlobal('fetch', vi.fn(async () => (++hits <= 2 ? perMinuteResponse() : okResponse())))
+
+    await summarize('제목', '본문', { sleep: async ms => { waits.push(ms) } })
+
+    // 최초 1회 + 재시도 2회 = 대기는 두 번, 뒤로 갈수록 길어진다(분당 창이 지나야 한다).
+    expect(waits).toEqual([20_000, 40_000])
+  })
+
+  it('분당 한도가 재시도를 다 써도 계속되면 다음 모델로 가되 소진 기록은 없다', async () => {
+    const calledUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calledUrls.push(url)
+      return url.includes(MODEL_CHAIN[0]) ? perMinuteResponse() : okResponse()
+    }))
+
+    const r = await summarize('제목', '본문', noSleep)
+
+    // 1순위를 세 번 두드린 뒤에야 2순위로 넘어간다.
+    expect(calledUrls.filter(u => u.includes(MODEL_CHAIN[0]))).toHaveLength(3)
+    expect(r.model).toBe(MODEL_CHAIN[1])
+    // **여기가 핵심이다.** 분당 한도는 그 모델을 하루 종일 잃을 이유가 되지 않는다.
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(false)
+  })
+
+  it('quotaId 가 없어 판정할 수 없는 429 도 소진으로 기록하지 않는다', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => (
-      url.includes(MODEL_CHAIN[0]) ? quotaResponse() : unavailableResponse()
+      url.includes(MODEL_CHAIN[0]) ? indeterminateQuotaResponse() : okResponse()
+    )))
+
+    await summarize('제목', '본문', noSleep)
+
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(false)
+  })
+
+  it('하루치 소진은 예전처럼 기록하고 곧바로 다음 모델로 간다 (재시도하지 않는다)', async () => {
+    const calledUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calledUrls.push(url)
+      return url.includes(MODEL_CHAIN[0]) ? dailyQuotaResponse() : okResponse()
+    }))
+
+    await summarize('제목', '본문', noSleep)
+
+    expect(calledUrls.filter(u => u.includes(MODEL_CHAIN[0]))).toHaveLength(1)
+    expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(true)
+  })
+
+  it('발췌로 떨어지기 전에 체인 전원을 재시도까지 다 쓴다', async () => {
+    // 요구사항의 핵심: 「본문 발췌」는 **마지막의 마지막**이어야 한다. 몇 번의
+    // 429 로 조기에 떨어지면 안 된다.
+    const fetchMock = vi.fn(async () => perMinuteResponse())
+    vi.stubGlobal('fetch', fetchMock)
+
+    let error: unknown
+    try {
+      await summarize('제목', '본문', noSleep)
+    } catch (e) {
+      error = e
+    }
+
+    // 모델마다 최초 1회 + 재시도 2회.
+    expect(fetchMock).toHaveBeenCalledTimes(MODEL_CHAIN.length * 3)
+    const message = (error as Error).message
+    expect(message).toContain('분당 한도')
+    expect(message).not.toContain('쿼터 소진')
+    for (const model of MODEL_CHAIN) {
+      expect(message).toContain(model)
+    }
+    // 체인 전체가 소진으로 오염되지 않는다 — 다음 후보는 1순위부터 다시 시도한다.
+    expect(exhaustedModels.size).toBe(0)
+  })
+
+  it('하루치 소진과 503이 섞여 전부 실패하면 에러 메시지가 두 범주를 구분한다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      url.includes(MODEL_CHAIN[0]) ? dailyQuotaResponse() : unavailableResponse()
     )))
 
     let error: unknown
     try {
-      await summarize('제목', '본문')
+      await summarize('제목', '본문', noSleep)
     } catch (e) {
       error = e
     }
@@ -368,8 +504,14 @@ describe('모델 폴백 체인', () => {
 })
 
 describe('쿼터 소진 기록의 KST 날짜 경계', () => {
-  function quotaResponse() {
-    return new Response(JSON.stringify({ error: { status: 'RESOURCE_EXHAUSTED' } }), { status: 429 })
+  /** 하루치 소진의 실측 형태. 소진 기록은 이 형태에서만 생긴다. */
+  function dailyQuotaResponse() {
+    return new Response(JSON.stringify({
+      error: {
+        status: 'RESOURCE_EXHAUSTED',
+        details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] }],
+      },
+    }), { status: 429 })
   }
   function okResponse() {
     return new Response(JSON.stringify({
@@ -384,7 +526,7 @@ describe('쿼터 소진 기록의 KST 날짜 경계', () => {
     vi.setSystemTime(new Date('2026-08-27T00:00:00+09:00'))
 
     vi.stubGlobal('fetch', vi.fn(async (url: string) => (
-      url.includes(MODEL_CHAIN[0]) ? quotaResponse() : okResponse()
+      url.includes(MODEL_CHAIN[0]) ? dailyQuotaResponse() : okResponse()
     )))
     await summarize('제목1', '본문1')
     expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(true)
@@ -407,7 +549,7 @@ describe('쿼터 소진 기록의 KST 날짜 경계', () => {
     vi.setSystemTime(new Date('2026-08-27T00:30:00+09:00'))
 
     vi.stubGlobal('fetch', vi.fn(async (url: string) => (
-      url.includes(MODEL_CHAIN[0]) ? quotaResponse() : okResponse()
+      url.includes(MODEL_CHAIN[0]) ? dailyQuotaResponse() : okResponse()
     )))
     await summarize('제목1', '본문1')
     expect(exhaustedModels.has(MODEL_CHAIN[0])).toBe(true)
@@ -674,10 +816,15 @@ describe('fetch 가 던졌을 때 (타임아웃·네트워크)', () => {
     for (const model of MODEL_CHAIN) expect(message).toContain(model)
   })
 
-  it('타임아웃과 429 가 섞이면 두 범주를 갈라 적는다', async () => {
+  it('타임아웃과 하루치 소진이 섞이면 두 범주를 갈라 적는다', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url.includes(MODEL_CHAIN[0])) {
-        return new Response(JSON.stringify({ error: { status: 'RESOURCE_EXHAUSTED' } }), { status: 429 })
+        return new Response(JSON.stringify({
+          error: {
+            status: 'RESOURCE_EXHAUSTED',
+            details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] }],
+          },
+        }), { status: 429 })
       }
       throw timeoutError()
     }))
@@ -776,14 +923,29 @@ describe('fetch 가 던졌을 때 (타임아웃·네트워크)', () => {
 })
 
 describe('classifyFailure', () => {
-  it('상태 코드를 본문보다 우선한다', () => {
-    expect(classifyFailure(429, 'UNAVAILABLE')).toBe('quota')
-    expect(classifyFailure(503, 'RESOURCE_EXHAUSTED')).toBe('unavailable')
+  const dayDetail = '{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier"}'
+  const minuteDetail = '{"quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}'
+
+  it('quotaId 는 상태 코드보다 우선한다 — 429 안에 두 실패가 들어 있다', () => {
+    expect(classifyFailure(429, dayDetail)).toBe('quota')
+    expect(classifyFailure(429, minuteDetail)).toBe('rate-limit')
   })
+
+  it('quotaId 가 없는 429 는 하루 소진으로 단정하지 않는다 (재시도 가능한 쪽으로 둔다)', () => {
+    expect(classifyFailure(429, 'RESOURCE_EXHAUSTED')).toBe('rate-limit')
+    expect(classifyFailure(429, 'UNAVAILABLE')).toBe('rate-limit')
+  })
+
+  it('quotaId 가 없으면 상태 코드가 본문보다 우선한다 (기존 규칙 유지)', () => {
+    expect(classifyFailure(503, 'RESOURCE_EXHAUSTED')).toBe('unavailable')
+    expect(classifyFailure(500, 'RESOURCE_EXHAUSTED')).toBe('unavailable')
+  })
+
   it('상태 코드로 확정할 수 없으면 본문을 본다', () => {
-    expect(classifyFailure(400, 'RESOURCE_EXHAUSTED')).toBe('quota')
+    expect(classifyFailure(400, 'RESOURCE_EXHAUSTED')).toBe('rate-limit')
     expect(classifyFailure(400, 'UNAVAILABLE')).toBe('unavailable')
   })
+
   it('그 밖은 other 다 — 체인을 넘기지 않고 던지는 쪽이 안전하다', () => {
     expect(classifyFailure(401, 'API key not valid')).toBe('other')
   })

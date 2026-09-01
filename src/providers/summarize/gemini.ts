@@ -83,8 +83,9 @@ export const MODEL_CHAIN_ENTRIES: readonly ChainEntry[] = [
     quality: 'verified',
     note:
       '2026-08-28 추가. 프로덕션과 같은 responseSchema 로 실측: JSON OK, 개조식 준수, ' +
-      '93~107자(초과분은 절삭된다). 사고 토큰이 8,300여 개라 34초가 걸린다 — 60초 타임아웃 ' +
-      '안이지만 여유가 크지 않으니, 이 모델까지 내려온 날은 수집이 느려진다.',
+      '93~107자(초과분은 절삭된다). 사고 토큰이 8,300여 개라 34초가 걸린다 — 타임아웃이 ' +
+      '180초가 된 2026-09-01 이후로는 여유가 넉넉하다. 이 모델까지 내려온 날은 수집이 ' +
+      '느려지지만, 새벽 무인 배치라 그 느림은 비용이 아니다(설계 §8.1.8).',
   },
   {
     model: 'gemini-3.1-flash-lite-preview',
@@ -188,16 +189,25 @@ function resetExhaustedModelsIfNewDay(): void {
 /**
  * 체인을 어떻게 다룰지 정하는 실패 분류.
  *
- *  - `quota`       그 모델의 하루치가 끝났다 → 소진 기록 + 다음 모델
+ *  - `quota`       그 모델의 **하루치**가 끝났다 → 소진 기록 + 다음 모델
+ *  - `rate-limit`  그 모델의 **분당** 한도에 걸렸다 → **기다렸다 같은 모델을 다시 부른다**
  *  - `unavailable` 구글 쪽 일시적 장애(503/500) → 기록 없이 다음 모델
  *  - `no-response` **응답 자체가 없었다**(타임아웃·네트워크) → 기록 없이 다음 모델
  *  - `other`       세이프티 차단·인증 오류 등 → 던진다(다른 모델로 가려지면 안 된다)
+ *
+ * `quota` 와 `rate-limit` 을 가르는 것이 이 분류의 핵심이다. 2026-09-01 이전에는
+ * 429 를 전부 `quota` 로 읽어 `exhaustedModels` 에 영구 기록했다 — 실제로는 1분이면
+ * 풀릴 분당 한도였는데도 그 모델을 **남은 하루 내내** 체인에서 빼 버렸고, 체인이
+ * 그렇게 통째로 비면 이후 모든 후보가 「본문 발췌」로 떨어졌다(§8.1.8).
  *
  * `unavailable` 과 `no-response` 는 체인에서 하는 일이 같지만 **구분해서 남긴다.**
  * 전부 실패했을 때 "구글이 503 을 줬다"와 "우리가 응답을 못 받았다"는 운영자가
  * 볼 곳이 다르다 — 전자는 기다리는 문제고 후자는 네트워크·타임아웃 설정 문제다.
  */
-type FailureClass = 'quota' | 'unavailable' | 'no-response' | 'other'
+type FailureClass = 'quota' | 'rate-limit' | 'unavailable' | 'no-response' | 'other'
+
+/** 체인을 넘기거나 재시도할 때 남기는 사유. `other` 는 던지므로 여기 없다. */
+type SkipReason = Exclude<FailureClass, 'other'>
 
 /**
  * 외부 응답 문자열에서 API 키를 지운다. 키는 쿼리스트링(`?key=...`)으로 나가므로
@@ -217,18 +227,51 @@ export function redactKey(text: string, key: string): string {
 }
 
 /**
- * **응답을 받았을 때**의 실패를 분류한다. 상태 코드가 최우선(authoritative)
- * 신호다 — 429/503/500 은 그 자체로 확정적이라서 본문은 보지 않는다. 본문
- * 문자열(RESOURCE_EXHAUSTED/UNAVAILABLE)은 상태 코드가 이 셋 중 무엇도 아니어서
- * 확정할 수 없을 때만 보조로 쓴다. 상태를 먼저 확정 짓지 않고 문자열만으로
- * 판단하면, 예를 들어 503 응답 본문에 우연히 다른 문구가 섞여 들어와도 오분류할
- * 위험이 있다. 순서를 이렇게 두면 구글이 문구를 바꿔도 최악의 경우 "놓칠" 뿐,
- * 상태 코드가 이미 확정한 답을 문자열이 뒤집는 일은 없다.
+ * **하루치 소진의 확정 신호.** 이 문자열이 본문에 있을 때**만** `exhaustedModels` 에
+ * 넣는다 — 기다려도 KST 자정(구글 기준으로는 태평양 자정)까지는 풀리지 않는다.
+ *
+ * 실측(2026-09-01): `gemini-3.6-flash` 한 모델에 25건을 동시에 던져 받은 429 여덟 건은
+ * **전부** `GenerateRequestsPerMinutePerProjectPerModel-FreeTier` 였고, 몇 분 뒤 같은
+ * 모델들이 200 을 돌려줬다. 하루치가 실제로 끝났을 때의 quotaId 는
+ * `GenerateRequestsPerDayPerProjectPerModel-FreeTier` 로 **문자열이 다르다.**
+ */
+const DAILY_QUOTA_PATTERN = /GenerateRequestsPerDay/i
+
+/** 분당 한도의 확정 신호. 기다리면 풀린다. */
+const PER_MINUTE_QUOTA_PATTERN = /GenerateRequestsPerMinute/i
+
+/**
+ * **응답을 받았을 때**의 실패를 분류한다.
+ *
+ * ## 판정 순서: quotaId 두 개 → 상태 코드 → 그 밖의 본문 문자열
+ *
+ * 예전에는 "상태 코드가 최우선"이 규칙이었다. 그 규칙은 **429 안에 서로 다른 두
+ * 실패가 들어 있다는 것을 몰랐을 때**의 규칙이고, 그래서 분당 한도를 하루 소진으로
+ * 단정해 멀쩡한 모델을 하루 종일 잃었다. 시세 경로가 같은 결함을 먼저 만나
+ * 같은 방향으로 고쳤다 — `quote/retry.ts` 의 `classifyQuoteFailure` 는 marketstack 의
+ * 월 소진과 분당 제한이 똑같이 429 로 오기 때문에 `QUOTA_EXHAUSTED_PATTERNS` 를
+ * 상태 코드보다 먼저 본다. 여기도 같은 이유로 같은 순서다.
+ *
+ * **상태 코드보다 앞세우는 것은 quotaId 두 개뿐이다.** 이 둘은 구글이 기계용으로
+ * 붙이는 식별자라서 우연히 섞여 들어올 여지가 없다 — 예전 주석이 걱정하던
+ * "503 본문에 다른 문구가 우연히 섞이는" 위험은 `RESOURCE_EXHAUSTED`/`UNAVAILABLE`
+ * 같은 **일반 문자열**의 이야기이고, 그 둘은 지금도 상태 코드 뒤에 그대로 남아 있다.
+ *
+ * ## 판정할 수 없는 429 는 `rate-limit` 이다 (하루 소진으로 단정하지 않는다)
+ *
+ * 오판의 대가가 비대칭이다. 분당을 하루로 잘못 읽으면 **멀쩡한 모델을 하루 종일
+ * 잃고 화면에 「본문 발췌」가 나간다.** 하루를 분당으로 잘못 읽으면 같은 모델을 두 번
+ * 더 두드리고 다음 모델로 갈 뿐이다(새벽 무인 배치라 그 대기는 비용이 아니다).
+ * 그래서 확정 신호가 없는 429·`RESOURCE_EXHAUSTED` 는 **재시도 가능한 쪽**으로 둔다.
  */
 export function classifyFailure(status: number, detail: string): FailureClass {
-  if (status === 429) return 'quota'
+  // 상태 코드보다 먼저 본다 — 위 주석의 "429 안에 두 실패가 들어 있다" 참고.
+  if (DAILY_QUOTA_PATTERN.test(detail)) return 'quota'
+  if (PER_MINUTE_QUOTA_PATTERN.test(detail)) return 'rate-limit'
+
+  if (status === 429) return 'rate-limit' // 판정 불가 — 하루 소진으로 단정하지 않는다.
   if (status === 503 || status === 500) return 'unavailable'
-  if (detail.includes('RESOURCE_EXHAUSTED')) return 'quota'
+  if (detail.includes('RESOURCE_EXHAUSTED')) return 'rate-limit'
   if (detail.includes('UNAVAILABLE')) return 'unavailable'
   return 'other'
 }
@@ -371,9 +414,51 @@ export function enforceLimit(s: string): string {
   return truncateAtSentence(t, MAX_SUMMARY_CHARS)
 }
 
-export async function summarize(title: string, body: string): Promise<SummarySet> {
-  const key = process.env.GEMINI_API_KEY
-  if (!key) throw new Error('GEMINI_API_KEY 없음')
+/**
+ * 분당 한도에 걸린 모델을 **같은 모델로** 다시 부르기까지의 대기.
+ *
+ * 분당 창이 실제로 지나가야 재시도가 뜻이 있으므로 넉넉히 잡는다. 두 번째 재시도까지
+ * 오면 첫 실패로부터 60초가 지나 있으니 창은 확실히 새로 열린다. 이 값이 아깝지 않은
+ * 이유는 이 배치가 **새벽 무인 실행**이기 때문이다(2026-09-01 사용자 결정, 설계 §8.1.8) —
+ * 담당자가 기다리는 시간이 아니다. 성능을 이유로 줄이지 마라.
+ */
+const RATE_LIMIT_DELAYS_MS = [20_000, 40_000]
+
+/** 한 모델당 총 시도 횟수(최초 1회 + 재시도 2회). `quote/retry.ts` 의 MAX_ATTEMPTS 와 같은 뜻이다. */
+const RATE_LIMIT_MAX_ATTEMPTS = RATE_LIMIT_DELAYS_MS.length + 1
+
+/**
+ * 응답 대기 상한.
+ *
+ * 60초였을 때 체인 1순위 `gemini-3.6-flash` 가 **항상** 헛돌았다 — 실측(2026-09-01)
+ * `"hi"` 두 글자에 79.6초가 걸렸다. 즉 가장 품질이 검증된 모델을 매번 버리고 있었고,
+ * 그 부하가 1분 안에 뒤 모델로 몰려 분당 한도를 더 잘 때렸다. 새벽 무인 배치라
+ * 기다림이 비용이 아니므로 **받아내는 쪽**을 택한다(설계 §8.1.8).
+ */
+const RESPONSE_TIMEOUT_MS = 180_000
+
+const realSleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
+
+export type SummarizeOptions = {
+  /**
+   * 분당 한도 재시도 전 대기. 주입할 수 있어야 테스트가 실제로 20초를 기다리지
+   * 않는다 — `quote/retry.ts` 의 `withQuoteRetry(…, sleep)` 과 같은 방식이다.
+   */
+  sleep?: (ms: number) => Promise<void>
+}
+
+export async function summarize(
+  title: string,
+  body: string,
+  opts: SummarizeOptions = {},
+): Promise<SummarySet> {
+  const sleep = opts.sleep ?? realSleep
+  const envKey = process.env.GEMINI_API_KEY
+  if (!envKey) throw new Error('GEMINI_API_KEY 없음')
+  // 위 throw 로 좁힌 타입은 아래 attemptModel(클로저) 안까지 따라가지 않는다.
+  // 키가 `string | undefined` 인 채로 redactKey 에 닿으면 **키 마스킹이 타입
+  // 오류로 막히는** 자리이므로, 좁힌 값을 명시적으로 들고 간다.
+  const key: string = envKey
 
   const req = {
     contents: [{ parts: [{ text: buildPrompt(title, body) }] }],
@@ -399,24 +484,33 @@ export async function summarize(title: string, body: string): Promise<SummarySet
 
   // 이번 summarize() 호출 안에서 건너뛴 모델과 사유를 기록해 둔다. 전부
   // 실패하면 "무엇이 왜 실패했는지"를 07:40 무인 실행에서도 알 수 있어야 한다.
-  const skipped: Array<{ model: string; reason: 'quota' | 'unavailable' | 'no-response' }> = []
+  const skipped: Array<{ model: string; reason: SkipReason }> = []
 
-  for (const model of candidates) {
+  /**
+   * 한 모델에 **한 번** 물어본다. 성공하면 요약을, 체인을 넘기거나 재시도할 만한
+   * 실패면 그 사유를 돌려준다. 진단이 가려지면 안 되는 실패(`other`)는 여기서 던진다.
+   *
+   * 시도 한 번을 따로 뗀 이유는 아래 재시도 루프 때문이다 — 분당 한도는 **같은
+   * 모델을** 다시 불러야 하므로, "다음 모델로 넘어간다"를 뜻하던 `continue` 를
+   * 그대로 두면 두 가지 뜻이 겹친다.
+   */
+  async function attemptModel(
+    model: string,
+  ): Promise<{ ok: true; summary: SummarySet } | { ok: false; reason: SkipReason }> {
     let res: Response
     try {
       res = await fetch(`${endpointFor(model)}?key=${key}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(RESPONSE_TIMEOUT_MS),
       })
     } catch (e) {
       // 응답 자체가 없었다. 예전에는 이 예외가 루프 밖으로 새어나가 체인 전체를
       // 여기서 끝냈다 — 남은 모델을 시도조차 못 했다.
       if (classifyThrownFailure(e) !== 'no-response') throw e
       // 타임아웃·네트워크 오류는 503 과 같은 규칙이다: 기록하지 않고 다음 모델로.
-      skipped.push({ model, reason: 'no-response' })
-      continue
+      return { ok: false, reason: 'no-response' }
     }
 
     if (!res.ok) {
@@ -430,22 +524,25 @@ export async function summarize(title: string, body: string): Promise<SummarySet
         // 오류 본문을 읽다 끊겼다. 상태 코드는 봤지만 사유를 확정할 수 없으므로
         // 응답을 못 받은 것과 같이 다룬다 — 다음 모델로, 소진 기록은 안 한다.
         if (!isBodyReadFailure(e)) throw e
-        skipped.push({ model, reason: 'no-response' })
-        continue
+        return { ok: false, reason: 'no-response' }
       }
       const detail = redactKey(rawDetail, key)
       const failure = classifyFailure(res.status, detail)
       if (failure === 'quota') {
-        // 오늘치가 끝났다 — 영구 기록해서 이후 호출은 이 모델을 건너뛴다.
+        // **하루치가 끝났다고 확정된 경우뿐이다**(GenerateRequestsPerDay). 영구
+        // 기록해서 이후 호출은 이 모델을 건너뛴다. 확정되지 않은 429 는 여기
+        // 오지 않는다 — 그것이 이 파일이 고친 결함이다(classifyFailure 주석).
         exhaustedModels.add(model)
-        skipped.push({ model, reason: 'quota' })
-        continue
+        return { ok: false, reason: 'quota' }
+      }
+      if (failure === 'rate-limit') {
+        // 분당 한도. 기록하지 않는다 — 호출부가 기다렸다 **같은 모델을** 다시 부른다.
+        return { ok: false, reason: 'rate-limit' }
       }
       if (failure === 'unavailable') {
         // 순간적인 과부하/서버 오류 — 이번만 다음 모델로 넘어간다. 기록하지
         // 않으므로 다음 summarize() 호출은 이 모델부터 다시 시도한다.
-        skipped.push({ model, reason: 'unavailable' })
-        continue
+        return { ok: false, reason: 'unavailable' }
       }
       // 그 밖의 실패(세이프티 차단, 인증 오류, 잘못된 요청 등)는 다른 모델로
       // 재시도하지 않는다 — 다른 모델로 넘기면 fix round 1 에서 만든 진단
@@ -460,13 +557,12 @@ export async function summarize(title: string, body: string): Promise<SummarySet
       // 본문 도중 끊긴 경우만 다음 모델로 넘긴다. JSON 문법 오류(SyntaxError)는
       // 연결 문제가 아니라 응답이 이상한 것이므로 그대로 던진다.
       if (!isBodyReadFailure(e)) throw e
-      skipped.push({ model, reason: 'no-response' })
-      continue
+      return { ok: false, reason: 'no-response' }
     }
     const text = extractJsonText(payload)
 
     // Gemini 가 실제로 돌려주는 JSON 은 2안 필드뿐이다 — model 은 우리가 아는
-    // 값(위 for 루프의 model 변수)이지 응답 안에 들어있는 값이 아니므로,
+    // 값(이 함수의 model 인자)이지 응답 안에 들어있는 값이 아니므로,
     // SummarySet(반환 타입)이 아니라 2안 필드만 있는 타입으로 파싱한다.
     let parsed: { numeric: string; context: string }
     try {
@@ -500,20 +596,53 @@ export async function summarize(title: string, body: string): Promise<SummarySet
     }
 
     return {
-      numeric: enforceLimit(parsed.numeric ?? ''),
-      context: enforceLimit(parsed.context ?? ''),
-      model,
+      ok: true,
+      summary: {
+        numeric: enforceLimit(parsed.numeric ?? ''),
+        context: enforceLimit(parsed.context ?? ''),
+        model,
+      },
+    }
+  }
+
+  for (const model of candidates) {
+    // 분당 한도만 **같은 모델을** 다시 부른다. 나머지 사유는 예전 그대로 한 번
+    // 보고 다음 모델로 간다 — 503·타임아웃은 기다린다고 이 모델이 나아지지 않고,
+    // 체인의 다음 모델이 곧바로 대안이 되기 때문이다(설계 §8.1.4).
+    for (let attempt = 1; ; attempt++) {
+      const r = await attemptModel(model)
+      if (r.ok) return r.summary
+      if (r.reason !== 'rate-limit' || attempt >= RATE_LIMIT_MAX_ATTEMPTS) {
+        // 재시도를 다 쓰고도 분당 한도면 다음 모델로 간다. **소진 기록은 하지
+        // 않는다** — 이 모델은 잠시 붐볐을 뿐이고 다음 후보에서는 멀쩡할 수 있다.
+        skipped.push({ model, reason: r.reason })
+        break
+      }
+      const delay = RATE_LIMIT_DELAYS_MS[attempt - 1]
+      // 재시도는 **로그에 남긴다**. 남기지 않으면 매 후보마다 1분씩 기다려 겨우
+      // 붙는 상태가 "가끔 느린 정상"으로 보인다(quote/retry.ts 와 같은 근거).
+      console.warn(
+        `[gemini] ${model}: 분당 한도 — ${delay}ms 후 재시도 ${attempt}/${RATE_LIMIT_MAX_ATTEMPTS - 1}`,
+      )
+      await sleep(delay)
     }
   }
 
   // 사유를 범주별로 갈라 적는다. 07:40 무인 실행에서 운영자가 볼 곳이 서로 다르다:
-  // 쿼터는 기다리는 문제, 503 은 구글 쪽 문제, 응답 없음은 우리 쪽 네트워크·타임아웃
-  // 문제다. 전부 타임아웃인 날에 "쿼터가 소진됐다"고 말하면 엉뚱한 데를 보게 된다.
+  // 하루치 소진은 내일까지 기다리는 문제, 분당 한도는 우리가 너무 빨리 쏜 문제
+  // (SUMMARY_MIN_INTERVAL_MS 를 본다), 503 은 구글 쪽 문제, 응답 없음은 우리 쪽
+  // 네트워크·타임아웃 문제다. 전부 타임아웃인 날에 "쿼터가 소진됐다"고 말하면
+  // 엉뚱한 데를 보게 된다. **분당 한도를 하루 소진과 합쳐 적지 마라** — 그 둘을
+  // 뭉뚱그린 것이 애초의 결함이고, 문구에서 다시 뭉뚱그리면 진단이 되돌아간다.
   const quotaExhausted = skipped.filter(s => s.reason === 'quota').map(s => s.model)
+  const rateLimited = skipped.filter(s => s.reason === 'rate-limit').map(s => s.model)
   const unavailable = skipped.filter(s => s.reason === 'unavailable').map(s => s.model)
   const noResponse = skipped.filter(s => s.reason === 'no-response').map(s => s.model)
   const detailParts: string[] = []
   if (quotaExhausted.length > 0) detailParts.push(`쿼터 소진: ${quotaExhausted.join(', ')}`)
+  if (rateLimited.length > 0) {
+    detailParts.push(`분당 한도(재시도 ${RATE_LIMIT_MAX_ATTEMPTS}회 후에도): ${rateLimited.join(', ')}`)
+  }
   if (unavailable.length > 0) detailParts.push(`일시적 이용 불가: ${unavailable.join(', ')}`)
   if (noResponse.length > 0) detailParts.push(`응답 없음(타임아웃·네트워크): ${noResponse.join(', ')}`)
   throw new Error(`gemini: 모든 모델이 실패했다 (${detailParts.join(' / ')})`)

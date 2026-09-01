@@ -7,9 +7,10 @@ import { fetchYtdBase } from '@/providers/quote/ytdBase'
 import { searchNaverNews } from '@/providers/news/naver'
 import { fetchArticleBody } from '@/providers/news/article'
 import { topClusters, filterByTitleMention } from './cluster'
-import { summarize } from '@/providers/summarize/gemini'
+import { summarize, type SummarySet } from '@/providers/summarize/gemini'
 import { SUMMARY_VARIANTS } from '@/providers/summarize/prompt'
 import { pLimit } from './limit'
+import { createPacer } from './pacer'
 import {
   resolveAliases,
   wantsMarketWrapNews,
@@ -36,8 +37,30 @@ const EMPTY_BODY_REASON = '본문이 너무 짧아 요약을 생략함'
 /** 할당량 소진 이후 아예 시도하지 않고 건너뛴 경우의 사유. */
 const QUOTA_EXHAUSTED_REASON = '할당량 소진 이후 요약을 건너뜀'
 
-/** Gemini 무료 티어 한도에 맞춘 동시 호출 수. 늘리면 429가 난다. */
-const SUMMARY_CONCURRENCY = 4
+/**
+ * 요약 호출의 동시성과 최소 간격. **둘을 같이 읽어라** — 하나만 되돌리면 나머지
+ * 하나가 뜻을 잃는다.
+ *
+ * 2026-09-01 이전에는 동시성 4, 간격 없음이었다. 응답이 오는 즉시 다음을 쏘므로
+ * 순간 속도가 분당 한도를 넘었고, 그날 재수집에서 **후보 42건 중 요약 20건이
+ * 실패해 화면 8행에 「본문 발췌」가 나갔다.** 같은 날 후보 29건짜리 첫 실행은
+ * 실패 0이었다 — 부하에 따라 터지는 결함이다.
+ *
+ * 실측 기준선(2026-09-01): 한 모델에 25건을 동시에 던지니 200 이 17건, 429 가 8건
+ * 이었고 8건 전부 `GenerateRequestsPerMinutePerProjectPerModel-FreeTier` 였다.
+ * 즉 한 모델의 분당 상한은 대략 15~17이다. 여유를 크게 두어 **분당 10회**를
+ * 목표로 한다.
+ *
+ * **성능을 이유로 되돌리지 마라.** 이 시스템은 담당자가 출근하기 전 새벽에 도는
+ * 무인 배치이므로 수집이 몇 분 더 걸리는 것은 비용이 아니다(2026-09-01 사용자
+ * 결정, 설계 §8.1.8). 반대로 「본문 발췌」는 담당자가 화면에서 바로 보는 비용이다.
+ *
+ * NEWS_CONCURRENCY(아래)와 혼동하지 마라 — 그쪽은 속도가 아니라 실패 분포 때문에
+ * 정해진 값이고 근거가 다르다.
+ */
+const SUMMARY_CONCURRENCY = 1
+/** 분당 10회 = 호출 간 6초. 위 주석의 실측이 근거다. */
+const SUMMARY_MIN_INTERVAL_MS = 6_000
 
 /**
  * 네이버 검색 API 는 순간 속도 제한이 있다(일일 한도와 별개 — 하루 총 호출은 100회 남짓인데도
@@ -477,6 +500,27 @@ async function collect(now: Date): Promise<CollectionResult> {
   progress.step('summary', { done: 0, total: summaryTotal })
 
   const sumLimit = pLimit(SUMMARY_CONCURRENCY)
+  /**
+   * 호출 간 최소 간격은 **provider 안이 아니라 여기**에 둔다.
+   *
+   *  - 간격은 기사 한 건의 성질이 아니라 **이번 배치가 무료 티어 쿼터를 얼마나
+   *    빨리 먹느냐**의 성질이다. 그래서 같은 질문에 답하는 SUMMARY_CONCURRENCY
+   *    바로 옆에 있어야 한다 — 둘이 다른 파일에 흩어지면 한쪽만 되돌아간다.
+   *  - `summarize()` 는 "기사 하나 → 요약 하나"의 순수한 단위다. 거기에 호출
+   *    간 상태를 넣으면 앞으로 생길 모든 호출부가 6초를 말없이 물려받고,
+   *    단위 테스트가 실행 순서에 의존하게 된다.
+   *  - provider 안쪽에서 기다려야 하는 것은 분당 한도에 **실제로 걸렸을 때**의
+   *    재시도 대기이고, 그건 이미 거기 있다(gemini.ts RATE_LIMIT_DELAYS_MS).
+   *
+   * `attemptSummary` 에 넘기는 함수 안에서 부른다 — 본문이 짧아 호출 자체를
+   * 건너뛰는 후보에까지 6초를 물리지 않기 위해서다(그 판정은 attemptSummary 가
+   * 갖고 있고, 여기서 다시 판정하면 두 곳이 어긋난다).
+   */
+  const summaryPace = createPacer(SUMMARY_MIN_INTERVAL_MS)
+  const pacedSummarize = async (t: string, b: string): Promise<SummarySet> => {
+    await summaryPace()
+    return summarize(t, b)
+  }
   await Promise.all(
     perInstrument.flatMap(({ inst, clusters }) => {
       const sameEventMap = computeSameEventAsRank(
@@ -513,7 +557,7 @@ async function collect(now: Date): Promise<CollectionResult> {
             const attempt = await attemptSummary(
               { title: c.representative.title, body: body.text },
               quotaGuard,
-              summarize,
+              pacedSummarize,
             )
 
             if (attempt.outcome === 'skipped-empty-body') {
