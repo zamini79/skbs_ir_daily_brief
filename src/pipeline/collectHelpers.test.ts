@@ -287,10 +287,65 @@ describe('isQuotaExhaustedMessage', () => {
 })
 
 describe('attemptSummary', () => {
+  /** 마감이 아직 멀었다 — 기존 테스트들이 보던 상황 그대로. */
+  const OPEN = { exceeded: () => false }
+  /** 마감이 지났다. */
+  const PASSED = { exceeded: () => true }
+
+  it('마감이 지났으면 summarizeFn 을 호출하지 않는다', async () => {
+    const guard = createQuotaGuard()
+    const summarizeFn = vi.fn()
+
+    const r = await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn, PASSED)
+
+    expect(r).toEqual({ outcome: 'skipped-deadline' })
+    // 아끼려는 것이 바로 이 호출이다(6초 간격 + Gemini 호출 + 분당 한도 재시도).
+    expect(summarizeFn).not.toHaveBeenCalled()
+  })
+
+  it('마감은 실패가 아니라 별도 사유다 — failed 와 섞이지 않는다', async () => {
+    const guard = createQuotaGuard()
+    const r = await attemptSummary({ title: 't', body: LONG_BODY }, createQuotaGuard(), vi.fn(), PASSED)
+
+    expect(r.outcome).not.toBe('failed')
+    expect(r.outcome).toBe('skipped-deadline')
+    // 마감은 할당량과도 다르다 — 담당자가 볼 곳이 다르다.
+    expect(guard.tripped).toBe(false)
+  })
+
+  it('본문이 짧은 것이 마감보다 먼저다 — 같은 후보가 날마다 다른 사유를 달면 안 된다', async () => {
+    const r = await attemptSummary({ title: 't', body: '짧음' }, createQuotaGuard(), vi.fn(), PASSED)
+    expect(r).toEqual({ outcome: 'skipped-empty-body' })
+  })
+
+  it('마감 전이면 예전과 똑같이 요약한다', async () => {
+    const summarizeFn = vi.fn().mockResolvedValue(okSummary)
+
+    const r = await attemptSummary({ title: 't', body: LONG_BODY }, createQuotaGuard(), summarizeFn, OPEN)
+
+    expect(r).toEqual({ outcome: 'generated', summary: okSummary })
+    expect(summarizeFn).toHaveBeenCalledOnce()
+  })
+
+  it('마감은 후보마다 다시 확인된다 — 도중에 지나면 그 뒤부터 멈춘다', async () => {
+    let passed = false
+    const deadline = { exceeded: () => passed }
+    const guard = createQuotaGuard()
+    const summarizeFn = vi.fn().mockResolvedValue(okSummary)
+
+    const r1 = await attemptSummary({ title: 'a', body: LONG_BODY }, guard, summarizeFn, deadline)
+    passed = true
+    const r2 = await attemptSummary({ title: 'b', body: LONG_BODY }, guard, summarizeFn, deadline)
+
+    expect(r1.outcome).toBe('generated')
+    expect(r2.outcome).toBe('skipped-deadline')
+    expect(summarizeFn).toHaveBeenCalledTimes(1)
+  })
+
   it('본문이 짧으면 summarizeFn을 호출하지 않고 건너뛴다', async () => {
     const guard = createQuotaGuard()
     const summarizeFn = vi.fn()
-    const r = await attemptSummary({ title: 't', body: '짧음' }, guard, summarizeFn)
+    const r = await attemptSummary({ title: 't', body: '짧음' }, guard, summarizeFn, OPEN)
     expect(r).toEqual({ outcome: 'skipped-empty-body' })
     expect(summarizeFn).not.toHaveBeenCalled()
   })
@@ -298,14 +353,14 @@ describe('attemptSummary', () => {
   it('성공하면 generated와 요약을 준다', async () => {
     const guard = createQuotaGuard()
     const summarizeFn = vi.fn().mockResolvedValue(okSummary)
-    const r = await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn)
+    const r = await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn, OPEN)
     expect(r).toEqual({ outcome: 'generated', summary: okSummary })
   })
 
   it('요약이 던지면 failed와 메시지를 남기고 후보는 지우지 않는다(후보 삭제는 이 함수 책임이 아니다)', async () => {
     const guard = createQuotaGuard()
     const summarizeFn = vi.fn().mockRejectedValue(new Error('gemini: 파싱 실패'))
-    const r = await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn)
+    const r = await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn, OPEN)
     expect(r).toEqual({ outcome: 'failed', error: 'gemini: 파싱 실패' })
     expect(guard.tripped).toBe(false)
   })
@@ -313,7 +368,7 @@ describe('attemptSummary', () => {
   it('429 실패는 guard를 트립시킨다', async () => {
     const guard = createQuotaGuard()
     const summarizeFn = vi.fn().mockRejectedValue(new Error('gemini HTTP 429: RESOURCE_EXHAUSTED'))
-    await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn)
+    await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn, OPEN)
     expect(guard.tripped).toBe(true)
   })
 
@@ -321,7 +376,7 @@ describe('attemptSummary', () => {
     const guard = createQuotaGuard()
     guard.tripped = true
     const summarizeFn = vi.fn()
-    const r = await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn)
+    const r = await attemptSummary({ title: 't', body: LONG_BODY }, guard, summarizeFn, OPEN)
     expect(r).toEqual({ outcome: 'skipped-quota-exhausted' })
     expect(summarizeFn).not.toHaveBeenCalled()
   })
@@ -333,9 +388,9 @@ describe('attemptSummary', () => {
       .mockRejectedValueOnce(new Error('gemini HTTP 429: RESOURCE_EXHAUSTED'))
       .mockResolvedValue(okSummary)
 
-    const r1 = await attemptSummary({ title: 'a', body: LONG_BODY }, guard, summarizeFn)
-    const r2 = await attemptSummary({ title: 'b', body: LONG_BODY }, guard, summarizeFn)
-    const r3 = await attemptSummary({ title: 'c', body: LONG_BODY }, guard, summarizeFn)
+    const r1 = await attemptSummary({ title: 'a', body: LONG_BODY }, guard, summarizeFn, OPEN)
+    const r2 = await attemptSummary({ title: 'b', body: LONG_BODY }, guard, summarizeFn, OPEN)
+    const r3 = await attemptSummary({ title: 'c', body: LONG_BODY }, guard, summarizeFn, OPEN)
 
     expect(r1.outcome).toBe('failed')
     expect(r2).toEqual({ outcome: 'skipped-quota-exhausted' })
@@ -348,7 +403,7 @@ describe('attemptSummary', () => {
     const guard = createQuotaGuard()
     guard.tripped = true
     const summarizeFn = vi.fn()
-    const r = await attemptSummary({ title: 't', body: '짧음' }, guard, summarizeFn)
+    const r = await attemptSummary({ title: 't', body: '짧음' }, guard, summarizeFn, OPEN)
     expect(r).toEqual({ outcome: 'skipped-empty-body' })
   })
 })
@@ -495,6 +550,26 @@ describe('buildStatusDetail', () => {
     const d = buildStatusDetail({ ...clean, summariesFailed: 3, summariesSkippedDeadline: 7 })
     expect(d).toContain('요약 3건 실패')
     expect(d).toContain('요약 시간 초과로 7건 미생성')
+  })
+
+  it('재시도 예산이 걸린 날은 다 성공했어도 사실을 적는다', () => {
+    // 이 사실은 다음 사람이 예산 값을 조정할 유일한 근거다. 로그와 크론 응답에만
+    // 남기면 화면을 보는 사람은 영영 모른다.
+    const d = buildStatusDetail({ ...clean, rateLimitRetriesDenied: 4 })
+    expect(d).toContain('재시도를 4회 포기함')
+    // 다만 「실패」라고 말하지 않는다 — 요약은 실제로 채워졌다.
+    expect(d).not.toContain('실패')
+  })
+
+  it('예산만 걸린 날은 status 를 낮추지 않는다 — 할 일 없는 날의 노란 배너는 배너를 무디게 한다', () => {
+    expect(computeRunStatus(0, 0, 0, 0, 0, 0, 0)).toBe('READY')
+    expect(buildStatusDetail({ ...clean, rateLimitRetriesDenied: 4 })).not.toBeNull()
+  })
+
+  it('실패가 함께 있으면 예산 문구는 맨 뒤다 — 관측이지 실패가 아니다', () => {
+    const d = buildStatusDetail({ ...clean, quoteFailed: 2, rateLimitRetriesDenied: 4 })
+    expect(d?.startsWith('시세 2종목 수집 실패')).toBe(true)
+    expect(d?.endsWith('(요약 자체는 채워졌습니다)')).toBe(true)
   })
 
   it('시세 실패를 종목 수와 함께 말한다', () => {

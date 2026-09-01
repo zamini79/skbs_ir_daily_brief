@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { SUMMARY_CONCURRENCY, SUMMARY_MIN_INTERVAL_MS, pacedSummarizer } from './summaryPolicy'
+import { SUMMARY_CONCURRENCY, SUMMARY_MIN_INTERVAL_MS, createSummaryCaller } from './summaryPolicy'
+import { createRateLimitBudget } from '@/providers/summarize/rateLimitBudget'
 
 /**
  * 이 블록이 지키는 것은 "코드가 컴파일되는가"가 아니라 **실측으로 산 값**이다.
@@ -23,7 +24,9 @@ describe('요약 감속 정책', () => {
   })
 })
 
-describe('pacedSummarizer', () => {
+describe('createSummaryCaller', () => {
+  const budget = () => createRateLimitBudget(1000)
+
   it('간격 게이트를 **기다린 뒤에** 요약을 부른다', async () => {
     const order: string[] = []
     const pace = vi.fn(async () => {
@@ -31,43 +34,76 @@ describe('pacedSummarizer', () => {
       await Promise.resolve()
       order.push('pace-end')
     })
-    const summarizeFn = vi.fn(async () => {
+    const summarize = vi.fn(async () => {
       order.push('summarize')
       return 'ok'
     })
 
-    await pacedSummarizer(pace, summarizeFn)('제목', '본문')
+    await createSummaryCaller({ pace, budget: budget(), summarize })('제목', '본문')
 
     // `await` 를 지우면 summarize 가 pace-end 앞으로 온다.
     expect(order).toEqual(['pace-start', 'pace-end', 'summarize'])
   })
 
-  it('호출마다 게이트를 한 번씩 지난다', async () => {
-    const pace = vi.fn(async () => {})
-    const summarizeFn = vi.fn(async () => 'ok')
-    const paced = pacedSummarizer(pace, summarizeFn)
+  it('**실행 예산을 요약에 넘긴다** — 이 배선이 blocker 1 의 유일한 방어선이다', async () => {
+    const b = budget()
+    const summarize = vi.fn(async () => 'ok')
 
-    await paced('a', 'b')
-    await paced('c', 'd')
+    await createSummaryCaller({ pace: async () => {}, budget: b, summarize })('제목', '본문')
 
-    expect(pace).toHaveBeenCalledTimes(2)
-    expect(summarizeFn).toHaveBeenCalledTimes(2)
+    expect(summarize).toHaveBeenCalledWith('제목', '본문', { budget: b })
   })
 
-  it('제목과 본문을 그대로 넘기고 결과를 그대로 돌려준다', async () => {
-    const summarizeFn = vi.fn(async () => 'result')
+  it('**모든 호출이 같은 예산 객체를 받는다** — 후보마다 새로 만들면 곱셈이 안 끊긴다', async () => {
+    // 예산을 인자로 닫아 넣기 때문에 "호출마다 새 예산"이라는 형태가 애초에 만들어지지
+    // 않는다. gemini.ts 의 `opts.budget ?? createRateLimitBudget()` 기본값에 기대면
+    // 배선을 지워도 타입·런타임이 조용하고 예산이 한 번도 걸리지 않는다.
+    const b = budget()
+    const seen: unknown[] = []
+    const summarize = vi.fn(async (_t: string, _b: string, opts: { budget: unknown }) => {
+      seen.push(opts.budget)
+      return 'ok'
+    })
+    const call = createSummaryCaller({ pace: async () => {}, budget: b, summarize })
 
-    const r = await pacedSummarizer(async () => {}, summarizeFn)('제목', '본문')
+    await call('a', 'b')
+    await call('c', 'd')
+    await call('e', 'f')
 
-    expect(summarizeFn).toHaveBeenCalledWith('제목', '본문')
+    expect(seen).toEqual([b, b, b])
+  })
+
+  it('호출마다 게이트를 한 번씩 지난다', async () => {
+    const pace = vi.fn(async () => {})
+    const summarize = vi.fn(async () => 'ok')
+    const call = createSummaryCaller({ pace, budget: budget(), summarize })
+
+    await call('a', 'b')
+    await call('c', 'd')
+
+    expect(pace).toHaveBeenCalledTimes(2)
+    expect(summarize).toHaveBeenCalledTimes(2)
+  })
+
+  it('결과를 그대로 돌려준다', async () => {
+    const r = await createSummaryCaller({
+      pace: async () => {},
+      budget: budget(),
+      summarize: async () => 'result',
+    })('제목', '본문')
+
     expect(r).toBe('result')
   })
 
   it('요약이 던지면 그대로 전파한다 — 간격 게이트가 사유를 삼키지 않는다', async () => {
-    const paced = pacedSummarizer(async () => {}, async () => {
-      throw new Error('gemini: 모든 모델이 실패했다')
+    const call = createSummaryCaller({
+      pace: async () => {},
+      budget: budget(),
+      summarize: async () => {
+        throw new Error('gemini: 모든 모델이 실패했다')
+      },
     })
 
-    await expect(paced('제목', '본문')).rejects.toThrow(/모든 모델이 실패했다/)
+    await expect(call('제목', '본문')).rejects.toThrow(/모든 모델이 실패했다/)
   })
 })

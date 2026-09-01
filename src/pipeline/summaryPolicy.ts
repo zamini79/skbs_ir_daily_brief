@@ -1,3 +1,5 @@
+import type { RateLimitBudget } from '@/providers/summarize/rateLimitBudget'
+
 /**
  * **요약 호출을 얼마나 빨리 쏠 것인가.** 이 파일의 값은 전부 실측으로 정해졌고,
  * 되돌리면 화면에 「본문 발췌」가 돌아온다.
@@ -38,21 +40,37 @@ export const SUMMARY_CONCURRENCY = 1
 export const SUMMARY_MIN_INTERVAL_MS = 6_000
 
 /**
- * 요약 호출을 간격 게이트 뒤에 세운다.
+ * 요약 호출 하나를 만든다 — **간격 게이트와 실행 단위 예산을 둘 다 물려서.**
  *
- * `attemptSummary` 에 넘길 함수를 만든다 — 본문이 짧아 호출 자체를 건너뛰는 후보에
- * 6초를 물리지 않으면서, 그 판정(`MIN_BODY_CHARS_FOR_SUMMARY`)을 두 곳에 복제하지
- * 않기 위해서다.
+ * `attemptSummary` 에 넘길 함수를 만든다. 여기서 만드는 이유는 두 가지다:
  *
- * **`pace()` 를 반드시 `await` 한 뒤에 부른다.** 이 순서가 이 함수의 전부이고,
- * 테스트가 지키는 것도 그것이다(summaryPolicy.test.ts). 지워도 타입은 통과한다.
+ *  - 본문이 짧아 호출 자체를 건너뛰는 후보에 6초를 물리지 않으면서, 그 판정
+ *    (`MIN_BODY_CHARS_FOR_SUMMARY`)을 두 곳에 복제하지 않는다.
+ *  - **배선이 테스트되는 자리에 있게 한다.** 이 합성이 `collect.ts` 안에 있던 동안
+ *    `{ budget }` 을 지워도 933개가 전부 통과했다(리뷰에서 변이로 확인). `collect.ts`
+ *    는 최상단에서 Prisma 를 끌어와 테스트가 가볍게 import 할 수 없기 때문이다.
+ *
+ * ## 예산을 **인자로 받고, 한 번만 받는다**
+ *
+ * `budget` 은 선택 항목이 아니다. 빼면 **컴파일이 안 된다** — `summarize()` 쪽 기본값
+ * (`opts.budget ?? createRateLimitBudget()`)에 기대면 배선을 지워도 타입도 런타임도
+ * 조용하고, 호출마다 새 예산이 생겨 한 번도 걸리지 않는다(체인 7개 × 60초 < 기본 600초).
+ * 그러면 blocker 1 이 소리 없이 부활한다.
+ *
+ * 여기서 **하나의 예산을 닫아 넣기 때문에** "후보마다 새 예산을 만드는" 형태도 만들
+ * 수 없다 — 그것이 예산을 인자로 받는 진짜 이유다. 실행 전체가 한 예산을 공유해야
+ * 후보 수만큼의 곱셈이 끊긴다(rateLimitBudget.ts).
+ *
+ * **`pace()` 를 반드시 `await` 한 뒤에 부른다.** 그 순서와 예산 전달, 두 가지를
+ * 테스트가 지킨다(summaryPolicy.test.ts).
  */
-export function pacedSummarizer<T>(
-  pace: () => Promise<void>,
-  summarizeFn: (title: string, body: string) => Promise<T>,
-): (title: string, body: string) => Promise<T> {
+export function createSummaryCaller<T>(deps: {
+  pace: () => Promise<void>
+  budget: RateLimitBudget
+  summarize: (title: string, body: string, opts: { budget: RateLimitBudget }) => Promise<T>
+}): (title: string, body: string) => Promise<T> {
   return async (title, body) => {
-    await pace()
-    return summarizeFn(title, body)
+    await deps.pace()
+    return deps.summarize(title, body, { budget: deps.budget })
   }
 }

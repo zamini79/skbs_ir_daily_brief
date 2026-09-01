@@ -191,8 +191,15 @@ function StatusBanner({
        * 완료 사유. 진행 문구와 칸이 나뉘어 있어 서로 덮어쓰지 않는다(BriefRun.progressDetail).
        * FAILED 도 함께 보여준다 — 예외로 끝난 실행은 사유가 여기에만 남고(collect.ts 의
        * markRunFailed), 그걸 감추면 배너가 「실패」라고만 말하고 왜인지는 말하지 않는다.
+       *
+       * **READY 도 보여준다.** 예전에는 READY 면 statusDetail 이 항상 null 이라 조건에
+       * 넣을 이유가 없었는데, 지금은 「실패는 아니지만 그날 있었던 일」이 여기 적힌다
+       * (요약 API 가 붐벼 재시도를 포기한 횟수 — collectHelpers 의 buildStatusDetail).
+       * 그런 날 배너를 노랑으로 낮추지는 않는다(담당자가 할 일이 없다). 다만 **적히기는
+       * 해야** 다음 사람이 예산 값을 조정할 근거를 갖는다. 조건에서 빼면 그 문장이
+       * DB 에만 남고 화면에서는 사라진다.
        */}
-      {view.kind === 'IDLE' && (status === 'PARTIAL' || status === 'FAILED') && statusDetail && (
+      {view.kind === 'IDLE' && statusDetail && (
         <span className="ml-2">— {statusDetail}</span>
       )}
 

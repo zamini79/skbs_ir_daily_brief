@@ -12,7 +12,7 @@ import { createRateLimitBudget } from '@/providers/summarize/rateLimitBudget'
 import { SUMMARY_VARIANTS } from '@/providers/summarize/prompt'
 import { pLimit } from './limit'
 import { createPacer } from './pacer'
-import { SUMMARY_CONCURRENCY, SUMMARY_MIN_INTERVAL_MS, pacedSummarizer } from './summaryPolicy'
+import { SUMMARY_CONCURRENCY, SUMMARY_MIN_INTERVAL_MS, createSummaryCaller } from './summaryPolicy'
 import {
   resolveAliases,
   wantsMarketWrapNews,
@@ -527,9 +527,9 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
    *  - provider 안쪽에서 기다려야 하는 것은 분당 한도에 **실제로 걸렸을 때**의
    *    재시도 대기이고, 그건 이미 거기 있다(gemini.ts RATE_LIMIT_DELAYS_MS).
    *
-   * `attemptSummary` 에 넘기는 함수 안에서 부른다 — 본문이 짧아 호출 자체를
-   * 건너뛰는 후보에까지 6초를 물리지 않기 위해서다(그 판정은 attemptSummary 가
-   * 갖고 있고, 여기서 다시 판정하면 두 곳이 어긋난다).
+   * 합성 자체(`createSummaryCaller`)는 **이 파일에 두지 않는다.** 여기 있던 동안
+   * `{ budget }` 을 지워도 테스트 933개가 전부 통과했다 — 이 파일이 Prisma 를 끌어와
+   * 테스트가 import 할 수 없기 때문이다. 배선은 테스트가 보는 자리에 있어야 한다.
    */
   const summaryPace = createPacer(SUMMARY_MIN_INTERVAL_MS)
   /**
@@ -537,9 +537,11 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
    * 막지 못한다 — 끊으려는 것이 바로 후보 수만큼의 곱셈이다(rateLimitBudget.ts).
    */
   const rateLimitBudget = createRateLimitBudget()
-  const pacedSummarize = pacedSummarizer(summaryPace, (t: string, b: string) =>
-    summarize(t, b, { budget: rateLimitBudget }),
-  )
+  const pacedSummarize = createSummaryCaller({
+    pace: summaryPace,
+    budget: rateLimitBudget,
+    summarize,
+  })
   await Promise.all(
     perInstrument.flatMap(({ inst, clusters }) => {
       const sameEventMap = computeSameEventAsRank(
@@ -573,36 +575,15 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
               // 제목만 남긴다. 기사 URL 은 싣지 않는다(로그 규칙 — providers 전반).
               console.error(`[article] ${c.representative.title}: ${body.crawlFailure}`)
             }
-            // **마감 확인은 요약 호출 바로 앞이다.** 본문 수집까지는 마치게 두는데,
+            // **마감 판정은 attemptSummary 안에 있다.** 본문 수집까지는 마치게 두는데,
             // 그 본문이 있어야 발췌 대체 요약이라도 채워 행이 빈칸으로 남지 않기
-            // 때문이다. 아끼려는 것은 뒤에 오는 비싼 부분(6초 간격 + Gemini 호출 +
+            // 때문이다. 아끼는 것은 뒤에 오는 비싼 부분(6초 간격 + Gemini 호출 +
             // 분당 한도 재시도)이다.
-            if (summaryDeadline.exceeded()) {
-              await prisma.newsCandidate.update({
-                where: { id: candidate.id },
-                data: { summaryError: DEADLINE_REASON },
-              })
-              const deadlineFallbacks = buildFallbackSummaries(body.text, c.representative.description)
-              if (deadlineFallbacks.length > 0) {
-                await prisma.newsSummary.createMany({
-                  data: deadlineFallbacks.map((text, i) => ({
-                    candidateId: candidate.id,
-                    variant: SUMMARY_VARIANTS[i].variant,
-                    text,
-                    isFallback: true,
-                  })),
-                })
-              }
-              // summariesFailed 가 아니다. 실패한 것이 아니라 시간이 없어 시도하지
-              // 않은 것이고, 둘을 합치면 담당자가 원인을 가릴 수 없다.
-              summariesSkippedDeadline++
-              return
-            }
-
             const attempt = await attemptSummary(
               { title: c.representative.title, body: body.text },
               quotaGuard,
               pacedSummarize,
+              summaryDeadline,
             )
 
             if (attempt.outcome === 'skipped-empty-body') {
@@ -630,11 +611,14 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
               summariesGenerated++
               return
             }
-            // 'failed' | 'skipped-quota-exhausted' — 모델 요약은 없지만 후보를 빈 칸으로
-            // 남기지 않는다. 이미 손에 있는 본문/스니펫에서 발췌한 대체 요약을 채운다
-            // (재요청하지 않는다). summaryError 는 그대로 남겨 모델이 아니라 발췌라는 걸
-            // 검수자/운영자가 알 수 있게 한다.
-            const errorMessage = attempt.outcome === 'failed' ? attempt.error : QUOTA_EXHAUSTED_REASON
+            // 'failed' | 'skipped-quota-exhausted' | 'skipped-deadline' — 모델 요약은
+            // 없지만 후보를 빈 칸으로 남기지 않는다. 이미 손에 있는 본문/스니펫에서
+            // 발췌한 대체 요약을 채운다(재요청하지 않는다). summaryError 는 그대로
+            // 남겨 모델이 아니라 발췌라는 걸 검수자/운영자가 알 수 있게 한다.
+            const errorMessage =
+              attempt.outcome === 'failed' ? attempt.error
+              : attempt.outcome === 'skipped-deadline' ? DEADLINE_REASON
+              : QUOTA_EXHAUSTED_REASON
             await prisma.newsCandidate.update({
               where: { id: candidate.id },
               data: { summaryError: errorMessage },
@@ -650,7 +634,10 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
                 })),
               })
             }
-            summariesFailed++
+            // **마감은 실패가 아니다.** 시간이 없어 시작하지 않은 것이고, 둘을 합치면
+            // 담당자가 원인을 가릴 수 없다(전자는 원인을 봐야 하고 후자는 다시 돌리면 된다).
+            if (attempt.outcome === 'skipped-deadline') summariesSkippedDeadline++
+            else summariesFailed++
           })
           // isolate가 예외를 삼켰다면(예: newsCandidate.create 자체가 실패) worker 내부의
           // summariesFailed 증가는 일어나지 않았다 — 여기서 집계한다.
@@ -697,6 +684,7 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
     newsFailed,
     newsRecordFailed,
     summariesSkippedDeadline,
+    rateLimitRetriesDenied: rateLimitBudget.deniedCount,
     missingCurrencies,
   })
   // 완료 상태를 적기 **전에** 진행 리포터를 닫는다. 닫지 않으면 뒤에서 돌던 마지막

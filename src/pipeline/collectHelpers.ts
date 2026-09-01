@@ -243,12 +243,20 @@ export function createQuotaGuard(): QuotaGuard {
 export type SummarizeAttempt =
   | { outcome: 'generated'; summary: SummarySet }
   | { outcome: 'skipped-empty-body' }
+  | { outcome: 'skipped-deadline' }
   | { outcome: 'skipped-quota-exhausted' }
   | { outcome: 'failed'; error: string }
 
 /**
  * 후보 하나에 대해 요약을 시도한다.
  * - 본문이 짧으면 호출하지 않는다(의도된 결정, 실패가 아니다).
+ * - **요약 단계 마감이 지났으면 호출하지 않는다.** 실패가 아니라 시간이 없어 시작하지
+ *   않은 것이다 — 호출부가 `summariesFailed` 와 갈라 센다.
+ *
+ *   이 판정이 `collect.ts` 가 아니라 **여기** 있는 이유: 저쪽은 최상단에서 Prisma 를
+ *   끌어와 테스트가 가볍게 import 할 수 없다. 리뷰에서 `if (deadline.exceeded())` 를
+ *   `if (false)` 로 바꿔도 933개가 전부 통과하는 것이 확인됐다. `deadline` 을
+ *   **선택 인자로 두지 않은 것도 같은 이유다** — 호출부가 빼면 컴파일이 안 된다.
  * - 이미 이번 실행에서 할당량 소진이 감지됐으면(guard.tripped) 호출하지 않는다 —
  *   죽은 할당량에 나머지를 전부 쏘고 매번 실패시키지 않는다. 재시도/백오프는 하지 않는다.
  * - summarizeFn 이 던지면 실패로 기록하고, 메시지가 할당량 소진을 뜻하면 guard 를 트립시켜
@@ -260,8 +268,12 @@ export async function attemptSummary(
   args: { title: string; body: string },
   guard: QuotaGuard,
   summarizeFn: (title: string, body: string) => Promise<SummarySet>,
+  deadline: Deadline,
 ): Promise<SummarizeAttempt> {
+  // 순서가 뜻을 갖는다. 본문이 짧은 것은 마감과 무관한 사실이므로 먼저 가른다 —
+  // 마감 뒤에 두면 같은 후보가 날마다 다른 사유를 달게 된다.
   if (charLength(args.body) < MIN_BODY_CHARS_FOR_SUMMARY) return { outcome: 'skipped-empty-body' }
+  if (deadline.exceeded()) return { outcome: 'skipped-deadline' }
   if (guard.tripped) return { outcome: 'skipped-quota-exhausted' }
 
   try {
@@ -353,6 +365,18 @@ export function buildStatusDetail(counts: {
    * 합쳐 세면 그 구분이 영영 사라진다.
    */
   summariesSkippedDeadline?: number
+  /**
+   * 실행 재시도 예산이 모자라 분당 한도 재시도를 포기한 횟수. 기본값 0.
+   *
+   * **이것만으로는 status 를 PARTIAL 로 낮추지 않는다**(computeRunStatus 에 없다).
+   * 예산이 걸려도 남은 후보가 뒤쪽 모델에서 요약을 받아냈다면 담당자가 할 일은 없다.
+   * 할 일이 없는 날에 노란 배너를 띄우면 담당자가 노란 배너를 무시하는 법을 배운다 —
+   * `STALLED_AFTER_MS` 주석이 경계한 것과 같은 논리다.
+   *
+   * 그래도 **적히기는 해야 한다.** 그날 붐볐다는 사실은 다음 사람이 예산 값을 조정할
+   * 유일한 근거이고, 로그와 크론 응답에만 남기면 화면을 보는 사람은 영영 모른다.
+   */
+  rateLimitRetriesDenied?: number
   missingCurrencies: string[]
 }): string | null {
   const parts: string[] = []
@@ -374,6 +398,10 @@ export function buildStatusDetail(counts: {
   }
   if (counts.missingCurrencies.length > 0) {
     parts.push(`환율 미확보: ${counts.missingCurrencies.join(', ')} (시가총액 공란)`)
+  }
+  // **맨 뒤다.** 실패가 아니라 관측이므로, 실패가 함께 있는 날에는 그것들 뒤에 붙는다.
+  if ((counts.rateLimitRetriesDenied ?? 0) > 0) {
+    parts.push(`요약 API 가 붐벼 재시도를 ${counts.rateLimitRetriesDenied}회 포기함(요약 자체는 채워졌습니다)`)
   }
   return parts.length > 0 ? parts.join(', ') : null
 }
