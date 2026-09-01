@@ -56,7 +56,10 @@ model BriefRun {
   /// 실행 당일 KST 날짜. 검수 화면 URL 키.
   runDate    String
   status     String   // COLLECTING | READY | PARTIAL | FAILED
-  /// status가 PARTIAL/FAILED일 때 사람이 읽을 수 있는 **완료 사유**(예: 요약 20건 실패, 할당량 소진).
+  /// 사람이 읽을 수 있는 **완료 사유**(예: 요약 20건 실패, 할당량 소진).
+  /// 대개 PARTIAL/FAILED 에 붙지만 **READY 에도 붙을 수 있다** — 담당자가 할 일은 없어도
+  /// 기록해야 하는 관측이 있다(예: 「요약 API 가 붐벼 재시도를 N회 포기함」). 그런 날까지
+  /// PARTIAL 로 낮추면 노란 배너가 무뎌진다(collectHelpers 의 rateLimitRetriesDenied 주석).
   /// 진행 문구를 여기 쓰지 않는다 — 아래 progressDetail 주석 참고.
   statusDetail String? @db.Text
   /// 수집이 도는 동안의 **진행 문구**(예: `요약 생성 중 (31/47)`). 실행이 끝나면 null로 비운다.
