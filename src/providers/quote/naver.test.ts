@@ -37,8 +37,18 @@ const WUXI_SERIES_PREOPEN = [
   foreignBar('20260831', 48.84),
 ]
 
+/**
+ * `basic` 응답. **실측 그대로**(2026-09-01 09:25 HKT, 개장 5분 전) `closePrice`·
+ * `compareToPreviousClosePrice`·`localTradedAt` 을 채워 둔다 — 이 결함의 원인이었던
+ * "오늘 지금까지의 변동은 개장 전에 0" 을 그대로 보여주는 값이다. `fetchNaverWorldStock`
+ * 은 이제 이 세 필드를 읽지 않으니, 결과가 여전히 정상(전일대비 -1.81)이어야 이 값들이
+ * 다시 쓰이지 않는다는 것이 직접 검증된다.
+ */
 function wuxiBasic(over: Record<string, unknown> = {}) {
   return {
+    closePrice: '48.840',
+    compareToPreviousClosePrice: '0.000',
+    localTradedAt: '2026-09-01T08:45:33+08:00',
     currencyType: { code: 'HKD', text: '홍콩 달러', name: 'HONG_KONG_DOLLAR' },
     stockExchangeType: { code: 'HKG', zoneId: 'Asia/Hong_Kong', nationType: 'HKG' },
     ...over,
@@ -88,6 +98,17 @@ describe('fetchNaverWorldStock — 개장 전에도 전일대비가 0 이 되지
     expect(q.currency).toBe('HKD')
   })
 
+  it('basic 이 거짓말(전일대비 0, 기준일이 오늘)해도 결과는 흔들리지 않는다', async () => {
+    // 이 결함 자체를 재현한다: basic 은 개장 전에 compareToPreviousClosePrice: 0.000,
+    // localTradedAt 을 오늘(2026-09-01)로 준다(위 wuxiBasic 기본값 — 실측 그대로).
+    // 이 필드들을 다시 읽는 회귀가 생기면 전일대비가 0 으로 돌아온다 — 정확히 이
+    // 모양으로 되돌아오므로 테스트도 그 모양을 직접 잡는다.
+    stubWorldStock()
+    const q = await fetchNaverWorldStock('2269.HK', kstWorld('10:25'))
+    expect(q.prevClose).toBeCloseTo(50.65, 4)
+    expect(q.asOf).toBe('2026-08-31')
+  })
+
   it('장중에 오늘 행이 섞여 와도 개장 전과 같은 값이다 — 실행 시각이 숫자를 바꾸지 않는다', async () => {
     // 이 파일에서 가장 중요한 테스트다(스펙 §3.0). 홍콩장이 열려 오늘(09-01) 행이
     // 진행 중인 현재가로 붙어도, 그 행은 버리고 마지막 완결 거래일(08-31)을 써야 한다.
@@ -95,6 +116,23 @@ describe('fetchNaverWorldStock — 개장 전에도 전일대비가 0 이 되지
     stubWorldStock({ series: withTodayRow })
     const q = await fetchNaverWorldStock('2269.HK', kstWorld('13:00'))
     expect(q.close).toBeCloseTo(48.84, 4) // 47.0(진행 중인 오늘 값)이 아니다
+    expect(q.prevClose).toBeCloseTo(50.65, 4)
+    expect(q.asOf).toBe('2026-08-31')
+  })
+
+  it('오늘 행이 깨져 있어도(파싱 불가) 버릴 뿐 종목 전체를 실패시키지 않는다', async () => {
+    // 실측은 09:25 HKT(개장 직전) 한 시점뿐이다 — 실제 크론 시각(06:40 HKT, 개장 4시간
+    // 전)에 오늘 행이 어떤 모양으로 오는지는 아무도 보지 못했다. 오늘 행은 파싱에
+    // 성공하든 실패하든 버릴 행이므로, 종가가 0 이거나 형식이 다르더라도 결과에
+    // 영향을 주면 안 된다. 국내 경로(fetchLastTwoSessions)와 같은 순서(오늘 행 제외
+    // 먼저, 파싱은 그 다음)로 이것이 보장된다.
+    const brokenTodayRow = [
+      ...WUXI_SERIES_PREOPEN,
+      { localDate: '20260901', closePrice: 0 }, // 진행 중인 값이 0 으로 옴
+    ]
+    stubWorldStock({ series: brokenTodayRow })
+    const q = await fetchNaverWorldStock('2269.HK', kstWorld('10:25'))
+    expect(q.close).toBeCloseTo(48.84, 4)
     expect(q.prevClose).toBeCloseTo(50.65, 4)
     expect(q.asOf).toBe('2026-08-31')
   })

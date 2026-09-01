@@ -306,6 +306,15 @@ async function fetchForeignDailySeries(code: string, now: Date): Promise<DailyBa
   if (!Array.isArray(json)) throw new QuoteError(code, '일별 시세 응답이 배열이 아님')
 
   return (json as unknown[])
+    // 오늘 행 제외를 파싱보다 먼저 한다 — 국내 경로(위 fetchLastTwoSessions)와 같은
+    // 순서다. 실측은 09:25 HKT(개장 직전) 한 시점뿐이라 그 행이 실제 크론 시각
+    // (06:40 HKT)에 어떤 모양으로 오는지는 아무도 보지 못했다. 어차피 버릴 오늘 행이
+    // 깨진 값(진행 중인 0 이나 형식이 다른 값)으로 와도 종목 전체를 실패로 만들면
+    // 안 된다 — 버릴 행의 흠은 결과에 영향을 주지 않아야 한다.
+    .filter(row => {
+      const localDate = (row as { localDate?: unknown }).localDate
+      return !(typeof localDate === 'string' && localDate >= today)
+    })
     .map(row => {
       const r = row as { localDate?: unknown; closePrice?: unknown }
       if (typeof r.localDate !== 'string' || !/^\d{8}$/.test(r.localDate)) {
@@ -317,7 +326,6 @@ async function fetchForeignDailySeries(code: string, now: Date): Promise<DailyBa
       }
       return { date: r.localDate, close }
     })
-    .filter(r => r.date < today) // 오늘 행 제외 — 위 "언제나 버린다" 참고
     .map(r => ({ date: fromCompactYmd(r.date), close: r.close }))
     .sort((a, b) => a.date.localeCompare(b.date))
 }
