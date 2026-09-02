@@ -48,6 +48,29 @@ describe('buildPrompt', () => {
     expect(buildPrompt('셀트리온 실적', '본문임')).toContain('본문임')
     expect(prompt).toContain(`${MAX_SUMMARY_CHARS}자 이내`)
   })
+
+  it('문장을 명사로 끝내라고 요구한다', () => {
+    expect(prompt).toContain('명사로 끝낼 것')
+  })
+
+  it('명사형 종결을 예시로 보여준다 — 지시만 있으면 모델이 덜 지킨다', () => {
+    // 실측(2026-09-02): 예시를 붙인 프롬프트로 실제 기사 5건 × 2안 = 10건을 돌려
+    // **모든 문장이 명사로 끝났다**(마감·하락·기록·전환·실패·완료·진행·착수·체결·
+    // 성사·확대·지속·추진·도입·제공·목적·도모). 예시 없이 지시만 있던 상태는
+    // 측정하지 않았으므로 "예시가 필수"라고 단정하지는 않는다 — 다만 지금 지키고
+    // 있는 형태가 이것이니, 예시를 지우려면 지운 상태로 다시 측정해야 한다.
+    expect(prompt).toContain('급여 확대')
+    expect(prompt).toContain('심포지엄 계획')
+  })
+
+  it('옛 개조식(~함, ~임) 지시가 남아 있지 않다', () => {
+    // 2026-09-02 사용자 요청으로 바뀐 규칙이다. 옛 줄이 함께 남으면 모델에게
+    // 서로 모순되는 두 문체를 동시에 요구하게 되고, 그때 무엇이 나올지는
+    // 모델과 그날 운에 달린다 — 화면에 두 문체가 섞여 나온다.
+    expect(prompt).not.toContain('개조식')
+    expect(prompt).not.toContain('~함')
+    expect(prompt).not.toContain('~임')
+  })
 })
 
 describe('summaryVariantLabel', () => {
