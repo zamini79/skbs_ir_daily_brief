@@ -92,9 +92,21 @@ describe('enforceLimit', () => {
     const s = '가'.repeat(150)
     expect([...enforceLimit(s)].length).toBeLessThanOrEqual(100)
   })
-  it('문장 경계가 예산의 절반 이상을 채우면 거기서 자른다', () => {
+  it('문장 경계가 예산의 절반 이상을 채우면 거기서 자른다 — 서식 후라 끝 마침표는 없다', () => {
+    // 서식이 `.` 를 `, ` 로 바꾼 뒤 그 경계에서 자른다. 결과가 구분자로 끝나지 않는다.
     const s = '가'.repeat(60) + '.' + '나'.repeat(200)
-    expect(enforceLimit(s)).toBe('가'.repeat(60) + '.')
+    expect(enforceLimit(s)).toBe('가'.repeat(60))
+  })
+  it('100자 이내여도 서식은 입힌다 — 화면 모양은 길이와 무관하다', () => {
+    expect(enforceLimit(' 1000억원 규모 계약 체결. 4000억 달성... 확대 방침. ')).toBe(
+      '1,000억원 규모 계약 체결, 4,000억원 달성…확대 방침',
+    )
+  })
+  it('서식이 글자 수를 늘려 100자를 넘기면 그 뒤에 자른다', () => {
+    // 서식 전 100자, 서식 후 104자. 절삭이 먼저였다면 그대로 통과해 100자를 넘긴다.
+    const s = '가'.repeat(46) + ', ' + '나'.repeat(40) + ' 1000억 1000억'
+    expect([...s].length).toBe(100)
+    expect([...enforceLimit(s)].length).toBeLessThanOrEqual(100)
   })
   it('문장 경계가 너무 앞쪽이면 경계를 버리고 100자를 채운다', () => {
     // 예전에는 여기서 6자짜리 "첫 문장임." 만 남았다. 그 6자는 화면에서 정상적으로

@@ -73,6 +73,57 @@ describe('buildPrompt', () => {
   })
 })
 
+describe('buildPrompt — 문장부호·금액·제목 중복 (담당자 피드백 2026-10-02)', () => {
+  const prompt = buildPrompt('제목', '본문')
+
+  it('제목에 없는 본문의 주요 내용을 담으라고 요구한다 — 1안도 포함', () => {
+    expect(prompt).toContain('제목에 이미 나온 사실은 다시 쓰지 말 것')
+    expect(prompt).toContain('제목에 없는 본문의 주요 내용')
+    expect(prompt).toContain('1안(수치 중심)도 마찬가지')
+    expect(prompt).toContain('본문에만 있는 수치')
+  })
+
+  it('옛 「기사 제목을 반복하지 말 것」이 남아 있지 않다', () => {
+    // 새 규칙과 나란히 두면 짧은 쪽이 「문장 그대로 베끼지만 말라」로 읽힐 여지가 있다.
+    expect(prompt).not.toContain('기사 제목을 반복하지 말 것')
+    expect(prompt).not.toContain('제목을 반복')
+  })
+
+  it('문장 연결 규칙: `, ` 로 잇고 `…` 은 한 곳, 마침표 없음', () => {
+    expect(prompt).toContain('", "')
+    expect(prompt).toContain('한 곳에만 말줄임표(…)')
+    expect(prompt).toContain('마침표는 쓰지 않는다')
+  })
+
+  it('금액 표기 규칙: 천 단위 콤마와 원', () => {
+    expect(prompt).toContain('"1000억" → "1,000억원"')
+  })
+
+  it('콤마 규칙이 수량으로 번지지 않게 금액에만이라고 밝힌다', () => {
+    // 실측(2026-10-02): 이 줄 없이 돌렸더니 본문의 「360만4000여주」가 「3,600,000여주」로
+    // 나왔다 — 수량에 콤마가 붙은 데다 3,604,000 이 3,600,000 으로 뭉개졌다.
+    expect(prompt).toContain('금액에만 적용한다')
+    expect(prompt).toContain('기사 표기 그대로')
+  })
+
+  it('담당자 예시를 싣되 형식 예시일 뿐이라고 밝힌다', () => {
+    // 예시의 내용은 지적받은 바로 그 제목 반복 문장이다. 내용까지 본보기로 읽히면
+    // 제목 중복 규칙과 정면으로 부딪힌다.
+    expect(prompt).toContain(
+      '셀트리온이 1,000억원 규모(56만853주) 자사주 추가 매입 결정, 올해 누적 매입액은 총 4,000억원 달성…중장기적으로 당기순이익의 33%를 주주에게 환원할 방침',
+    )
+    expect(prompt).toContain('예시')
+    expect(prompt).toContain('내용 선택의 본보기가 아니다')
+  })
+
+  it('프롬프트 자신이 마침표로 문장을 잇는 예시를 싣지 않는다', () => {
+    // 예시 문장이 마침표를 쓰면 지시와 예시가 서로 다른 말을 한다.
+    const example = prompt.split('\n').find(l => l.startsWith('셀트리온이'))!
+    expect(example).not.toMatch(/[.。]/)
+    expect((example.match(/…/g) ?? []).length).toBe(1)
+  })
+})
+
 describe('summaryVariantLabel', () => {
   it('정의된 관점은 번호와 이름을 함께 준다', () => {
     expect(summaryVariantLabel(1)).toBe('① 수치 중심')

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { charLength, truncateAtSentence } from './text'
+import { charLength, truncateAtSentence, truncateAtClause } from './text'
 
 describe('charLength', () => {
   it('한글을 코드포인트로 센다', () => {
@@ -63,5 +63,46 @@ describe('truncateAtSentence', () => {
     const text = '가나다라마바사아자차카타파하'
     const result = truncateAtSentence(text, 5)
     expect(charLength(result)).toBe(5)
+  })
+})
+
+describe('truncateAtClause — 서식 후 요약의 경계(`, ` 와 `…`)', () => {
+  it('한도 이내면 그대로 둔다', () => {
+    expect(truncateAtClause('가 결정, 나 달성', 100)).toBe('가 결정, 나 달성')
+  })
+  it('마지막 `, ` 앞에서 자르고, 구분자로 끝나지 않는다', () => {
+    const t = '가'.repeat(60) + ', ' + '나'.repeat(60)
+    expect(truncateAtClause(t, 100)).toBe('가'.repeat(60))
+  })
+  it('`…` 앞에서도 자른다', () => {
+    const t = '가'.repeat(60) + '…' + '나'.repeat(60)
+    expect(truncateAtClause(t, 100)).toBe('가'.repeat(60))
+  })
+  it('숫자 안의 콤마(`1,000`)는 경계가 아니다', () => {
+    const t = '가'.repeat(55) + ' 1,000억원 ' + '나'.repeat(60)
+    const r = truncateAtClause(t, 100)
+    expect(charLength(r)).toBe(100)
+    expect(r).toContain('1,000억원')
+  })
+  it('경계가 너무 앞이면 하드 컷한다 — truncateAtSentence 와 같은 판단', () => {
+    // "SK바이오, " 에서 자르면 7자만 남고 화면에서 정상적으로 짧은 요약과 구분되지 않는다.
+    const t = 'SK바이오, ' + '가'.repeat(120)
+    const r = truncateAtClause(t, 100)
+    expect(charLength(r)).toBe(100)
+  })
+  it('경계가 예산의 절반을 정확히 채우면 경계를 지킨다', () => {
+    const t = '가'.repeat(9) + ', ' + '나'.repeat(50)
+    expect(truncateAtClause(t, 18)).toBe('가'.repeat(9))
+  })
+  it('하드 컷이 구분자 직후에 떨어지면 구분자를 걷어낸다', () => {
+    // 앞쪽 경계는 너무 앞이라 하드 컷 — 그 컷이 `, ` 의 콤마와 공백 사이에 떨어지면
+    // head 안에는 `, ` 가 없어 경계로 잡히지 않고, 콤마만 끝에 남는다.
+    const t = '가'.repeat(3) + ', ' + '나'.repeat(94) + ', ' + '다'.repeat(20)
+    const r = truncateAtClause(t, 100)
+    expect(r).toBe('가'.repeat(3) + ', ' + '나'.repeat(94))
+  })
+  it('하드 컷이 숫자 콤마 직후에 떨어지면 콤마를 남긴다 — `4` 로 보이면 잘린 줄 모른다', () => {
+    const t = '가'.repeat(98) + '4,000억원'
+    expect(truncateAtClause(t, 100)).toBe('가'.repeat(98) + '4,')
   })
 })

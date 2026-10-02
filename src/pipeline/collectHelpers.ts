@@ -1,5 +1,6 @@
 import { marketCapKrwTrillion } from '@/domain/calc'
 import { charLength, truncateAtSentence } from '@/domain/text'
+import { finalizeSummary } from '@/domain/summaryFormat'
 import { tokenize, jaccard } from './cluster'
 import type { SummarySet } from '@/providers/summarize/gemini'
 import { MAX_SUMMARY_CHARS, SUMMARY_VARIANTS } from '@/providers/summarize/prompt'
@@ -512,6 +513,18 @@ function isNearDuplicate(a: string, b: string): boolean {
  * truncateAtSentence 로 문장 경계에서 자른다 — 모델이 만든 요약과 같은 제약이다.
  * 본문이 짧아 서로 다른 구간을 뽑을 수 없으면 중복을 만들지 않고 개수를 줄인다.
  * (3)은 (1)·(2)가 상한을 못 채웠을 때에만 실제로 쓰인다.
+ *
+ * **구간은 원문 기준으로 정하고, 내보내기 직전에 모델 요약과 같은 서식을 입힌다**
+ * (`finalizeSummary`, 2026-10-02). 담당자는 화면의 요약을 출처와 무관하게 메일에
+ * 그대로 붙이므로 문장부호·금액 표기가 같아야 한다. 순서를 바꾸면 안 된다 — (2)의
+ * 시작 위치는 (1)이 원문에서 소비한 글자 수이고, 서식은 그 글자 수를 바꾼다(마침표
+ * 삭제, 금액 콤마). 그래서 원문 절단은 마침표 경계(`truncateAtSentence`)로 하고,
+ * 서식 뒤의 100자 보장은 `finalizeSummary` 가 한다. 중복 검사도 서식 뒤의 모양으로
+ * 한다 — 담당자에게 보이는 것이 그것이다.
+ *
+ * 그 대가: (1)에 금액 콤마가 붙어 100자를 넘으면 `finalizeSummary` 가 끝 문장을 한 번
+ * 더 떨구고, 그 문장은 (2)로 넘어가지 않는다. 겹치지는 않고 빠질 뿐이다 — 발췌는
+ * 원래 본문의 일부만 싣는 것이라 이쪽이 위치 계산을 서식과 엮는 것보다 낫다.
  */
 export function buildFallbackSummaries(body: string, snippet: string): string[] {
   const cap = (s: string): string => {
@@ -544,7 +557,8 @@ export function buildFallbackSummaries(body: string, snippet: string): string[] 
   // 공백 하나) 경우가 흔하다 — 정확히 같은 문자열만 보면 이런 사실상-중복을
   // 놓친다.
   const out: string[] = []
-  for (const s of slices) {
+  for (const raw of slices) {
+    const s = finalizeSummary(raw, MAX_SUMMARY_CHARS)
     if (!s) continue
     if (out.some(existing => isNearDuplicate(existing, s))) continue
     out.push(s)

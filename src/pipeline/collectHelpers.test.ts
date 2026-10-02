@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { formatSummary } from '@/domain/summaryFormat'
 import { charLength } from '@/domain/text'
 import {
   resolveAliases,
@@ -787,7 +788,7 @@ describe('buildFallbackSummaries', () => {
 
   it('본문이 비어 있으면 스니펫만으로 만든다', () => {
     const r = buildFallbackSummaries('', SNIPPET)
-    expect(r).toEqual([SNIPPET])
+    expect(r).toEqual([formatSummary(SNIPPET)])
   })
 
   it('본문과 스니펫이 둘 다 비어 있으면 빈 배열을 준다', () => {
@@ -810,7 +811,7 @@ describe('buildFallbackSummaries', () => {
     // 경로가 영영 도달 불가가 됐다면, 본문이 짧은 날 폴백이 1개로 쪼그라든다.
     const shortBody = '짧은 본문 하나뿐인 문장입니다'
     const r = buildFallbackSummaries(shortBody, SNIPPET)
-    expect(r).toEqual([shortBody, SNIPPET])
+    expect(r).toEqual([shortBody, formatSummary(SNIPPET)])
   })
 
   it('공백 하나만 다른 경우도 중복으로 보고 버린다', () => {
@@ -818,6 +819,41 @@ describe('buildFallbackSummaries', () => {
     const snippetWithExtraSpace = '짧은  본문   문장입니다' // 공백만 더 들어간, 사실상 같은 문장
     const r = buildFallbackSummaries(body, snippetWithExtraSpace)
     expect(r).toHaveLength(1)
+  })
+
+  it('발췌도 모델 요약과 같은 문장부호·금액 표기를 따른다 (담당자 피드백 2026-10-02)', () => {
+    // 담당자는 화면의 요약을 출처와 무관하게 메일에 그대로 붙인다. 발췌만 마침표로
+    // 끝나거나 `1000억원` 으로 나오면 그 칸만 손으로 고쳐야 한다.
+    const body = '셀트리온이 1000억원 규모 자사주를 매입한다. 올해 누적 매입액은 4000억 규모다. ' +
+      Array.from({ length: 20 }, (_, i) => `추가 문장 ${i + 1}이다.`).join(' ')
+    const r = buildFallbackSummaries(body, SNIPPET)
+    expect(r).toHaveLength(2)
+    for (const s of r) {
+      expect(s).not.toMatch(/[.。,…]$/)
+      expect(s).not.toMatch(/(?<![0-9])\.|\.(?![0-9])/)
+      expect((s.match(/…/g) ?? []).length).toBeLessThanOrEqual(1)
+      expect(charLength(s)).toBeLessThanOrEqual(100)
+    }
+    expect(r[0]).toContain('1,000억원')
+    expect(r[0]).toContain('4,000억원 규모')
+  })
+
+  it('두 번째 구간은 원문 기준으로 이어진다 — 서식이 글자 수를 바꿔도 겹치지 않는다', () => {
+    // (2)의 시작점은 (1)이 **원문에서** 소비한 글자 수다. 서식 후 글자 수로 잡으면
+    // 위치가 어긋나 문장 중간에서 시작한다.
+    //
+    // 실측한 성질: 원문 100자 이내로 자른 (1)에 금액 콤마가 붙어 100자를 넘으면
+    // `finalizeSummary` 가 끝 문장을 한 번 더 떨군다. 그 문장은 (2)로 넘어가지 않는다
+    // (여기서는 문장 5). 겹치지는 않고 빠질 뿐이며, 발췌는 원래 본문 일부만 싣는다.
+    const sentences = Array.from({ length: 30 }, (_, i) => `문장 ${i + 1}에서 1000억원 달성이다.`)
+    const r = buildFallbackSummaries(sentences.join(' '), '')
+    expect(r).toHaveLength(2)
+    const nums = (t: string) => [...t.matchAll(/문장 (\d+)에서/g)].map(m => Number(m[1]))
+    const a = nums(r[0])
+    const b = nums(r[1])
+    expect(a[0]).toBe(1)
+    expect(Math.min(...b)).toBeGreaterThan(Math.max(...a))
+    for (const part of r[1].split(', ')) expect(part).toMatch(/^문장 \d+에서 1,000억원 달성이다$/)
   })
 
   it('정말로 다른 스니펫은 살아남는다 (과잉 제거 방지)', () => {

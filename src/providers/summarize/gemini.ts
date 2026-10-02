@@ -1,4 +1,4 @@
-import { charLength, truncateAtSentence } from '@/domain/text'
+import { finalizeSummary } from '@/domain/summaryFormat'
 import { kstDateString } from '@/domain/date'
 import { buildPrompt, MAX_SUMMARY_CHARS } from './prompt'
 import { isTransientNetworkError } from '../transientNetwork'
@@ -82,7 +82,7 @@ export const MODEL_CHAIN_ENTRIES: readonly ChainEntry[] = [
   {
     model: 'gemini-3.1-flash-lite',
     quality: 'verified',
-    note: '100자를 자주 넘겨 truncateAtSentence 개입이 잦다 — 그래서 검증군 중 마지막이다.',
+    note: '100자를 자주 넘겨 길이 절삭 개입이 잦다 — 그래서 검증군 중 마지막이다.',
   },
   {
     model: 'gemini-3-flash-preview',
@@ -384,7 +384,7 @@ export type SummarySet = {
   context: string
   /** 이 2안을 실제로 만들어낸 모델. 폴백 체인에서 몇 번째로 답한 모델인지
    * 나중에 추적할 수 있도록 남긴다 — 예: gemini-3.1-flash-lite 는 100자
-   * 제한을 자주 넘겨서 truncateAtSentence 가 더 많이 개입한다. 체인이 8개로
+   * 제한을 자주 넘겨서 길이 절삭(enforceLimit)이 더 많이 개입한다. 체인이 8개로
    * 늘어난 뒤로는 "오늘 요약이 왜 이상한가"의 답이 대개 이 값에 있다. */
   model: string
 }
@@ -426,13 +426,15 @@ export function extractJsonText(payload: unknown): string {
  * 성향이다), 무료 티어의 일일 쿼터가 실질 제약이라 한 건의 절삭을 고치려고
  * 그날 남은 요약 전부의 품질을 걸게 되며, 호출 지연이 8초다.
  *
- * 절삭이 내용을 통째로 날리지 않도록 하는 것은 `truncateAtSentence` 쪽 책임이다
+ * **서식 → 절삭 순서다** (2026-10-02). 화면에 나가는 문장부호·금액 표기는 프롬프트가
+ * 아니라 `formatSummary` 가 보장하고, 서식 후에는 마침표가 없으므로 절삭 경계는
+ * `, ` 와 `…` 다(`truncateAtClause`). 금액 콤마가 글자 수를 늘리므로 절삭이 뒤에 온다.
+ *
+ * 절삭이 내용을 통째로 날리지 않도록 하는 것은 절삭 함수 쪽 책임이다
  * (경계가 예산의 절반에 못 미치면 하드 컷 — domain/text.ts).
  */
 export function enforceLimit(s: string): string {
-  const t = s.trim()
-  if (charLength(t) <= MAX_SUMMARY_CHARS) return t
-  return truncateAtSentence(t, MAX_SUMMARY_CHARS)
+  return finalizeSummary(s, MAX_SUMMARY_CHARS)
 }
 
 /**
