@@ -694,15 +694,17 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
   // 않는다. 대신 행 배지·로그·크론 응답에 남는다(위 quoteFallbackUsed 선언부 참고).
   // 마감으로 못 한 건이 있으면 「준비 완료」일 수 없다 — 초록 배너 아래에 빈 요약을
   // 두는 것이 이 저장소가 반복해서 고쳐 온 결함이다.
-  const status = computeRunStatus(
+  // 객체 인자다 — 위치 인자였을 때 한 줄을 지우면 값이 한 칸씩 밀려도 아무도 몰랐다
+  // (collectHelpers.ts 의 RunStatusCounts 주석). priorityNewsFailed 는 일부러 없다.
+  const status = computeRunStatus({
     summariesFailed,
     ytdBaseFailed,
-    newsTally.newsFailed,
+    newsFailed: newsTally.newsFailed,
     fxFailed,
     quoteFailed,
     newsRecordFailed,
     summariesSkippedDeadline,
-  )
+  })
   const statusDetail = buildStatusDetail({
     quoteFailed,
     summariesFailed,

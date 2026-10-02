@@ -216,7 +216,17 @@ describe('우선 검색 실패 — 문장은 남고 배너 색은 그대로', ()
   })
 
   it('computeRunStatus 는 이 카운터를 받지 않는다 — 다른 실패가 없으면 READY 다', () => {
-    // 인자 목록에 이 카운터가 없다는 것 자체가 보장이다. 여기서는 그 결과를 고정한다.
-    expect(computeRunStatus(0, 0, 0, 0, 0, 0, 0)).toBe('READY')
+    // 입력 타입(RunStatusCounts)에 이 카운터가 없다는 것 자체가 보장이다. 여기서는 그 결과를 고정한다.
+    expect(
+      computeRunStatus({
+        summariesFailed: 0,
+        ytdBaseFailed: 0,
+        newsFailed: 0,
+        fxFailed: 0,
+        quoteFailed: 0,
+        newsRecordFailed: 0,
+        summariesSkippedDeadline: 0,
+      }),
+    ).toBe('READY')
   })
 })

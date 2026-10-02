@@ -319,22 +319,34 @@ export async function attemptSummary(
  * 아니라 **화면이 없는 사실을 단정하게 되는** 경우다 — NewsFetch 기록이 없으면
  * rowDisplayState 가 NO_NEWS 를 주고 화면은 「당일·D-1 기사 없음」이라고 말하는데,
  * 그 근거가 실은 없다. 행별로 바로잡을 수 없으니 실행 단위로라도 남긴다. */
-export function computeRunStatus(
-  summariesFailed: number,
-  ytdBaseFailed = 0,
-  newsFailed = 0,
-  fxFailed = 0,
-  quoteFailed = 0,
-  newsRecordFailed = 0,
-  summariesSkippedDeadline = 0,
-): 'READY' | 'PARTIAL' {
-  return summariesFailed > 0 ||
-    ytdBaseFailed > 0 ||
-    newsFailed > 0 ||
-    fxFailed > 0 ||
-    quoteFailed > 0 ||
-    newsRecordFailed > 0 ||
-    summariesSkippedDeadline > 0
+/**
+ * computeRunStatus 의 입력. **전부 필수이고 기본값이 없다.**
+ *
+ * 예전에는 위치 인자 + 기본값이었다. 그래서 collect.ts 에서 가운데 인자 한 줄
+ * (`newsTally.newsFailed,`)을 지워도 tsc·테스트가 모두 통과했다 — 뒤 인자들이 한 칸씩
+ * 당겨지고 마지막 자리는 기본값 0 으로 채워져, 뉴스 조회가 실패한 날 초록 「준비 완료」가
+ * 떴다(Task 41 재리뷰의 변이 실험). 이름 붙은 필수 필드면 빠뜨린 필드는 컴파일 오류이고
+ * 순서는 의미가 없다. **선택 필드나 기본값으로 되돌리지 마라.**
+ */
+export type RunStatusCounts = {
+  summariesFailed: number
+  ytdBaseFailed: number
+  newsFailed: number
+  /** 환율을 못 구한 **통화** 수(collect.ts 의 missingCurrencies.length). */
+  fxFailed: number
+  quoteFailed: number
+  newsRecordFailed: number
+  summariesSkippedDeadline: number
+}
+
+export function computeRunStatus(c: RunStatusCounts): 'READY' | 'PARTIAL' {
+  return c.summariesFailed > 0 ||
+    c.ytdBaseFailed > 0 ||
+    c.newsFailed > 0 ||
+    c.fxFailed > 0 ||
+    c.quoteFailed > 0 ||
+    c.newsRecordFailed > 0 ||
+    c.summariesSkippedDeadline > 0
     ? 'PARTIAL'
     : 'READY'
 }

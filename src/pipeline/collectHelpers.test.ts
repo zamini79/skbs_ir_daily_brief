@@ -21,6 +21,7 @@ import {
   buildFallbackSummaries,
   briefRunStartData,
   createDeadline,
+  type RunStatusCounts,
 } from './collectHelpers'
 import { SUMMARY_VARIANTS } from '@/providers/summarize/prompt'
 
@@ -445,83 +446,108 @@ describe('createDeadline', () => {
   })
 })
 
+/** 실패 카운터가 전부 0 인 입력. 테스트는 여기에 한 필드만 덮어 그 필드의 효과를 본다. */
+const NO_FAILURES: RunStatusCounts = {
+  summariesFailed: 0,
+  ytdBaseFailed: 0,
+  newsFailed: 0,
+  fxFailed: 0,
+  quoteFailed: 0,
+  newsRecordFailed: 0,
+  summariesSkippedDeadline: 0,
+}
+
 describe('computeRunStatus', () => {
   it('요약 실패가 하나라도 있으면 PARTIAL이다', () => {
-    expect(computeRunStatus(1)).toBe('PARTIAL')
-    expect(computeRunStatus(20)).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, summariesFailed: 1 })).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, summariesFailed: 20 })).toBe('PARTIAL')
   })
 
   it('요약 실패가 없으면 READY이다', () => {
-    expect(computeRunStatus(0)).toBe('READY')
+    expect(computeRunStatus(NO_FAILURES)).toBe('READY')
   })
 
   it('연초 기준가 조회 실패도 PARTIAL로 본다 — 요약 실패와 같은 규칙이다', () => {
     // 이 실패는 API 분당 한도 경합이라 어느 종목이 빌지가 매일 달라진다.
     // 상태에 남기지 않으면 재현되지 않는 공란이 되어 아무도 눈치채지 못한다.
-    expect(computeRunStatus(0, 1)).toBe('PARTIAL')
-    expect(computeRunStatus(0, 4)).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, ytdBaseFailed: 1 })).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, ytdBaseFailed: 4 })).toBe('PARTIAL')
   })
 
   it('둘 다 없어야 READY이다', () => {
-    expect(computeRunStatus(0, 0)).toBe('READY')
+    expect(computeRunStatus(NO_FAILURES)).toBe('READY')
   })
 
-  it('기준가 인자를 생략하면 기존 동작 그대로다', () => {
-    expect(computeRunStatus(0)).toBe('READY')
-    expect(computeRunStatus(2)).toBe('PARTIAL')
+  it('다른 카운터가 0 이면 요약 실패만으로 갈린다', () => {
+    expect(computeRunStatus(NO_FAILURES)).toBe('READY')
+    expect(computeRunStatus({ ...NO_FAILURES, summariesFailed: 2 })).toBe('PARTIAL')
   })
 
   it('뉴스 검색 실패도 PARTIAL로 본다', () => {
     // 실패한 행은 화면에서 "당일·D-1 기사 없음"이라는 단정으로 보였다 — 모르는 것을
     // 아는 것처럼 표시한 것이다. 운영자가 실행 단위로도 알 수 있어야 한다.
-    expect(computeRunStatus(0, 0, 1)).toBe('PARTIAL')
-    expect(computeRunStatus(0, 0, 8)).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, newsFailed: 1 })).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, newsFailed: 8 })).toBe('PARTIAL')
   })
 
   it('셋 다 없어야 READY이다', () => {
-    expect(computeRunStatus(0, 0, 0)).toBe('READY')
+    expect(computeRunStatus(NO_FAILURES)).toBe('READY')
   })
 
   it('환율 미확보도 PARTIAL로 본다', () => {
     // 해외사 시가총액이 통째로 공란이 되는데 아무 표시가 없으면 아무도 모른다.
-    expect(computeRunStatus(0, 0, 0, 1)).toBe('PARTIAL')
-    expect(computeRunStatus(0, 0, 0, 6)).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, fxFailed: 1 })).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, fxFailed: 6 })).toBe('PARTIAL')
   })
 
   it('넷 다 없어야 READY이다', () => {
-    expect(computeRunStatus(0, 0, 0, 0)).toBe('READY')
+    expect(computeRunStatus(NO_FAILURES)).toBe('READY')
   })
 
   it('시세 수집 실패도 PARTIAL로 본다 — 나머지가 전부 성공이어도', () => {
     // 이게 없으면 다섯 칸이 전부 공란인 행이 초록색 「준비 완료」 배너 아래에 놓인다.
     // Twelve Data 분당 크레딧 초과면 미국 5행이 통째로 빠지는데 배너는 초록이었다.
-    expect(computeRunStatus(0, 0, 0, 0, 1)).toBe('PARTIAL')
-    expect(computeRunStatus(0, 0, 0, 0, 5)).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, quoteFailed: 1 })).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, quoteFailed: 5 })).toBe('PARTIAL')
   })
 
   it('다섯 가지가 다 없어야 READY이다', () => {
-    expect(computeRunStatus(0, 0, 0, 0, 0)).toBe('READY')
+    expect(computeRunStatus(NO_FAILURES)).toBe('READY')
   })
 
   it('뉴스 상태 기록 실패도 PARTIAL로 본다 — 화면이 근거 없이 「기사 없음」을 단정한다', () => {
-    expect(computeRunStatus(0, 0, 0, 0, 0, 1)).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, newsRecordFailed: 1 })).toBe('PARTIAL')
   })
 
   it('여섯 가지가 다 없어야 READY이다', () => {
-    expect(computeRunStatus(0, 0, 0, 0, 0, 0)).toBe('READY')
+    expect(computeRunStatus(NO_FAILURES)).toBe('READY')
   })
 
-  it('시세 인자를 생략하면 기존 동작 그대로다', () => {
-    expect(computeRunStatus(0, 0, 0, 0)).toBe('READY')
-    expect(computeRunStatus(0, 0, 0, 1)).toBe('PARTIAL')
+  it('다른 카운터가 0 이면 환율만으로 갈린다', () => {
+    expect(computeRunStatus(NO_FAILURES)).toBe('READY')
+    expect(computeRunStatus({ ...NO_FAILURES, fxFailed: 1 })).toBe('PARTIAL')
   })
 
   it('마감으로 못 한 건이 있으면 PARTIAL 이다 — 초록 배너 아래 빈 요약을 두지 않는다', () => {
-    expect(computeRunStatus(0, 0, 0, 0, 0, 0, 4)).toBe('PARTIAL')
+    expect(computeRunStatus({ ...NO_FAILURES, summariesSkippedDeadline: 4 })).toBe('PARTIAL')
   })
 
   it('마감 카운터가 0이면 다른 조건에 영향을 주지 않는다', () => {
-    expect(computeRunStatus(0, 0, 0, 0, 0, 0, 0)).toBe('READY')
+    expect(computeRunStatus(NO_FAILURES)).toBe('READY')
+  })
+
+  // 위치 인자였을 때는 가운데 한 칸이 빠지면 뒤 값이 밀려 다른 카운터로 읽혔다.
+  // 이름 붙은 필드는 어느 것이든 혼자서 PARTIAL 을 만들어야 한다 — 하나라도 판정에서
+  // 빠지면 여기서 그 이름으로 걸린다.
+  it.each(Object.keys(NO_FAILURES) as Array<keyof RunStatusCounts>)('%s 하나만 1 이어도 PARTIAL 이다', key => {
+    expect(computeRunStatus({ ...NO_FAILURES, [key]: 1 })).toBe('PARTIAL')
+  })
+
+  it('필드 순서는 결과에 영향이 없다', () => {
+    const forward: RunStatusCounts = { ...NO_FAILURES, newsFailed: 2 }
+    const reversed = Object.fromEntries(Object.entries(forward).reverse()) as RunStatusCounts
+    expect(computeRunStatus(reversed)).toBe(computeRunStatus(forward))
+    expect(computeRunStatus(reversed)).toBe('PARTIAL')
   })
 })
 
@@ -564,7 +590,7 @@ describe('buildStatusDetail', () => {
   })
 
   it('예산만 걸린 날은 status 를 낮추지 않는다 — 할 일 없는 날의 노란 배너는 배너를 무디게 한다', () => {
-    expect(computeRunStatus(0, 0, 0, 0, 0, 0, 0)).toBe('READY')
+    expect(computeRunStatus(NO_FAILURES)).toBe('READY')
     expect(buildStatusDetail({ ...clean, rateLimitRetriesDenied: 4 })).not.toBeNull()
   })
 
@@ -623,10 +649,15 @@ describe('buildStatusDetail', () => {
       clean,
     ]
     for (const c of cases) {
-      const status = computeRunStatus(
-        c.summariesFailed, c.ytdBaseFailed, c.newsFailed, c.missingCurrencies.length, c.quoteFailed,
-        c.newsRecordFailed,
-      )
+      const status = computeRunStatus({
+        summariesFailed: c.summariesFailed,
+        ytdBaseFailed: c.ytdBaseFailed,
+        newsFailed: c.newsFailed,
+        fxFailed: c.missingCurrencies.length,
+        quoteFailed: c.quoteFailed,
+        newsRecordFailed: c.newsRecordFailed,
+        summariesSkippedDeadline: 0,
+      })
       const detail = buildStatusDetail(c)
       expect(status === 'PARTIAL', JSON.stringify(c)).toBe(detail !== null)
     }
