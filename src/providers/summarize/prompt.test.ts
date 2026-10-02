@@ -106,21 +106,27 @@ describe('buildPrompt — 문장부호·금액·제목 중복 (담당자 피드�
     expect(prompt).toContain('기사 표기 그대로')
   })
 
-  it('담당자 예시를 싣되 형식 예시일 뿐이라고 밝힌다', () => {
-    // 예시의 내용은 지적받은 바로 그 제목 반복 문장이다. 내용까지 본보기로 읽히면
-    // 제목 중복 규칙과 정면으로 부딪힌다.
-    expect(prompt).toContain(
-      '셀트리온이 1,000억원 규모(56만853주) 자사주 추가 매입 결정, 올해 누적 매입액은 총 4,000억원 달성…중장기적으로 당기순이익의 33%를 주주에게 환원할 방침',
-    )
-    expect(prompt).toContain('예시')
-    expect(prompt).toContain('내용 선택의 본보기가 아니다')
+  it('예시는 제목과, 제목에 없는 사실만 쓴 좋은 요약의 쌍이다', () => {
+    // 2026-10-02 컨트롤러 판단: 담당자 예시 문장은 제목 반복이라고 지적받은 바로 그
+    // 문장이고, 제목 없이 실으면 모델은 그것이 제목과 겹친다는 사실을 알 수 없다.
+    expect(prompt).toContain('제목: 셀트리온, 1,000억원 규모 자사주 추가 매입…올해 누적 4,000억원')
+    expect(prompt).toContain('좋은 요약: 취득 주식은 56만853주 규모, 중장기적으로 당기순이익의 33%를 주주에게 환원할 방침')
   })
 
-  it('프롬프트 자신이 마침표로 문장을 잇는 예시를 싣지 않는다', () => {
-    // 예시 문장이 마침표를 쓰면 지시와 예시가 서로 다른 말을 한다.
-    const example = prompt.split('\n').find(l => l.startsWith('셀트리온이'))!
+  it('담당자 원문(제목 반복 문장)을 어떤 형태로도 싣지 않는다 — 나쁜 예도 따라 할 신호다', () => {
+    expect(prompt).not.toContain('1,000억원 규모(56만853주) 자사주 추가 매입 결정')
+    expect(prompt).not.toContain('올해 누적 매입액은 총 4,000억원 달성')
+    expect(prompt).not.toContain('나쁜')
+  })
+
+  it('좋은 요약은 제목의 수치를 다시 쓰지 않고 마침표가 없다', () => {
+    const line = prompt.split('\n').find(l => l.startsWith('- 좋은 요약: '))!
+    const example = line.slice('- 좋은 요약: '.length)
+    expect(example).not.toContain('1,000억원')
+    expect(example).not.toContain('4,000억원')
+    expect(example).not.toContain('자사주')
     expect(example).not.toMatch(/[.。]/)
-    expect((example.match(/…/g) ?? []).length).toBe(1)
+    expect(example).toContain(', ')
   })
 })
 

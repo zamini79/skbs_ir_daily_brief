@@ -129,6 +129,16 @@ describe('summarize', () => {
     expect(r).toEqual({ numeric: '수치임', context: '배경임', model: MODEL_CHAIN[0] })
   })
 
+  it('두 필드 모두 서식을 거쳐 돌려준다 — 화면 모양은 summarize() 출구가 보장한다', async () => {
+    // enforceLimit 단위 테스트만으로는 배선이 막히지 않는다(리뷰 2026-10-02): context 쪽
+    // enforceLimit 를 빼거나 두 필드를 옛 truncateAtSentence 로 되돌려도 전부 통과했다.
+    // 100자 이내 입력이라 옛 절삭은 손대지 않고 그대로 돌려준다 — 그래서 서식이 빠지면 여기서 걸린다.
+    stubOnce({ numeric: '1000억원 계약. 확대 방침.', context: '배경 설명. 4000억 규모...' })
+    const r = await summarize('제목', '본문')
+    expect(r.numeric).toBe('1,000억원 계약, 확대 방침')
+    expect(r.context).toBe('배경 설명, 4,000억원 규모')
+  })
+
   it('100자를 넘긴 응답을 잘라서 돌려준다', async () => {
     stubOnce({ numeric: '가'.repeat(180), context: '배경임' })
     const r = await summarize('제목', '본문')
