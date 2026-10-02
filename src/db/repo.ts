@@ -2,9 +2,17 @@ import { prisma } from './client'
 import { changePct as calcChangePct } from '@/domain/calc'
 import { monthRange } from '@/domain/calendar'
 import { runProgressView } from '@/domain/runProgress'
+import { ownsNews } from '@/domain/newsShare'
 import type { Prisma } from '@prisma/client'
 
-export type RowState = 'NEWS_FAILED' | 'NO_NEWS' | 'OMITTED' | 'PENDING' | 'SELECTED' | 'STALE_SELECTION'
+export type RowState =
+  | 'NEWS_FAILED'
+  | 'NO_NEWS'
+  | 'OMITTED'
+  | 'PENDING'
+  | 'SELECTED'
+  | 'STALE_SELECTION'
+  | 'NEWS_SHARED'
 
 /**
  * 시스템이 후보를 못 만든 것(NO_NEWS)과 담당자가 뺀 것(OMITTED)은 다르다.
@@ -29,14 +37,27 @@ export type RowState = 'NEWS_FAILED' | 'NO_NEWS' | 'OMITTED' | 'PENDING' | 'SELE
  * 후보 자체를 지우면 chosenCandidateId와 chosenSummaryId가 항상 함께 null이
  * 되므로(요약도 그 후보에 딸려 지워짐), chosenCandidateId 하나만 봐도 진짜
  * 무효화 신호를 놓치지 않는다.
+ *
+ * NEWS_SHARED 는 **자기 뉴스 칸이 없는 행**이다(domain/newsShare.ts — Nasdaq 은
+ * S&P500 의 칸을 함께 쓴다). 맨 먼저 판정한다. 그 행은 뉴스를 검색하지 않으므로
+ * NewsFetch 기록이 없고, 그대로 두면 NO_NEWS(「기사 없음」)로 **단정**된다 — 사실이
+ * 아니다. 공유 이전 날짜에는 후보가 남아 있어 PENDING(「미검토」)이 되는데, 그러면
+ * 담당자에게 할 일처럼 보인다. 검수는 소유 행에서만 한다.
  */
 export function rowDisplayState(row: {
+  /**
+   * 뉴스 칸 공유 판정의 키(domain/newsShare.ts). **필수다** — 선택 인자로 두면 호출부에서
+   * 이 줄이 지워져도 타입이 통과하고 Nasdaq 이 조용히 「미검토」·「기사 없음」으로 돌아간다.
+   * getBriefRows 는 Prisma 를 써서 테스트가 부르지 못하는 자리라 타입이 유일한 방어선이다.
+   */
+  quoteSymbol: string
   candidateCount: number
   decision: string
   chosenCandidateId: string | null
   /** NewsFetch.status. 기록이 없으면 null (이 기록이 생기기 전에 수집된 실행). */
   newsFetchStatus?: string | null
 }): RowState {
+  if (!ownsNews(row.quoteSymbol)) return 'NEWS_SHARED'
   // 후보가 0건인 이유가 두 가지다. 검색이 실패했다면 "기사가 없다"고 말할 근거가
   // 없으므로 NO_NEWS 로 뭉뚱그리지 않는다 — 담당자가 직접 찾아봐야 하는 행이다.
   if (row.candidateCount === 0 && row.newsFetchStatus === 'FAILED') return 'NEWS_FAILED'
@@ -55,6 +76,7 @@ const ROW_STATE_LABEL: Record<RowState, string> = {
   PENDING: '미검토',
   SELECTED: '선택 완료',
   STALE_SELECTION: '선택 무효화됨 (재수집으로 초기화 — 다시 검토 필요)',
+  NEWS_SHARED: '뉴스는 위 행과 한 칸 (검수는 그 행에서)',
 }
 
 export function rowStateLabel(state: RowState): string {
@@ -107,9 +129,11 @@ export function summaryErrorShortLabel(raw: string): string {
  *
  * PENDING의 'article'은 반드시 confirmed: false 로 표시된다 — 1순위 후보를
  * 미리보기로 보여주는 것이지 담당자가 확정한 것이 아니다. SELECTED와 같은 'article'
- * kind를 쓰되 confirmed 플래그로 구분해, 호출자가 시각적으로도(진하기/기울임/
- * "미확정" 표시 등) 절대 같아 보이지 않게 렌더해야 한다 — 확정본과 구분되지
- * 않으면 담당자가 미확정 미리보기를 그대로 메일에 싣게 된다.
+ * kind를 쓰되 confirmed 플래그로 구분해, 호출자가 시각적으로도(「미확정」 배지·행
+ * 배경 등) 절대 같아 보이지 않게 렌더해야 한다 — 확정본과 구분되지 않으면 담당자가
+ * 미확정 미리보기를 그대로 메일에 싣게 된다. 글자 서식(기울임·색)으로 가르지는
+ * 않는다 — 담당자가 이 칸을 복사해 메일에 붙이므로 서식이 메일까지 따라간다
+ * (2026-10-02 피드백, BriefTable 의 NewsCell 주석).
  *
  * OMITTED는 NO_NEWS와 똑같이 '텅 빈 칸'으로 보이면 안 된다 — 하나는 "기사가
  * 없었다"(NO_NEWS)이고 하나는 "담당자가 뺐다"(OMITTED)라서, 별도 kind로
@@ -127,6 +151,8 @@ export type NewsColumnContent =
   | { kind: 'omitted' }
   | { kind: 'none' }
   | { kind: 'label'; text: string }
+  /** 다른 행과 함께 쓰는 칸. 내용은 소유 행이 그린다(화면은 병합, 병합이 안 되면 참조 문구). */
+  | { kind: 'shared' }
 
 export function newsColumnContent(row: {
   state: RowState
@@ -136,6 +162,8 @@ export function newsColumnContent(row: {
   editedText: string | null
 }): NewsColumnContent {
   switch (row.state) {
+    case 'NEWS_SHARED':
+      return { kind: 'shared' }
     case 'NEWS_FAILED':
     case 'STALE_SELECTION':
       return { kind: 'label', text: rowStateLabel(row.state) }
@@ -400,6 +428,8 @@ export type ClientInstrument = {
   currency: string
   isIndex: boolean
   quoteSource: string
+  /** 뉴스 칸 공유 판정(domain/newsShare.ts)의 키. */
+  quoteSymbol: string
 }
 
 export type ClientRow = {
@@ -487,6 +517,7 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
         currency: inst.currency,
         isIndex: inst.isIndex,
         quoteSource: inst.quoteSource,
+        quoteSymbol: inst.quoteSymbol,
       },
       quote: q
         ? {
@@ -521,6 +552,7 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
         manualPrevClose,
       },
       state: rowDisplayState({
+        quoteSymbol: inst.quoteSymbol,
         candidateCount: mine.length,
         decision: sel?.decision ?? 'PENDING',
         chosenCandidateId: sel?.chosenCandidateId ?? null,

@@ -4,11 +4,21 @@ import { useState, useTransition } from 'react'
 import { charLength } from '@/domain/text'
 import { summaryVariantLabel } from '@/providers/summarize/prompt'
 import { sameEventBadgeLabel, summaryErrorShortLabel, type ClientRow } from '@/db/repo'
+import { NEWS_SUMMARY_STYLE, NEWS_TITLE_STYLE } from '@/domain/newsStyle'
 import { selectNews, omitNews, editSummary, saveManualQuote } from './actions'
 
 const SUMMARY_MAX = 100
 
-export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) {
+export function RowPanel({
+  runDate,
+  row,
+  newsOwnerName = null,
+}: {
+  runDate: string
+  row: ClientRow
+  /** 이 행이 뉴스 칸을 다른 행과 함께 쓰면 그 행의 이름(domain/newsShare.ts). */
+  newsOwnerName?: string | null
+}) {
   const [, startTransition] = useTransition()
   const instrumentId = row.instrument.id
   const isManualSource = row.instrument.quoteSource === 'manual'
@@ -127,102 +137,117 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
         </p>
       )}
 
-      <fieldset className="space-y-2">
-        <legend className="mb-1 text-[12px] font-semibold text-ink-muted">뉴스 후보</legend>
-        {/*
-          * 후보 0건의 두 가지 뜻을 갈라서 말한다. 검색이 실패했으면 "기사가 없다"고
-          * 말할 근거가 없다 — 담당자가 직접 찾아봐야 하는 행이다.
-          * 사유는 error 원문만 근거로 삼고 원인을 지어내지 않는다. 원문이 없으면
-          * (기록 이전 실행) 사유를 짐작하지 않고 미기록이라고만 말한다.
-          */}
-        {row.candidates.length === 0 && row.state === 'NEWS_FAILED' && (
-          <p className="text-[13px] text-fail-fg" title={row.newsFetchError ?? undefined}>
-            뉴스 조회에 실패했습니다 — 기사가 없는 것이 아니라 확인하지 못한 것입니다.
-            직접 검색해 확인해 주세요.
-            <span className="mt-0.5 block text-[12px] text-fail-fg">
-              사유: {row.newsFetchError ?? '미기록'}
-            </span>
-          </p>
-        )}
-        {row.candidates.length === 0 && row.state !== 'NEWS_FAILED' && (
-          <p className="text-[13px] text-ink-faint">당일·D-1 기사가 없습니다.</p>
-        )}
-        {row.candidates.map(c => (
-          <label
-            key={c.id}
-            className={`block cursor-pointer rounded border p-2 text-[13px] text-ink ${
-              row.selection.chosenCandidateId === c.id
-                ? 'border-ok-border bg-ok'
-                : 'border-line bg-page'
-            }`}
-          >
-            <div className="flex items-start gap-2">
-              <input
-                type="radio"
-                name={`cand-${instrumentId}`}
-                checked={row.selection.chosenCandidateId === c.id}
-                onChange={() => handlePickCandidate(c.id)}
-                className="mt-1"
-              />
-              <div className="flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <a
-                    href={c.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={e => e.stopPropagation()}
-                    className="font-medium text-link hover:underline"
-                  >
-                    {c.title}
-                  </a>
-                  {c.sameEventAsRank != null && (
-                    <span className="rounded bg-tag px-1.5 py-0.5 text-[10px] font-medium text-tag-fg">
-                      {sameEventBadgeLabel(c.sameEventAsRank)}
-                    </span>
+      {/*
+        * 뉴스 칸을 다른 행과 함께 쓰는 행(Nasdaq → S&P500). 여기서는 뉴스를 고르지 않는다 —
+        * 고를 수 있게 두면 화면에 보이지 않는 선택이 생긴다(병합된 칸은 소유 행의 선택만
+        * 그린다). 공유 이전 날짜에 이 행 후보가 DB 에 남아 있어도 같은 규칙이다.
+        */}
+      {row.state === 'NEWS_SHARED' && (
+        <p className="text-[13px] text-ink-muted">
+          이 행의 뉴스는 {newsOwnerName !== null ? `${newsOwnerName} 행` : '위 행'}과 한 칸입니다. 기사·요약은
+          그 행에서 고르세요.
+        </p>
+      )}
+
+      {row.state !== 'NEWS_SHARED' && (
+        <fieldset className="space-y-2">
+          <legend className="mb-1 text-[12px] font-semibold text-ink-muted">뉴스 후보</legend>
+          {/*
+            * 후보 0건의 두 가지 뜻을 갈라서 말한다. 검색이 실패했으면 "기사가 없다"고
+            * 말할 근거가 없다 — 담당자가 직접 찾아봐야 하는 행이다.
+            * 사유는 error 원문만 근거로 삼고 원인을 지어내지 않는다. 원문이 없으면
+            * (기록 이전 실행) 사유를 짐작하지 않고 미기록이라고만 말한다.
+            */}
+          {row.candidates.length === 0 && row.state === 'NEWS_FAILED' && (
+            <p className="text-[13px] text-fail-fg" title={row.newsFetchError ?? undefined}>
+              뉴스 조회에 실패했습니다 — 기사가 없는 것이 아니라 확인하지 못한 것입니다.
+              직접 검색해 확인해 주세요.
+              <span className="mt-0.5 block text-[12px] text-fail-fg">
+                사유: {row.newsFetchError ?? '미기록'}
+              </span>
+            </p>
+          )}
+          {row.candidates.length === 0 && row.state !== 'NEWS_FAILED' && (
+            <p className="text-[13px] text-ink-faint">당일·D-1 기사가 없습니다.</p>
+          )}
+          {row.candidates.map(c => (
+            <label
+              key={c.id}
+              className={`block cursor-pointer rounded border p-2 text-[13px] text-ink ${
+                row.selection.chosenCandidateId === c.id
+                  ? 'border-ok-border bg-ok'
+                  : 'border-line bg-page'
+              }`}
+            >
+              <div className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name={`cand-${instrumentId}`}
+                  checked={row.selection.chosenCandidateId === c.id}
+                  onChange={() => handlePickCandidate(c.id)}
+                  className="mt-1"
+                />
+                <div className="flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* 표의 뉴스 칸과 같은 인라인 서식 — 담당자가 여기서도 복사한다(domain/newsStyle.ts). */}
+                    <a
+                      href={c.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={e => e.stopPropagation()}
+                      style={NEWS_TITLE_STYLE}
+                    >
+                      {c.title}
+                    </a>
+                    {c.sameEventAsRank != null && (
+                      <span className="rounded bg-tag px-1.5 py-0.5 text-[10px] font-medium text-tag-fg">
+                        {sameEventBadgeLabel(c.sameEventAsRank)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 text-[12px] text-ink-muted">
+                    {c.publisher} · {new Date(c.publishedAt).toLocaleString('ko-KR')} · {c.clusterSize}개 매체
+                  </div>
+                  {c.summaryError && (
+                    // title에 원문을 그대로 남긴다 — 담당자에게는 모델명 나열이 의미
+                    // 없지만(비개발자, 08:00 마감 전 급하게 훑는 화면), 운영자는 원문이
+                    // 필요할 수 있으므로 지우지 않는다.
+                    <p className="mt-1 text-[12px] text-accent" title={c.summaryError}>
+                      {summaryErrorShortLabel(c.summaryError)}
+                      {c.summaries.some(s => s.isFallback) && ' — 아래는 본문 발췌로 대체됨'}
+                    </p>
+                  )}
+                  {/*
+                   * summaryError가 null인데 요약도 없는 경우 — 사유를 함부로 짐작해 말하지
+                   * 않는다("본문 부족" 등). 이 화면은 실패 사유 추적(summaryError/failure
+                   * counters)이 생기기 전에 수집된 실행에서만 나타나야 하는 레거시 경로다.
+                   * 그 이후 실행은 실패든 건너뜀이든 항상 summaryError를 남기므로 위
+                   * 분기로 간다.
+                   */}
+                  {!c.summaryError && c.summaries.length === 0 && (
+                    <p className="mt-1 text-[12px] text-ink-faint">요약 없음 (사유 미기록)</p>
                   )}
                 </div>
-                <div className="mt-0.5 text-[12px] text-ink-muted">
-                  {c.publisher} · {new Date(c.publishedAt).toLocaleString('ko-KR')} · {c.clusterSize}개 매체
-                </div>
-                {c.summaryError && (
-                  // title에 원문을 그대로 남긴다 — 담당자에게는 모델명 나열이 의미
-                  // 없지만(비개발자, 08:00 마감 전 급하게 훑는 화면), 운영자는 원문이
-                  // 필요할 수 있으므로 지우지 않는다.
-                  <p className="mt-1 text-[12px] text-accent" title={c.summaryError}>
-                    {summaryErrorShortLabel(c.summaryError)}
-                    {c.summaries.some(s => s.isFallback) && ' — 아래는 본문 발췌로 대체됨'}
-                  </p>
-                )}
-                {/*
-                 * summaryError가 null인데 요약도 없는 경우 — 사유를 함부로 짐작해 말하지
-                 * 않는다("본문 부족" 등). 이 화면은 실패 사유 추적(summaryError/failure
-                 * counters)이 생기기 전에 수집된 실행에서만 나타나야 하는 레거시 경로다.
-                 * 그 이후 실행은 실패든 건너뜀이든 항상 summaryError를 남기므로 위
-                 * 분기로 간다.
-                 */}
-                {!c.summaryError && c.summaries.length === 0 && (
-                  <p className="mt-1 text-[12px] text-ink-faint">요약 없음 (사유 미기록)</p>
-                )}
               </div>
-            </div>
+            </label>
+          ))}
+          <label
+            className={`flex items-center gap-2 rounded border p-2 text-[13px] text-ink ${
+              row.selection.decision === 'OMITTED' ? 'border-badge-fg bg-omitted-row' : 'border-line bg-page'
+            }`}
+          >
+            <input
+              type="radio"
+              name={`cand-${instrumentId}`}
+              checked={row.selection.decision === 'OMITTED'}
+              onChange={handleOmit}
+            />
+            이 행에 뉴스 싣지 않음
           </label>
-        ))}
-        <label
-          className={`flex items-center gap-2 rounded border p-2 text-[13px] text-ink ${
-            row.selection.decision === 'OMITTED' ? 'border-badge-fg bg-omitted-row' : 'border-line bg-page'
-          }`}
-        >
-          <input
-            type="radio"
-            name={`cand-${instrumentId}`}
-            checked={row.selection.decision === 'OMITTED'}
-            onChange={handleOmit}
-          />
-          이 행에 뉴스 싣지 않음
-        </label>
-      </fieldset>
+        </fieldset>
+      )}
 
-      {chosenCandidate && (
+      {row.state !== 'NEWS_SHARED' && chosenCandidate && (
         <fieldset className="space-y-2 border-t border-line pt-3">
           <legend className="mb-1 text-[12px] font-semibold text-ink-muted">요약 선택</legend>
           {/*
@@ -268,7 +293,7 @@ export function RowPanel({ runDate, row }: { runDate: string; row: ClientRow }) 
                 ) : (
                   <span className="mr-1 font-medium">{summaryVariantLabel(s.variant)}</span>
                 )}
-                {s.text}
+                <span style={NEWS_SUMMARY_STYLE}>{s.text}</span>
               </span>
             </label>
           ))}

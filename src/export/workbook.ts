@@ -5,6 +5,7 @@ import {
   SHEET_TITLE,
   type ExcelInstrumentRow,
 } from '@/domain/excel'
+import { EXCEL_NEWS_SUMMARY_FONT, EXCEL_NEWS_TITLE_FONT } from '@/domain/newsStyle'
 
 /**
  * 엑셀 워크북 조립. **무엇을 넣을지는 정하지 않는다** — `domain/excel.ts` 의 순수
@@ -19,6 +20,10 @@ import {
  *     행5~ 종목당 2행 — 1행: 값 + 기사 제목 / 2행: 요약문
  *
  * 종목당 2행에서 구분~시가총액(A~G)은 세로 병합하고, 뉴스(H)만 두 행을 각각 쓴다.
+ *
+ * **뉴스 칸을 함께 쓰는 종목**(newsSpan — S&P500 + Nasdaq, domain/newsShare.ts)은
+ * 제목을 소유 종목의 첫 행에 두고, 요약 칸을 그 아래부터 덮이는 종목의 마지막 행까지
+ * 세로 병합한다. 화면의 rowSpan 과 같은 묶음이다.
  */
 
 const COL = {
@@ -107,15 +112,29 @@ export async function buildBriefWorkbook(
     put(ws, top, COL.YTD_PCT, row.ytdPct, 'right', PERCENT_FORMAT)
     put(ws, top, COL.MARKET_CAP, row.marketCap, 'right', MARKET_CAP_FORMAT)
 
+    // 위 종목의 뉴스 칸에 덮인 종목. 병합은 소유 종목 쪽에서 이미 걸었다 — 덮인 칸에
+    // 값이나 서식을 쓰면 병합 칸의 원본 값을 덮어쓸 수 있으므로 손대지 않는다.
+    if (row.newsSpan === 0) return
+
     const titleCellNews = ws.getCell(top, COL.NEWS)
-    titleCellNews.value = row.newsTitle
-    titleCellNews.font = { color: { argb: INK } }
+    // 링크가 있을 때만 링크 서식이다. 「-」·「뉴스 조회 실패」에 파란 밑줄을 입히면 링크가
+    // 아닌 것이 링크처럼 보인다(newsStyle.ts). 링크는 진짜로 건다 — 담당자 피드백의
+    // 「엑셀 다운로드 시 하이퍼링크가 제거됨」이 이것으로 풀린다.
+    if (row.newsUrl !== null && row.newsTitle !== '') {
+      titleCellNews.value = { text: row.newsTitle, hyperlink: row.newsUrl }
+      titleCellNews.font = { ...EXCEL_NEWS_TITLE_FONT, color: { ...EXCEL_NEWS_TITLE_FONT.color } }
+    } else {
+      titleCellNews.value = row.newsTitle
+      titleCellNews.font = { name: EXCEL_NEWS_TITLE_FONT.name, size: EXCEL_NEWS_TITLE_FONT.size, color: { argb: INK } }
+    }
     titleCellNews.alignment = { vertical: 'top', horizontal: 'left', wrapText: true }
     titleCellNews.border = THIN_BORDER
 
+    const summaryLast = top + Math.max(row.newsSpan, 1) * 2 - 1
+    if (summaryLast > bottom) ws.mergeCells(bottom, COL.NEWS, summaryLast, COL.NEWS)
     const summaryCell = ws.getCell(bottom, COL.NEWS)
     summaryCell.value = row.newsSummary
-    summaryCell.font = { color: { argb: INK }, size: 10 }
+    summaryCell.font = { ...EXCEL_NEWS_SUMMARY_FONT, color: { ...EXCEL_NEWS_SUMMARY_FONT.color } }
     summaryCell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true }
     summaryCell.border = THIN_BORDER
   })

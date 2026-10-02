@@ -18,7 +18,9 @@ const ROWS: ExcelInstrumentRow[] = [
     ytdPct: -0.221,
     marketCap: 3.6841,
     newsTitle: '고른 기사 제목',
+    newsUrl: 'https://n.news.naver.com/article/001/0000000001',
     newsSummary: '고른 요약문',
+    newsSpan: 1,
   },
   {
     category: '해외사',
@@ -30,7 +32,9 @@ const ROWS: ExcelInstrumentRow[] = [
     marketCap: '-',
     // 미확정 행 — 빈 칸으로 나가야 한다.
     newsTitle: '',
+    newsUrl: null,
     newsSummary: '',
+    newsSpan: 1,
   },
 ]
 
@@ -81,7 +85,7 @@ describe('종목당 2행 구조와 병합', () => {
   it('뉴스 칸(H)만 병합하지 않고 제목/요약을 각 행에 나눠 쓴다', () => {
     expect(ws.getCell('H5').isMerged).toBe(false)
     expect(ws.getCell('H6').isMerged).toBe(false)
-    expect(ws.getCell('H5').value).toBe('고른 기사 제목')
+    expect(ws.getCell('H5').text).toBe('고른 기사 제목')
     expect(ws.getCell('H6').value).toBe('고른 요약문')
   })
 
@@ -123,5 +127,72 @@ describe('파일 자체', () => {
 
   it('시트 이름이 날짜다', () => {
     expect(ws.name).toBe('2026-08-28')
+  })
+})
+
+describe('뉴스 칸 서식과 하이퍼링크 (2026-10-02 담당자 피드백)', () => {
+  it('확정 기사 제목은 하이퍼링크이고 파란 굵은 밑줄 맑은 고딕 10 이다', () => {
+    const cell = ws.getCell('H5')
+    expect(cell.hyperlink).toBe('https://n.news.naver.com/article/001/0000000001')
+    expect(cell.font).toMatchObject({
+      name: 'Malgun Gothic',
+      size: 10,
+      bold: true,
+      underline: true,
+      color: { argb: 'FF0563C1' },
+    })
+    expect(cell.font.italic).toBeFalsy()
+  })
+
+  it('요약은 검정 맑은 고딕 10, 굵게·기울임 없음', () => {
+    const cell = ws.getCell('H6')
+    expect(cell.font).toMatchObject({ name: 'Malgun Gothic', size: 10, color: { argb: 'FF000000' } })
+    expect(cell.font.bold).toBeFalsy()
+    expect(cell.font.italic).toBeFalsy()
+  })
+
+  it('링크가 없는 칸(미확정 공란)에는 링크 서식을 입히지 않는다', () => {
+    const cell = ws.getCell('H7')
+    expect(cell.hyperlink).toBeUndefined()
+    expect(cell.font.underline).toBeFalsy()
+    expect(cell.font.color?.argb).not.toBe('FF0563C1')
+  })
+})
+
+describe('S&P500 + Nasdaq 뉴스 한 칸', () => {
+  let merged: ExcelJS.Worksheet
+
+  beforeAll(async () => {
+    const base = ROWS[0]
+    const bytes = await buildBriefWorkbook('2026-10-02', [
+      { ...base, category: 'Index', name: 'S&P500', newsSpan: 2 },
+      // 덮인 행의 값은 쓰이지 않아야 한다 — 일부러 다른 글자를 넣어 둔다.
+      { ...base, category: 'Index', name: 'Nasdaq', newsTitle: '쓰이면 안 되는 제목', newsSummary: '쓰이면 안 되는 요약', newsSpan: 0 },
+    ])
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.load(bytes as unknown as Parameters<typeof wb.xlsx.load>[0])
+    merged = wb.worksheets[0]
+  })
+
+  it('시세 칸(A~G)은 각자다 — Nasdaq 행 값이 그대로 있다', () => {
+    expect(merged.getCell('B5').value).toBe('S&P500')
+    expect(merged.getCell('B7').value).toBe('Nasdaq')
+    expect(merged.getCell('C7').isMerged && merged.getCell('C7').master.address).toBe('C7')
+  })
+
+  it('제목은 S&P500 첫 행, 요약 칸은 H6~H8 로 병합된다', () => {
+    expect(merged.getCell('H5').text).toBe('고른 기사 제목')
+    expect(merged.getCell('H5').isMerged).toBe(false)
+    for (const a of ['H6', 'H7', 'H8']) {
+      expect(merged.getCell(a).isMerged, a).toBe(true)
+      expect(merged.getCell(a).master.address, a).toBe('H6')
+    }
+    expect(merged.getCell('H6').value).toBe('고른 요약문')
+  })
+
+  it('Nasdaq 의 뉴스 값은 파일 어디에도 없다', () => {
+    const all: string[] = []
+    merged.eachRow(r => r.eachCell(c => all.push(String(c.text))))
+    expect(all.join(' ')).not.toContain('쓰이면 안 되는')
   })
 })

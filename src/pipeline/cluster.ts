@@ -1,7 +1,7 @@
 import type { NewsItem } from '@/providers/news/types'
 
-/** 같은 사건으로 볼 제목 유사도 임계값 */
-const THRESHOLD = 0.5
+/** 같은 사건으로 볼 제목 유사도 임계값. priorityNews.ts 도 같은 사건 판정에 이 값을 쓴다. */
+export const CLUSTER_THRESHOLD = 0.5
 
 export function normalizeTitle(title: string): string {
   return title
@@ -319,6 +319,10 @@ export function newsPenalty(title: string, opts: { wantsMarketWrap: boolean }): 
  * (b) 홍보성 보도자료가 여러 매체에 동시 배포되면 진짜 뉴스를 밀어낸다. 감점은
  * 후보를 **버리지 않고 뒤로만 민다** — 이유는 newsPenalty 주석 참고.
  *
+ * `members` 를 함께 돌려주는 것은 우선 기사(priorityNews.ts)가 같은 사건 묶음을 빼기
+ * 위해서다 — 대표 제목 하나만 보면 묶음의 다른 기사와만 닮은 우선 기사를 놓친다.
+ * 순위 전체가 필요하면 topN 에 Infinity 를 준다.
+ *
  * opts.wantsMarketWrap 을 그대로 newsPenalty 로 넘긴다. 이 값이 없으면 시황·수급
  * 기사가 KOSPI·S&P500·Nasdaq 행에서도 감점되어 지금 잘 뽑히는 1순위가 전부 엉뚱한
  * 것으로 바뀐다. 그래서 기본값을 두지 않고 호출부가 반드시 정하게 한다.
@@ -329,13 +333,13 @@ export function topClusters(
   items: NewsItem[],
   topN: number,
   opts: { wantsMarketWrap: boolean },
-): Array<{ representative: NewsItem; size: number; penalty: number }> {
+): Array<{ representative: NewsItem; size: number; penalty: number; members: NewsItem[] }> {
   const clusters: Array<{ members: NewsItem[]; memberTokens: string[][] }> = []
 
   for (const it of items) {
     const tokens = tokenize(it.title)
     if (tokens.length === 0) continue
-    const hit = clusters.find(c => c.memberTokens.some(t => jaccard(t, tokens) >= THRESHOLD))
+    const hit = clusters.find(c => c.memberTokens.some(t => jaccard(t, tokens) >= CLUSTER_THRESHOLD))
     if (hit) {
       hit.members.push(it)
       hit.memberTokens.push(tokens)
@@ -352,6 +356,7 @@ export function topClusters(
       return {
         representative,
         size: c.members.length,
+        members: c.members,
         penalty: newsPenalty(representative.title, opts),
         latest: Math.max(...c.members.map(m => m.publishedAt.getTime())),
       }
@@ -363,5 +368,5 @@ export function topClusters(
       return b.latest - a.latest
     })
     .slice(0, topN)
-    .map(({ representative, size, penalty }) => ({ representative, size, penalty }))
+    .map(({ representative, size, penalty, members }) => ({ representative, size, penalty, members }))
 }

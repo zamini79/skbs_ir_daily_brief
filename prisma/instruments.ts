@@ -86,6 +86,14 @@ export const INSTRUMENTS: InstrumentSeed[] = [
   // 거의 안 잡혀서 넓은 시황 검색어로 기사 풀을 넓힌 뒤 별칭으로 좁힌다. 실측(2026-08-27):
   // '뉴욕증시' 검색 100건을 이 별칭으로 필터링하면 실제로 S&P500 관련 기사가 남는다
   // (예: "S&P500 선물, 엔비디아 실적 호조에 상승…美 국채금리↑"). Vaxcyte류 오타가 아니다.
+  //
+  // 2026-10-02 부터 지수 세 행의 뉴스는 이 값만으로 정해지지 않는다(담당자 피드백):
+  //   - S&P500·KOSPI 는 1순위를 연합뉴스 아침 기사로 고정한다. 검색어·조건은 여기가 아니라
+  //     src/pipeline/priorityNews.ts 의 PRIORITY_NEWS_RULES(quoteSymbol 키)에 있다 —
+  //     아래 newsQuery 는 2·3순위를 채우는 데 그대로 쓰인다.
+  //   - Nasdaq 은 **자기 뉴스가 없다.** S&P500 의 뉴스 칸을 함께 쓴다
+  //     (src/domain/newsShare.ts). 그래서 Nasdaq 의 newsQuery·newsAliases 는 지금 쓰이지
+  //     않는다. 지우지 않은 것은 컬럼이 필수라서이고, 공유를 풀면 그대로 다시 쓰인다.
   { category: 'Index', displayOrder: 20, name: 'S&P500',           currency: 'USD', quoteSource: 'naver-index', quoteSymbol: '.INX',  newsQuery: '뉴욕증시', newsAliases: 'S&P500,S&P 500,스탠더드앤드푸어스', isIndex: true },
   { category: 'Index', displayOrder: 21, name: 'Nasdaq',           currency: 'USD', quoteSource: 'naver-index', quoteSymbol: '.IXIC', newsQuery: '나스닥',   newsAliases: '나스닥,Nasdaq', isIndex: true },
   { category: 'Index', displayOrder: 22, name: 'KOSPI',            currency: 'KRW', quoteSource: 'naver-index', quoteSymbol: 'KOSPI', newsQuery: '코스피',   newsAliases: '코스피,KOSPI', isIndex: true },

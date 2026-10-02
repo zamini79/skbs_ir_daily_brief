@@ -6,7 +6,8 @@ import { fetchAllQuotes, type QuoteTarget } from '@/providers/quote'
 import { fetchYtdBase } from '@/providers/quote/ytdBase'
 import { searchNaverNews } from '@/providers/news/naver'
 import { fetchArticleBody } from '@/providers/news/article'
-import { topClusters, filterByTitleMention } from './cluster'
+import { gatherInstrumentNews } from './instrumentNews'
+import { ownsNews } from '@/domain/newsShare'
 import { summarize } from '@/providers/summarize/gemini'
 import { createRateLimitBudget } from '@/providers/summarize/rateLimitBudget'
 import { SUMMARY_VARIANTS } from '@/providers/summarize/prompt'
@@ -14,8 +15,6 @@ import { pLimit } from './limit'
 import { createPacer } from './pacer'
 import { SUMMARY_CONCURRENCY, SUMMARY_MIN_INTERVAL_MS, createSummaryCaller } from './summaryPolicy'
 import {
-  resolveAliases,
-  wantsMarketWrapNews,
   missingFxCurrencies,
   resolveFxRate,
   currencyMismatchReason,
@@ -112,6 +111,8 @@ export type CollectionResult = {
   quoteFailed: number
   /** 1차 소스가 실패해 2차(폴백)로 채운 행의 수. 실패가 아니다 — 아래 선언부 주석 참고. */
   quoteFallbackUsed: number
+  /** 우선 기사 추가 검색이 실패한 종목 수. 배너 색은 바꾸지 않는다 — 선언부 주석 참고. */
+  priorityNewsFailed: number
 }
 
 /**
@@ -416,44 +417,69 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
     progress.step('quoteSave', { done: quoteSaved, total: instruments.length })
   }
 
-  // 5) 뉴스 수집 + 별칭 필터 + 클러스터링.
+  // 5) 뉴스 수집 + 별칭 필터 + 클러스터링 + 우선 기사.
   // 검색 성공 여부를 NewsFetch 에 남긴다 — 이게 없으면 "후보 0건"이 "오늘 기사가 없다"와
   // "검색을 못 했다" 두 가지를 동시에 뜻하게 되고, 화면은 그 둘을 구분할 수 없다.
+  //
+  // **무엇을 검색하고 무엇을 남길지는 gatherInstrumentNews(instrumentNews.ts)가 정한다.**
+  // 이 파일은 테스트가 import 하지 못하므로 판단을 여기 두지 않는다 — 공유 행(Nasdaq)을
+  // 건너뛰는 것, 우선 기사를 rank 1 로 넣는 것, 우선 검색 실패를 가르는 것이 전부 거기 있다.
   let newsFailed = 0
   // 검색 결과를 DB 에 남기지 못한 종목 수. 이 행은 화면에서 근거 없이
   // 「당일·D-1 기사 없음」으로 단정된다(recordNewsFetch 주석 참고) — 행별로는
   // 바로잡을 수 없어도 실행 단위 배너에는 반드시 남아야 한다.
   let newsRecordFailed = 0
+  /**
+   * 우선 기사(연합뉴스 「뉴욕증시 종합」·「마켓뷰」) 추가 검색이 **실패**한 종목 수.
+   * 못 찾은 것(발행 전)은 세지 않는다 — 정상이다.
+   *
+   * **computeRunStatus 에는 넣지 않는다.** 그 행의 뉴스는 기본 검색 결과로 채워져 있어
+   * 담당자가 할 일이 없다 — 할 일 없는 날 노란 배너를 띄우면 배너가 무뎌진다
+   * (rateLimitRetriesDenied 와 같은 규칙). 대신 statusDetail 문장과 크론 응답에 남는다.
+   */
+  let priorityNewsFailed = 0
   /** 진행 표시 전용. 검색을 마친 종목 수(성공·실패 무관). */
   let newsDone = 0
-  progress.step('news', { done: 0, total: instruments.length })
+  // 진행 총계는 **실제로 검색하는 행**만 센다. 공유 행까지 세면 마지막 숫자가 총계에
+  // 못 미친 채 다음 단계로 넘어가 멈춘 것처럼 보인다.
+  const newsTotal = instruments.filter(i => ownsNews(i.quoteSymbol)).length
+  progress.step('news', { done: 0, total: newsTotal })
   const newsLimit = pLimit(NEWS_CONCURRENCY)
   const perInstrument = await Promise.all(
     instruments.map(inst =>
       newsLimit(async () => {
+        const outcome = await gatherInstrumentNews(inst, TOP_N, {
+          search: query => searchNaverNews(query, now),
+          now,
+        })
+        // 공유 행은 검색하지 않았으니 기록도 진행 표시도 하지 않는다. NewsFetch 가 없어도
+        // 화면은 이 행을 NO_NEWS 가 아니라 NEWS_SHARED 로 본다(repo.ts — 같은 newsShare 표).
+        if (outcome.kind === 'shared') return { inst, clusters: [] }
         try {
-          const items = await searchNaverNews(inst.newsQuery, now)
-          const filtered = filterByTitleMention(items, resolveAliases(inst))
+          if (outcome.kind === 'failed') {
+            // 사유는 그대로 남긴다. 지어내지 않는다 — 담당자가 이 문구를 근거로 판단한다.
+            newsFailed++
+            console.error(`[news] ${inst.name}: ${outcome.error}`)
+            if (!(await recordNewsFetch(run.id, inst.id, 'FAILED', outcome.error))) newsRecordFailed++
+            return { inst, clusters: [] }
+          }
           if (!(await recordNewsFetch(run.id, inst.id, 'OK', null))) newsRecordFailed++
-          // 이 값을 넘기지 않으면 시황·수급 기사가 KOSPI·S&P500·Nasdaq 행에서도
-          // 감점되어 지금 잘 뽑히는 1순위가 전부 바뀐다(cluster.ts 의 newsPenalty 참고).
-          // inst.isIndex 를 그대로 쓰면 안 된다 — 코스피200 헬스케어도 지수지만
-          // 시황이 아니라 업종 동향을 원한다(collectHelpers.ts 의 MARKET_WRAP_ROWS).
-          const wantsMarketWrap = wantsMarketWrapNews(inst)
-          return { inst, clusters: topClusters(filtered, TOP_N, { wantsMarketWrap }) }
-        } catch (e) {
-          // 사유는 그대로 남긴다. 지어내지 않는다 — 담당자가 이 문구를 근거로 판단한다.
-          const reason = e instanceof Error ? e.message : String(e)
-          newsFailed++
-          console.error(`[news] ${inst.name}: ${reason}`)
-          if (!(await recordNewsFetch(run.id, inst.id, 'FAILED', reason))) newsRecordFailed++
-          return { inst, clusters: [] }
+          const p = outcome.priority
+          if (p.status === 'failed') {
+            priorityNewsFailed++
+            console.error(`[news] ${inst.name}: 우선 기사 검색 실패 — ${p.error}`)
+          } else if (p.status === 'not-found') {
+            console.log(`[news] ${inst.name}: 우선 기사 없음(아직 발행 전일 수 있음) — 기존 순위 그대로`)
+          } else if (p.status === 'found') {
+            console.log(`[news] ${inst.name}: 우선 기사 1순위 — ${p.title}`)
+          }
+          return { inst, clusters: outcome.clusters }
         } finally {
           // 성공이든 실패든 그 종목은 **끝났다.** 성공만 세면 429 가 몇 건 난 날
-          // 진행 숫자가 23에 못 미친 채 멈춰, 담당자에게는 파이프라인이 멈춘 것으로
+          // 진행 숫자가 총계에 못 미친 채 멈춰, 담당자에게는 파이프라인이 멈춘 것으로
           // 보인다 — 실제로는 다음 단계로 넘어갔는데도.
           newsDone++
-          progress.step('news', { done: newsDone, total: instruments.length })
+          progress.step('news', { done: newsDone, total: newsTotal })
         }
       }),
     ),
@@ -685,6 +711,7 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
     newsRecordFailed,
     summariesSkippedDeadline,
     rateLimitRetriesDenied: rateLimitBudget.deniedCount,
+    priorityNewsFailed,
     missingCurrencies,
   })
   // 완료 상태를 적기 **전에** 진행 리포터를 닫는다. 닫지 않으면 뒤에서 돌던 마지막
@@ -709,5 +736,5 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
     data: { status, statusDetail, progressDetail: null, finishedAt: new Date() },
   })
 
-  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, summariesSkippedDeadline, rateLimitRetriesDenied: rateLimitBudget.deniedCount, bodyCrawlFailed, ytdBaseFailed, newsFailed, newsRecordFailed, fxFailed, quoteFailed, quoteFallbackUsed }
+  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, summariesSkippedDeadline, rateLimitRetriesDenied: rateLimitBudget.deniedCount, bodyCrawlFailed, ytdBaseFailed, newsFailed, newsRecordFailed, fxFailed, quoteFailed, quoteFallbackUsed, priorityNewsFailed }
 }

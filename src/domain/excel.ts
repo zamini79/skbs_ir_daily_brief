@@ -1,5 +1,6 @@
 import { formatPrevDiff, formatPrice } from '@/domain/format'
 import { newsColumnContent, type ClientRow, type RowState } from '@/db/repo'
+import { newsCellSpans, newsOwnerSymbol } from './newsShare'
 
 /**
  * 검수 화면의 행을 **엑셀 셀 값**으로 바꾼다. 순수 함수만 있다 — exceljs 도
@@ -54,8 +55,19 @@ export type ExcelInstrumentRow = {
   marketCap: ExcelValue
   /** 종목당 첫 행의 뉴스 칸. 미확정이면 빈 문자열이다. */
   newsTitle: string
+  /**
+   * 제목 칸에 걸 하이퍼링크(기사 URL). **확정된 기사일 때만** 있다 — 「-」·「뉴스 조회
+   * 실패」 같은 칸에 링크 서식(파란 밑줄)을 입히면 링크가 아닌 것이 링크처럼 보인다.
+   */
+  newsUrl: string | null
   /** 종목당 둘째 행의 뉴스 칸. */
   newsSummary: string
+  /**
+   * 이 종목의 뉴스 칸이 덮는 **종목 수**(domain/newsShare.ts 의 newsCellSpans).
+   * 1 이 평상시, 2 이상이면 아래 종목의 뉴스 칸까지 병합한다(S&P500 + Nasdaq).
+   * 0 이면 위 종목의 칸에 덮여 있어 이 종목의 뉴스 값은 쓰이지 않는다.
+   */
+  newsSpan: number
 }
 
 /**
@@ -67,8 +79,8 @@ export function isUnconfirmedForExport(state: RowState): boolean {
   return state === 'PENDING' || state === 'STALE_SELECTION'
 }
 
-type NewsCells = { title: string; summary: string }
-const BLANK: NewsCells = { title: '', summary: '' }
+type NewsCells = { title: string; summary: string; url: string | null }
+const BLANK: NewsCells = { title: '', summary: '', url: null }
 
 /**
  * 뉴스 두 칸. 화면과 **같은 순수 함수**(newsColumnContent)로 무엇을 실을지 정한다 —
@@ -102,8 +114,13 @@ export function excelNewsCells(row: {
     // state 로 이미 걸렀지만 confirmed 를 한 번 더 본다. 이 두 겹 중 하나가
     // 리팩터링으로 사라져도 나머지 하나가 미확정 미리보기를 막는다.
     if (!content.confirmed) return BLANK
-    return { title: content.title, summary: content.summary ?? '' }
+    return { title: content.title, summary: content.summary ?? '', url: content.url }
   }
+
+  // 다른 행과 함께 쓰는 칸. 내용은 소유 행이 적는다 — 병합되면 이 값은 쓰이지 않고,
+  // 병합이 안 되는 배치면 toExcelRows 가 참조 문구로 바꾼다. `-` 로 떨어뜨리면 안 된다
+  // (「뉴스가 없었다」는 주장이 된다).
+  if (content.kind === 'shared') return BLANK
 
   // 조회 실패는 `-` 로 내보내면 안 된다. 이 파일은 전 임원에게 메일로 나가는 최종
   // 산출물이고, 거기서 `-` 는 **"오늘 이 회사 뉴스가 없었다"는 사실 주장**이다.
@@ -120,13 +137,13 @@ export function excelNewsCells(row: {
   // 아니다. 그 행은 미확정이므로 공란으로 내보낸다 — state 만으로는 SELECTED 라
   // 위쪽 필터에 걸리지 않으니 여기서 잡는다.
   if (content.kind === 'label') {
-    return row.state === 'NEWS_FAILED' ? { title: content.text, summary: '' } : BLANK
+    return row.state === 'NEWS_FAILED' ? { title: content.text, summary: '', url: null } : BLANK
   }
 
   // kind: 'none'(기사 없음) | 'omitted'(담당자가 뺌). 둘 다 "실을 것이 없다"로
   // 결정된 상태라 원본 엑셀과 같이 `-` 다. 화면에서는 「싣지 않음」 태그로 갈리지만,
   // 최종 산출물에서는 결과가 같다 — 왜 비었는지는 메일 받는 사람의 관심사가 아니다.
-  return { title: DASH, summary: '' }
+  return { title: DASH, summary: '', url: null }
 }
 
 /** 주가 칸. 값이 없으면 왜 없는지까지 말한다. */
@@ -151,9 +168,25 @@ export function excelMarketCapCell(
   return row.quote?.marketCapKrwTrillion ?? DASH
 }
 
+/**
+ * 공유 행이 소유 행 바로 아래에 있지 않아 병합할 수 없을 때 그 칸에 적는 말.
+ * 비워 두면 「미확정」으로, `-` 면 「기사 없음」으로 읽힌다 — 둘 다 사실이 아니다.
+ */
+export function sharedNewsReference(ownerName: string): string {
+  return `(${ownerName} 뉴스와 같음)`
+}
+
 export function toExcelRows(rows: ClientRow[]): ExcelInstrumentRow[] {
-  return rows.map(row => {
-    const news = excelNewsCells(row)
+  // 화면(BriefTable)과 같은 함수로 병합을 정한다. 둘이 다르게 묶으면 화면에서 본 칸과
+  // 파일의 칸이 다른 종목을 덮는다.
+  const spans = newsCellSpans(rows.map(r => r.instrument))
+  return rows.map((row, i) => {
+    let news = excelNewsCells(row)
+    if (row.state === 'NEWS_SHARED' && spans[i] > 0) {
+      const ownerSymbol = newsOwnerSymbol(row.instrument.quoteSymbol)
+      const owner = rows.find(r => r.instrument.quoteSymbol === ownerSymbol)
+      news = { title: sharedNewsReference(owner?.instrument.name ?? ownerSymbol), summary: '', url: null }
+    }
     return {
       category: row.instrument.category,
       name: row.instrument.name,
@@ -163,7 +196,9 @@ export function toExcelRows(rows: ClientRow[]): ExcelInstrumentRow[] {
       ytdPct: row.quote?.ytdPct ?? DASH,
       marketCap: excelMarketCapCell(row),
       newsTitle: news.title,
+      newsUrl: news.url,
       newsSummary: news.summary,
+      newsSpan: spans[i],
     }
   })
 }
@@ -174,9 +209,12 @@ export function toExcelRows(rows: ClientRow[]): ExcelInstrumentRow[] {
  * 상태를 따로 세지 않고 **실제로 만들어진 셀을 센다.** 상태로 세면 "무엇이 비는가"의
  * 판정이 두 곳이 되고, 언젠가 한쪽만 바뀌어 "몇 건이 빕니다"가 실제 파일과 어긋난다 —
  * 틀린 경고는 없느니만 못하다. 23행짜리 표라 한 번 더 만드는 비용은 없다.
+ *
+ * 위 종목의 칸에 덮인 행(newsSpan 0 — Nasdaq)은 세지 않는다. 그 칸은 파일에 따로
+ * 존재하지 않는다 — 세면 S&P500 하나가 미확정일 때 「2건」이라고 말한다.
  */
 export function countBlankNewsCells(rows: ClientRow[]): number {
-  return toExcelRows(rows).filter(r => r.newsTitle === '').length
+  return toExcelRows(rows).filter(r => r.newsSpan > 0 && r.newsTitle === '').length
 }
 
 /**

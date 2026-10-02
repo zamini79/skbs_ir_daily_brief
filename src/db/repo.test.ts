@@ -18,7 +18,15 @@ import {
 } from './repo'
 import { STALLED_AFTER_MS } from '@/domain/runProgress'
 
-const ALL_ROW_STATES = ['NEWS_FAILED', 'NO_NEWS', 'OMITTED', 'PENDING', 'SELECTED', 'STALE_SELECTION'] as const
+const ALL_ROW_STATES = [
+  'NEWS_FAILED',
+  'NO_NEWS',
+  'OMITTED',
+  'PENDING',
+  'SELECTED',
+  'STALE_SELECTION',
+  'NEWS_SHARED',
+] as const
 
 describe('rowStateLabel 완전성', () => {
   it('모든 행 상태에 라벨이 있고 서로 다르다', () => {
@@ -31,60 +39,60 @@ describe('rowStateLabel 완전성', () => {
 describe('rowDisplayState', () => {
   it('후보가 없으면 NO_NEWS 다', () => {
     expect(
-      rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null }),
+      rowDisplayState({ quoteSymbol: '068270', candidateCount: 0, decision: 'PENDING', chosenCandidateId: null }),
     ).toBe('NO_NEWS')
   })
   it('후보가 없으면 담당자가 아직 안 봤어도 NO_NEWS 다', () => {
     expect(
-      rowDisplayState({ candidateCount: 0, decision: 'OMITTED', chosenCandidateId: null }),
+      rowDisplayState({ quoteSymbol: '068270', candidateCount: 0, decision: 'OMITTED', chosenCandidateId: null }),
     ).toBe('NO_NEWS')
   })
   // 이 작업의 핵심. 이 두 케이스가 같은 값으로 수렴하면 결함이 되돌아온 것이다.
   it('검색 성공 + 후보 0건 은 NO_NEWS 다 — 정말로 기사가 없었다', () => {
     expect(
-      rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'OK' }),
+      rowDisplayState({ quoteSymbol: '068270', candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'OK' }),
     ).toBe('NO_NEWS')
   })
   it('검색 실패 + 후보 0건 은 NEWS_FAILED 다 — 기사가 없는지 알 수 없다', () => {
     expect(
-      rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'FAILED' }),
+      rowDisplayState({ quoteSymbol: '068270', candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'FAILED' }),
     ).toBe('NEWS_FAILED')
   })
   it('두 경우가 절대 같은 상태로 수렴하지 않는다', () => {
-    const ok = rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'OK' })
-    const failed = rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'FAILED' })
+    const ok = rowDisplayState({ quoteSymbol: '068270', candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'OK' })
+    const failed = rowDisplayState({ quoteSymbol: '068270', candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'FAILED' })
     expect(ok).not.toBe(failed)
     expect(rowStateLabel(ok)).not.toBe(rowStateLabel(failed))
   })
   it('검색 실패라도 후보가 있으면 평소대로 판정한다', () => {
     expect(
-      rowDisplayState({ candidateCount: 3, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'FAILED' }),
+      rowDisplayState({ quoteSymbol: '068270', candidateCount: 3, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: 'FAILED' }),
     ).toBe('PENDING')
   })
   it('기록이 없으면(구 실행) 기존 동작 그대로 NO_NEWS 다', () => {
     expect(
-      rowDisplayState({ candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: null }),
+      rowDisplayState({ quoteSymbol: '068270', candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: null }),
     ).toBe('NO_NEWS')
   })
 
   it('담당자가 뺐으면 OMITTED 다', () => {
     expect(
-      rowDisplayState({ candidateCount: 3, decision: 'OMITTED', chosenCandidateId: null }),
+      rowDisplayState({ quoteSymbol: '068270', candidateCount: 3, decision: 'OMITTED', chosenCandidateId: null }),
     ).toBe('OMITTED')
   })
   it('아직 안 봤으면 PENDING 이다', () => {
     expect(
-      rowDisplayState({ candidateCount: 3, decision: 'PENDING', chosenCandidateId: null }),
+      rowDisplayState({ quoteSymbol: '068270', candidateCount: 3, decision: 'PENDING', chosenCandidateId: null }),
     ).toBe('PENDING')
   })
   it('골랐으면 SELECTED 다', () => {
     expect(
-      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: 'c1' }),
+      rowDisplayState({ quoteSymbol: '068270', candidateCount: 3, decision: 'SELECTED', chosenCandidateId: 'c1' }),
     ).toBe('SELECTED')
   })
   it('SELECTED인데 재수집으로 chosenCandidateId가 null로 되돌아갔으면 STALE_SELECTION이다', () => {
     expect(
-      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: null }),
+      rowDisplayState({ quoteSymbol: '068270', candidateCount: 3, decision: 'SELECTED', chosenCandidateId: null }),
     ).toBe('STALE_SELECTION')
   })
   it('후보는 고른 채로 유효한데 그 후보에 애초에 요약이 없어 chosenSummaryId만 null이면, 무효화가 아니라 정상 종결된 SELECTED다', () => {
@@ -94,7 +102,7 @@ describe('rowDisplayState', () => {
     // rowDisplayState는 이제 chosenSummaryId를 아예 받지 않는다 — chosenCandidateId
     // 만으로 판정이 충분하다는 것이 이 테스트의 요지이므로 여기서는 넘기지 않는다.
     expect(
-      rowDisplayState({ candidateCount: 3, decision: 'SELECTED', chosenCandidateId: 'c1' }),
+      rowDisplayState({ quoteSymbol: '068270', candidateCount: 3, decision: 'SELECTED', chosenCandidateId: 'c1' }),
     ).toBe('SELECTED')
   })
 })
@@ -678,5 +686,34 @@ describe('briefDayMarkLabel', () => {
 
   it('모르는 상태는 원문을 그대로 보여준다 — 아는 척하지 않는다', () => {
     expect(briefDayMarkLabel('UNKNOWN', 'WHATEVER')).toBe('WHATEVER')
+  })
+})
+
+describe('NEWS_SHARED — 뉴스 칸을 다른 행과 함께 쓰는 행 (Nasdaq .IXIC)', () => {
+  it('후보가 남아 있어도(공유 이전 날짜) PENDING 이 아니라 NEWS_SHARED 다', () => {
+    expect(
+      rowDisplayState({ quoteSymbol: '.IXIC', candidateCount: 3, decision: 'PENDING', chosenCandidateId: null }),
+    ).toBe('NEWS_SHARED')
+  })
+
+  it('검색 기록이 없어도 NO_NEWS(「기사 없음」)로 단정하지 않는다', () => {
+    expect(
+      rowDisplayState({ quoteSymbol: '.IXIC', candidateCount: 0, decision: 'PENDING', chosenCandidateId: null, newsFetchStatus: null }),
+    ).toBe('NEWS_SHARED')
+  })
+
+  it('공유하지 않는 행은 예전 그대로다', () => {
+    expect(rowDisplayState({ quoteSymbol: '.INX', candidateCount: 0, decision: 'PENDING', chosenCandidateId: null })).toBe('NO_NEWS')
+  })
+
+  it('뉴스 칼럼은 shared 이고 후보를 미리보기로 내놓지 않는다', () => {
+    const content = newsColumnContent({
+      state: 'NEWS_SHARED',
+      candidates: [{ id: 'c1', rank: 1, title: '남은 후보', url: 'https://x', summaries: [] }],
+      chosenCandidateId: null,
+      chosenSummaryId: null,
+      editedText: null,
+    })
+    expect(content).toEqual({ kind: 'shared' })
   })
 })
