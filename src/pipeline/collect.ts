@@ -6,7 +6,7 @@ import { fetchAllQuotes, type QuoteTarget } from '@/providers/quote'
 import { fetchYtdBase } from '@/providers/quote/ytdBase'
 import { searchNaverNews } from '@/providers/news/naver'
 import { fetchArticleBody } from '@/providers/news/article'
-import { gatherInstrumentNews } from './instrumentNews'
+import { gatherInstrumentNews, tallyNewsOutcomes } from './instrumentNews'
 import { ownsNews } from '@/domain/newsShare'
 import { summarize } from '@/providers/summarize/gemini'
 import { createRateLimitBudget } from '@/providers/summarize/rateLimitBudget'
@@ -424,20 +424,13 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
   // **무엇을 검색하고 무엇을 남길지는 gatherInstrumentNews(instrumentNews.ts)가 정한다.**
   // 이 파일은 테스트가 import 하지 못하므로 판단을 여기 두지 않는다 — 공유 행(Nasdaq)을
   // 건너뛰는 것, 우선 기사를 rank 1 로 넣는 것, 우선 검색 실패를 가르는 것이 전부 거기 있다.
-  let newsFailed = 0
   // 검색 결과를 DB 에 남기지 못한 종목 수. 이 행은 화면에서 근거 없이
   // 「당일·D-1 기사 없음」으로 단정된다(recordNewsFetch 주석 참고) — 행별로는
   // 바로잡을 수 없어도 실행 단위 배너에는 반드시 남아야 한다.
   let newsRecordFailed = 0
-  /**
-   * 우선 기사(연합뉴스 「뉴욕증시 종합」·「마켓뷰」) 추가 검색이 **실패**한 종목 수.
-   * 못 찾은 것(발행 전)은 세지 않는다 — 정상이다.
-   *
-   * **computeRunStatus 에는 넣지 않는다.** 그 행의 뉴스는 기본 검색 결과로 채워져 있어
-   * 담당자가 할 일이 없다 — 할 일 없는 날 노란 배너를 띄우면 배너가 무뎌진다
-   * (rateLimitRetriesDenied 와 같은 규칙). 대신 statusDetail 문장과 크론 응답에 남는다.
-   */
-  let priorityNewsFailed = 0
+  // 검색 실패·우선 검색 실패 수는 여기서 ++ 하지 않는다. 루프가 끝난 뒤 결과 목록에서
+  // tallyNewsOutcomes(instrumentNews.ts)로 센다 — 이 파일 안의 ++ 는 지워져도 어떤
+  // 테스트도 알아채지 못한다(Task 41 리뷰의 변이 실험).
   /** 진행 표시 전용. 검색을 마친 종목 수(성공·실패 무관). */
   let newsDone = 0
   // 진행 총계는 **실제로 검색하는 행**만 센다. 공유 행까지 세면 마지막 숫자가 총계에
@@ -454,26 +447,24 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
         })
         // 공유 행은 검색하지 않았으니 기록도 진행 표시도 하지 않는다. NewsFetch 가 없어도
         // 화면은 이 행을 NO_NEWS 가 아니라 NEWS_SHARED 로 본다(repo.ts — 같은 newsShare 표).
-        if (outcome.kind === 'shared') return { inst, clusters: [] }
+        if (outcome.kind === 'shared') return { inst, outcome, clusters: [] }
         try {
           if (outcome.kind === 'failed') {
             // 사유는 그대로 남긴다. 지어내지 않는다 — 담당자가 이 문구를 근거로 판단한다.
-            newsFailed++
             console.error(`[news] ${inst.name}: ${outcome.error}`)
             if (!(await recordNewsFetch(run.id, inst.id, 'FAILED', outcome.error))) newsRecordFailed++
-            return { inst, clusters: [] }
+            return { inst, outcome, clusters: [] }
           }
           if (!(await recordNewsFetch(run.id, inst.id, 'OK', null))) newsRecordFailed++
           const p = outcome.priority
           if (p.status === 'failed') {
-            priorityNewsFailed++
             console.error(`[news] ${inst.name}: 우선 기사 검색 실패 — ${p.error}`)
           } else if (p.status === 'not-found') {
             console.log(`[news] ${inst.name}: 우선 기사 없음(아직 발행 전일 수 있음) — 기존 순위 그대로`)
           } else if (p.status === 'found') {
             console.log(`[news] ${inst.name}: 우선 기사 1순위 — ${p.title}`)
           }
-          return { inst, clusters: outcome.clusters }
+          return { inst, outcome, clusters: outcome.clusters }
         } finally {
           // 성공이든 실패든 그 종목은 **끝났다.** 성공만 세면 429 가 몇 건 난 날
           // 진행 숫자가 총계에 못 미친 채 멈춰, 담당자에게는 파이프라인이 멈춘 것으로
@@ -484,6 +475,16 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
       }),
     ),
   )
+
+  /**
+   * newsFailed — 기본 검색 실패 종목 수(배너를 PARTIAL 로 낮춘다).
+   * priorityNewsFailed — 우선 기사(연합뉴스) 추가 검색 실패 종목 수. 못 찾은 것(발행 전)은
+   *   세지 않는다. **computeRunStatus 에는 넣지 않는다** — 그 행은 기본 검색으로 채워져
+   *   담당자가 할 일이 없다(rateLimitRetriesDenied 와 같은 규칙). statusDetail·크론 응답에만 남는다.
+   * 아래에서 buildStatusDetail 에 **펼쳐서** 넘긴다. 두 필드가 그 함수의 필수 인자라
+   * 넘기기를 빠뜨리면 tsc 가 잡는다.
+   */
+  const newsTally = tallyNewsOutcomes(perInstrument.map(p => p.outcome))
 
   // 6) 후보 저장 + 같은 사건 표시 + 요약 2안 생성
   let candidatesCreated = 0
@@ -696,7 +697,7 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
   const status = computeRunStatus(
     summariesFailed,
     ytdBaseFailed,
-    newsFailed,
+    newsTally.newsFailed,
     fxFailed,
     quoteFailed,
     newsRecordFailed,
@@ -707,11 +708,10 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
     summariesFailed,
     candidatesCreated,
     ytdBaseFailed,
-    newsFailed,
+    ...newsTally,
     newsRecordFailed,
     summariesSkippedDeadline,
     rateLimitRetriesDenied: rateLimitBudget.deniedCount,
-    priorityNewsFailed,
     missingCurrencies,
   })
   // 완료 상태를 적기 **전에** 진행 리포터를 닫는다. 닫지 않으면 뒤에서 돌던 마지막
@@ -736,5 +736,5 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
     data: { status, statusDetail, progressDetail: null, finishedAt: new Date() },
   })
 
-  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, summariesSkippedDeadline, rateLimitRetriesDenied: rateLimitBudget.deniedCount, bodyCrawlFailed, ytdBaseFailed, newsFailed, newsRecordFailed, fxFailed, quoteFailed, quoteFallbackUsed, priorityNewsFailed }
+  return { runId: run.id, ok, failed, candidatesCreated, summariesGenerated, summariesSkippedEmptyBody, summariesFailed, summariesSkippedDeadline, rateLimitRetriesDenied: rateLimitBudget.deniedCount, bodyCrawlFailed, ytdBaseFailed, ...newsTally, newsRecordFailed, fxFailed, quoteFailed, quoteFallbackUsed }
 }

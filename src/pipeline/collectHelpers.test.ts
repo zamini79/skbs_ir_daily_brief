@@ -533,6 +533,7 @@ describe('buildStatusDetail', () => {
     ytdBaseFailed: 0,
     newsFailed: 0,
     newsRecordFailed: 0,
+    priorityNewsFailed: 0,
     missingCurrencies: [] as string[],
   }
 

@@ -62,6 +62,20 @@ describe('pickNyseWrap — 연합뉴스 「뉴욕증시 종합」', () => {
     expect(pickNyseWrap([NYSE_FLASH, BOND_WRAP, NYSE_WRAP], RUN_0830)).toBe(NYSE_WRAP)
   })
 
+  it('「마감」 이 없는 (종합) 제목도 고른다 — 브리프 예시 제목', () => {
+    // 이 제목에는 「마감」이 없다. (종합) 우선 단계가 사라지면 마감 폴백이 이걸 고르지
+    // 못해 null 이 된다. 위 실측 제목은 「마감」을 함께 담고 있어 그 회귀를 못 잡는다.
+    const wrap = item('美국채 금리 고공행진에 뉴욕증시 약보합…다우 0.3%↓(종합)', '2026-10-02T06:10:00')
+    expect(pickNyseWrap([wrap], RUN_0830)).toBe(wrap)
+  })
+
+  it('06:10 (종합) 과 그보다 늦은 「…마감」(비종합)이 함께 있으면 (종합) 을 고른다', () => {
+    // 「최신」만 보면 06:40 마감판이 이긴다. (종합) 이 먼저라는 단계를 고정한다.
+    const wrap = item('美국채 금리 고공행진에 뉴욕증시 약보합…다우 0.3%↓(종합)', '2026-10-02T06:10:00')
+    const lateFlash = item('뉴욕증시, 국채금리 고공행진에 약보합 마감', '2026-10-02T06:40:00')
+    expect(pickNyseWrap([lateFlash, wrap], RUN_0830)).toBe(wrap)
+  })
+
   it('(종합) 이 아직 없으면 「마감」 속보판으로 폴백한다', () => {
     expect(pickNyseWrap([NYSE_FLASH, BOND_WRAP], RUN_0830)).toBe(NYSE_FLASH)
   })
@@ -150,6 +164,29 @@ describe('selectRowClusters — 우선 기사를 rank 1 로, 같은 사건은 �
     expect(restUrls).not.toContain(NYSE_WRAP.url)
     expect(restUrls).not.toContain('https://news1.kr/same-event')
     // 빠진 같은 사건 기사는 우선 기사의 보도 수에 더한다(같은 URL 은 한 번만).
+    expect(out[0].size).toBe(2)
+  })
+
+  it('URL 이 다르고 기존 묶음과도 따로인, 우선 기사와만 닮은 기사도 같은 사건으로 뺀다 (jaccard 경로)', () => {
+    // 우선 기사와는 유사도 0.7(임계값 0.5 이상)이지만, 다른 후보들과는 겹치는 낱말이 없어
+    // 자기 혼자 묶음이 된다. URL·네이버 링크도 다르다 — 빠진다면 순전히 제목 유사도 때문이다.
+    const lookalike = item('국채 금리 따라 등락 반복한 뉴욕증시…강보합 마감', '2026-10-02T06:30:00', {
+      publisher: 'news1.kr',
+      url: 'https://news1.kr/lookalike',
+      naverUrl: 'https://n.news.naver.com/article/421/1',
+    })
+    const other1 = item('S&P500 선물, 엔비디아 실적 호조에 상승', '2026-10-02T07:00:00', { url: 'https://a/1' })
+    const other2 = item('S&P 500 편입 종목 교체 발표', '2026-10-02T07:20:00', { url: 'https://a/2' })
+    const ranked = topClusters([lookalike, other1, other2], Infinity, MARKET)
+    // 전제 확인: 닮은 기사는 자기 혼자 묶음이다(다른 후보에 흡수돼 빠지는 것이 아니다).
+    const own = ranked.find(c => c.members.includes(lookalike))!
+    expect(own.members).toEqual([lookalike])
+
+    const out = selectRowClusters(ranked, NYSE_WRAP, 3)
+    expect(out[0].representative).toBe(NYSE_WRAP)
+    expect(out.slice(1).map(c => c.representative.url).sort()).toEqual(['https://a/1', 'https://a/2'])
+    expect(out.map(c => c.representative)).not.toContain(lookalike)
+    expect(out).toHaveLength(3)
     expect(out[0].size).toBe(2)
   })
 

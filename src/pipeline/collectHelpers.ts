@@ -379,12 +379,16 @@ export function buildStatusDetail(counts: {
    */
   rateLimitRetriesDenied?: number
   /**
-   * 우선 기사(연합뉴스 「뉴욕증시 종합」·「마켓뷰」) 추가 검색이 실패한 종목 수. 기본값 0.
+   * 우선 기사(연합뉴스 「뉴욕증시 종합」·「마켓뷰」) 추가 검색이 실패한 종목 수.
    * rateLimitRetriesDenied 와 같은 급이다 — 그 행의 뉴스는 기본 검색으로 채워져 있으므로
    * status 는 낮추지 않지만(computeRunStatus 에 없다), 1순위가 평소 기사가 아닐 수 있다는
    * 사실은 적혀야 한다(pipeline/instrumentNews.ts).
+   *
+   * **필수다(기본값 없음).** 429 로 우선 검색이 실패한 날 담당자가 볼 신호는 이 문장
+   * 하나뿐이다. 선택 인자였을 때는 collect.ts 에서 넘기는 줄을 지워도 tsc·테스트가 모두
+   * 통과했다(Task 41 리뷰). collect.ts 는 tallyNewsOutcomes 결과를 펼쳐 넘긴다.
    */
-  priorityNewsFailed?: number
+  priorityNewsFailed: number
   missingCurrencies: string[]
 }): string | null {
   const parts: string[] = []
@@ -407,7 +411,7 @@ export function buildStatusDetail(counts: {
   if (counts.missingCurrencies.length > 0) {
     parts.push(`환율 미확보: ${counts.missingCurrencies.join(', ')} (시가총액 공란)`)
   }
-  if ((counts.priorityNewsFailed ?? 0) > 0) {
+  if (counts.priorityNewsFailed > 0) {
     parts.push(
       `우선 기사(연합뉴스) 검색 ${counts.priorityNewsFailed}종목 실패(해당 행 1순위는 일반 검색 결과)`,
     )

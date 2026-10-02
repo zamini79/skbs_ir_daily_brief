@@ -88,3 +88,26 @@ export async function gatherInstrumentNews(
     }
   }
 }
+
+/**
+ * 실행 단위 카운터 두 개를 결과 목록에서 센다. collect.ts 안에서 `++` 하던 것을 여기로
+ * 옮겼다 — 거기 있는 `++` 는 지워져도 테스트가 볼 수 없다.
+ *
+ *   newsFailed         — 기본 검색 실패(`failed`). 그 행은 「뉴스 조회 실패」다.
+ *   priorityNewsFailed — 우선 검색만 실패(`ok` + priority.failed). 행 뉴스는 채워져 있다.
+ *
+ * 공유 행(`shared`)과 우선 기사를 못 찾은 것(`not-found`)은 어느 쪽에도 세지 않는다 —
+ * 둘 다 실패가 아니다.
+ */
+export function tallyNewsOutcomes(outcomes: InstrumentNewsOutcome[]): {
+  newsFailed: number
+  priorityNewsFailed: number
+} {
+  let newsFailed = 0
+  let priorityNewsFailed = 0
+  for (const o of outcomes) {
+    if (o.kind === 'failed') newsFailed++
+    else if (o.kind === 'ok' && o.priority.status === 'failed') priorityNewsFailed++
+  }
+  return { newsFailed, priorityNewsFailed }
+}

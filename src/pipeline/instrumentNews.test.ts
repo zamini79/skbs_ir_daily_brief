@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { NewsItem } from '@/providers/news/types'
 import { INSTRUMENTS } from '../../prisma/instruments'
-import { gatherInstrumentNews } from './instrumentNews'
+import { gatherInstrumentNews, tallyNewsOutcomes, type InstrumentNewsOutcome } from './instrumentNews'
 
 /**
  * collect.ts 의 뉴스 루프가 부르는 판단 전부. collect.ts 는 Prisma 를 끌어와 테스트가
@@ -134,5 +134,44 @@ describe('규칙이 없는 행', () => {
     const out = await gatherInstrumentNews(CELLTRION, 3, { search: searchBy({ 셀트리온: many }), now: NOW })
     if (out.kind !== 'ok') throw new Error(out.kind)
     expect(out.clusters.length).toBeLessThanOrEqual(3)
+  })
+})
+
+describe('tallyNewsOutcomes — collect.ts 가 배너에 넘기는 두 카운터', () => {
+  const ok = (priority: Extract<InstrumentNewsOutcome, { kind: 'ok' }>['priority']): InstrumentNewsOutcome => ({
+    kind: 'ok',
+    clusters: [],
+    priority,
+  })
+
+  it('기본 검색 실패와 우선 검색 실패를 갈라 센다', () => {
+    expect(
+      tallyNewsOutcomes([
+        { kind: 'failed', error: 'naver news HTTP 429' },
+        ok({ status: 'failed', error: 'naver news HTTP 429' }),
+        ok({ status: 'failed', error: 'naver news HTTP 500' }),
+      ]),
+    ).toEqual({ newsFailed: 1, priorityNewsFailed: 2 })
+  })
+
+  it('공유 행·규칙 없음·찾음·못 찾음은 어느 쪽에도 세지 않는다', () => {
+    expect(
+      tallyNewsOutcomes([
+        { kind: 'shared' },
+        ok({ status: 'none' }),
+        ok({ status: 'found', title: 'x' }),
+        ok({ status: 'not-found' }),
+      ]),
+    ).toEqual({ newsFailed: 0, priorityNewsFailed: 0 })
+  })
+
+  it('gatherInstrumentNews 의 실제 결과로도 같은 수가 나온다 — 우선 검색 429 가 한 건으로 잡힌다', async () => {
+    const search = searchBy({ 뉴욕증시: [SP_A], '뉴욕증시 종합': new Error('naver news HTTP 429'), 코스피: new Error('naver news HTTP 429') })
+    const outcomes = [
+      await gatherInstrumentNews(SP500, 3, { search, now: NOW }),
+      await gatherInstrumentNews(NASDAQ, 3, { search, now: NOW }),
+      await gatherInstrumentNews(KOSPI, 3, { search, now: NOW }),
+    ]
+    expect(tallyNewsOutcomes(outcomes)).toEqual({ newsFailed: 1, priorityNewsFailed: 1 })
   })
 })
