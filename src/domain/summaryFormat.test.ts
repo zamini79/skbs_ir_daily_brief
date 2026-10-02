@@ -59,6 +59,15 @@ describe('formatSummary — 문장부호', () => {
     expect(formatSummary(input)).toBe(expected)
   })
 
+  it.each([
+    ['CDMO. 신규 수주 확대', 'CDMO, 신규 수주 확대'],
+    ['IPO. 다음 분기 상장', 'IPO, 다음 분기 상장'],
+    ['미국 FDA. 승인 획득', '미국 FDA, 승인 획득'],
+  ])('대문자 약어로 끝난 문장 사이 마침표는 경계다: %s', (input, expected) => {
+    // 명사형 종결이라 ADC·CDMO·FDA 로 끝나는 문장이 실제로 나온다.
+    expect(formatSummary(input)).toBe(expected)
+  })
+
   it('영문으로 끝난 맨 끝 마침표도 지운다 — 끝 마침표 0 은 예외 없이 지킨다', () => {
     expect(formatSummary('삼성 Co., Ltd.')).toBe('삼성 Co., Ltd')
   })
@@ -94,6 +103,12 @@ describe('formatSummary — 문장부호', () => {
 
   it('줄바꿈은 문장 경계다', () => {
     expect(formatSummary('계약 체결\n매출 확대')).toBe('계약 체결, 매출 확대')
+  })
+
+  it('영문으로 끝난 줄의 줄바꿈도 `, ` 가 된다 — 마침표를 스스로 만들지 않는다', () => {
+    // 리뷰 2026-10-02: 줄바꿈을 `. ` 로 바꾸던 시절 `FDA. 승인 획득` 이 나왔다.
+    expect(formatSummary('FDA\n승인 획득')).toBe('FDA, 승인 획득')
+    expect(formatSummary('U.S.\n시장 진출')).toBe('U.S., 시장 진출')
   })
 
   it('빈 문자열과 공백은 빈 문자열이다', () => {

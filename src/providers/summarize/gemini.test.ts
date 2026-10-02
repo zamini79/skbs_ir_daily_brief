@@ -139,10 +139,13 @@ describe('summarize', () => {
     expect(r.context).toBe('배경 설명, 4,000억원 규모')
   })
 
-  it('100자를 넘긴 응답을 잘라서 돌려준다', async () => {
-    stubOnce({ numeric: '가'.repeat(180), context: '배경임' })
+  it('100자를 넘긴 응답을 잘라서 돌려준다 — 두 필드 모두', async () => {
+    // numeric 만 보던 시절에는 context 를 formatSummary 만 거치게(절삭 없이) 바꿔도
+    // 통과했다(리뷰 2026-10-02). 그러면 2안이 100자를 넘어 화면에 나간다.
+    stubOnce({ numeric: '가'.repeat(180), context: '나'.repeat(180) })
     const r = await summarize('제목', '본문')
     expect([...r.numeric].length).toBeLessThanOrEqual(100)
+    expect([...r.context].length).toBeLessThanOrEqual(100)
   })
 
   it('JSON이 아닌 응답이면 기사 제목과 원문 일부를 담아 던진다', async () => {

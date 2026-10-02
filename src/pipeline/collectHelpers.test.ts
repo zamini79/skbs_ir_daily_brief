@@ -839,6 +839,17 @@ describe('buildFallbackSummaries', () => {
     expect(r[0]).toContain('4,000억원 규모')
   })
 
+  it('서식이 콤마·원을 붙여 100자를 넘기면 그 뒤에 다시 자른다 — 원문 절삭만으로는 부족하다', () => {
+    // cap() 은 원문을 100자로 먼저 자르므로, 서식만 하고 절삭을 빼먹어도 대부분의
+    // 입력에서는 티가 안 난다(리뷰 2026-10-02). 금액이 몰린 본문만 새어 나간다.
+    // `1000억 1000억` 처럼 숫자가 이어지면 원·콤마가 안 붙으므로, 금액 뒤에 단어를 둔다.
+    const body = '1000억원 계약 '.repeat(30)
+    expect(charLength(formatSummary([...body].slice(0, 100).join('')))).toBeGreaterThan(100) // 전제
+    const r = buildFallbackSummaries(body, '')
+    expect(r.length).toBeGreaterThan(0)
+    for (const s of r) expect(charLength(s)).toBeLessThanOrEqual(100)
+  })
+
   it('두 번째 구간은 원문 기준으로 이어진다 — 서식이 글자 수를 바꿔도 겹치지 않는다', () => {
     // (2)의 시작점은 (1)이 **원문에서** 소비한 글자 수다. 서식 후 글자 수로 잡으면
     // 위치가 어긋나 문장 중간에서 시작한다.

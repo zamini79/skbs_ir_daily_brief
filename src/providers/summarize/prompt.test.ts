@@ -110,7 +110,7 @@ describe('buildPrompt — 문장부호·금액·제목 중복 (담당자 피드�
     // 2026-10-02 컨트롤러 판단: 담당자 예시 문장은 제목 반복이라고 지적받은 바로 그
     // 문장이고, 제목 없이 실으면 모델은 그것이 제목과 겹친다는 사실을 알 수 없다.
     expect(prompt).toContain('제목: 셀트리온, 1,000억원 규모 자사주 추가 매입…올해 누적 4,000억원')
-    expect(prompt).toContain('좋은 요약: 취득 주식은 56만853주 규모, 중장기적으로 당기순이익의 33%를 주주에게 환원할 방침')
+    expect(prompt).toContain('좋은 요약: 취득 주식은 56만853주…중장기적으로 당기순이익의 33%를 주주에게 환원할 방침')
   })
 
   it('담당자 원문(제목 반복 문장)을 어떤 형태로도 싣지 않는다 — 나쁜 예도 따라 할 신호다', () => {
@@ -126,7 +126,16 @@ describe('buildPrompt — 문장부호·금액·제목 중복 (담당자 피드�
     expect(example).not.toContain('4,000억원')
     expect(example).not.toContain('자사주')
     expect(example).not.toMatch(/[.。]/)
-    expect(example).toContain(', ')
+  })
+
+  it('좋은 요약이 `…` 를 정확히 한 번 보여 준다 — 그 규칙이 지시문에만 있으면 안 된다', () => {
+    const line = prompt.split('\n').find(l => l.startsWith('- 좋은 요약: '))!
+    expect((line.match(/…/g) ?? []).length).toBe(1)
+  })
+
+  it('좋은 요약에 「~ 규모,」 문형이 없다 — 실측에서 모델이 그 문형에 제목 수치를 넣었다', () => {
+    const line = prompt.split('\n').find(l => l.startsWith('- 좋은 요약: '))!
+    expect(line).not.toContain('규모,')
   })
 })
 
