@@ -291,7 +291,8 @@ curl -X POST http://localhost:3000/api/cron/collect \
 
 ```bash
 # 로컬에서 (같은 DATABASE_URL 을 보므로 결과는 같다)
-npx prisma migrate deploy
+# npx prisma migrate deploy 는 .env 의 placeholder 로 붙어 실패한다 — 운영.md 2.3-(1-1)
+node --env-file=.env.local node_modules/prisma/build/index.js migrate deploy
 ```
 
 **무료 인스턴스에는 Shell·SSH 접속이 없다.** Render 안에서 명령을 칠 방법이
