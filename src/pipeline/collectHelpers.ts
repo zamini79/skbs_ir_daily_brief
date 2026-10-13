@@ -195,6 +195,29 @@ export function buildQuoteSnapshotData(args: {
   }
 }
 
+/**
+ * 값을 받았지만 **기대한 통화가 아니라서 버리는** 행의 QuoteSnapshot 레코드.
+ * 숫자는 싣지 않고 사유만 남긴다(collect.ts 의 통화 불일치 분기 주석).
+ *
+ * 값을 버리더라도 **그 값을 준 소스와 폴백 여부**는 남긴다. 폴백이 돌았는데 2차가
+ * 다른 통화를 준 경우, 1차 이름만 남으면 조사가 엉뚱한 데서 시작된다.
+ * 배지는 이 행에 뜨지 않지만(표시할 값이 없다) 기록은 그날의 사실 그대로여야 한다.
+ */
+export function buildQuoteMismatchSnapshotData(args: {
+  runId: string
+  instrumentId: string
+  q: QuoteHit
+  errorMessage: string
+}) {
+  return {
+    runId: args.runId,
+    instrumentId: args.instrumentId,
+    sourceName: args.q.sourceName,
+    fallbackFrom: args.q.fallbackFrom,
+    errorMessage: args.errorMessage,
+  }
+}
+
 /** 같은 사건 판정에 쓰는 임계값. 클러스터링 임계값(0.5)보다 낮다 —
  * 0.5로 하면 이미 클러스터링 단계에서 하나로 합쳐졌을 것이므로 여기서는 절대 안 걸린다. */
 const SAME_EVENT_THRESHOLD = 0.3

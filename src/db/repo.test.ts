@@ -596,30 +596,31 @@ describe('quoteFallbackSourceUsed', () => {
   //
   // 판정은 **스냅샷에 수집 당시 저장한 fallbackFrom** 만 본다. 지금 시드의 quoteSource 는
   // 인자에조차 없다 — 시드가 바뀌어도(Task 43) 과거 날짜의 판정이 흔들리면 안 된다.
+  // 스냅샷을 통째로 받는다 — 칸을 하나씩 받으면 호출부에서 잘못 이을 자리가 생긴다.
   const fellBack = {
-    snapshotSource: 'marketstack',
-    snapshotFallbackFrom: 'ft',
+    snapshot: { sourceName: 'marketstack', fallbackFrom: 'ft' as string | null },
     displayClose: 71.52,
     displayIsManual: false,
   }
+  const snap = (sourceName: string, fallbackFrom: string | null) => ({ ...fellBack, snapshot: { sourceName, fallbackFrom } })
 
   it('수집 당시 폴백이었으면 값을 채운 2차 소스 이름을 준다 — 배지 문구가 이것이다', () => {
     expect(quoteFallbackSourceUsed(fellBack)).toBe('marketstack')
     for (const src of ['lse', 'six', 'ft']) {
-      expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: src })).toBe(src)
+      expect(quoteFallbackSourceUsed(snap(src, 'x'))).toBe(src)
     }
   })
 
   it('수집 당시 폴백이 아니었으면 소스가 무엇이든 아무 말도 하지 않는다', () => {
     // Task 43 전의 평범한 행(GSK 가 lse 1차로 채운 날)이다. 지금 시드의 1차가 ft 라도
     // 그날은 폴백이 아니었다 — 예전 판정은 여기에 「lse 대체」를 붙였다.
-    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: 'lse', snapshotFallbackFrom: null })).toBeNull()
-    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: 'ft', snapshotFallbackFrom: null })).toBeNull()
+    expect(quoteFallbackSourceUsed(snap('lse', null))).toBeNull()
+    expect(quoteFallbackSourceUsed(snap('ft', null))).toBeNull()
   })
 
   it('Task 43 전 사노피의 진짜 폴백(1차 marketstack → 2차 ft)은 지금 시드와 무관하게 배지가 남는다', () => {
     // 지금 시드의 사노피 1차가 ft 라서, 예전 판정은 이 날의 배지를 지워 버렸다.
-    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: 'ft', snapshotFallbackFrom: 'marketstack' })).toBe('ft')
+    expect(quoteFallbackSourceUsed(snap('ft', 'marketstack'))).toBe('ft')
   })
 
   it('표시할 값이 없으면 폴백이 아니다 — 그 행은 이미 「시세 실패」로 뜬다', () => {
@@ -632,7 +633,7 @@ describe('quoteFallbackSourceUsed', () => {
   })
 
   it('스냅샷이 아예 없으면 아무 말도 하지 않는다', () => {
-    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: null, snapshotFallbackFrom: null })).toBeNull()
+    expect(quoteFallbackSourceUsed({ ...fellBack, snapshot: null })).toBeNull()
   })
 })
 

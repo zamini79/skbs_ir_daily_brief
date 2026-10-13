@@ -29,6 +29,7 @@ import {
   buildFallbackSummaries,
   briefRunStartData,
   buildQuoteSnapshotData,
+  buildQuoteMismatchSnapshotData,
 } from './collectHelpers'
 import { createProgressReporter } from './progressReporter'
 import { SUMMARY_DEADLINE_MS } from '@/domain/runProgress'
@@ -360,14 +361,11 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
       // 숫자 없이 사유만 남긴다: 행은 「시세 실패」로 뜨고 배너 카운터에도 잡힌다.
       const mismatch = currencyMismatchReason(inst.currency, q.currency)
       if (mismatch) {
+        // 값을 버리더라도 그 값을 준 소스와 폴백 여부를 남긴다(빌더 주석, 테스트로 고정).
         await prisma.quoteSnapshot.create({
-          data: {
-            // 값을 버리더라도 **그 값을 준 소스**를 남긴다. 폴백이 돌았는데 2차가
-            // 다른 통화를 준 경우, 여기에 1차 이름이 남으면 조사가 엉뚱한 데서 시작된다.
-            runId: run.id, instrumentId: inst.id, sourceName: q.sourceName,
-            fallbackFrom: q.fallbackFrom,
-            errorMessage: mismatch,
-          },
+          data: buildQuoteMismatchSnapshotData({
+            runId: run.id, instrumentId: inst.id, q, errorMessage: mismatch,
+          }),
         })
         failed++
         quoteFailed++

@@ -282,7 +282,7 @@ function CategoryRows({
                   <div>
                     <span
                       className="inline-block rounded bg-note px-1 py-0.5 text-[10px] font-medium text-note-fg"
-                      title={`평소 소스(${row.quote?.fallbackFrom})가 실패해 대체 소스(${row.quoteFallbackSource})로 채운 값입니다. 값 자체는 정상이지만 1차 소스를 점검해야 합니다.`}
+                      title={`평소 소스${row.quote?.fallbackFrom ? `(${row.quote.fallbackFrom})` : ''}가 실패해 대체 소스(${row.quoteFallbackSource})로 채운 값입니다. 값 자체는 정상이지만 1차 소스를 점검해야 합니다.`}
                     >
                       {row.quoteFallbackSource} 대체
                     </span>

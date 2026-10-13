@@ -365,18 +365,23 @@ export function quoteFailureReason(row: {
  *  - **수기 입력값으로 채워진 행** — 자동 수집의 산물이 아니다. '(수기)' 로 이미 구분된다.
  */
 export function quoteFallbackSourceUsed(row: {
-  /** QuoteSnapshot.sourceName — 실제로 값을 가져온 소스(배지 문구). 스냅샷이 없으면 null. */
-  snapshotSource: string | null
-  /** QuoteSnapshot.fallbackFrom — 수집 당시 실패한 1차. 폴백이 아니었으면 null. */
-  snapshotFallbackFrom: string | null
+  /**
+   * 그 행의 QuoteSnapshot **통째로**(없으면 null). `sourceName` 은 실제로 값을 가져온
+   * 소스(배지 문구), `fallbackFrom` 은 수집 당시 실패한 1차(폴백이 아니었으면 null)다.
+   *
+   * 필드를 하나씩 받지 않는 이유: 호출부에서 `snapshotFallbackFrom: q?.sourceName` 처럼
+   * 칸을 잘못 이으면 모든 행에 거짓 배지가 붙는데, 타입이 같아 아무것도 걸리지 않는다.
+   * 스냅샷을 그대로 넘기면 잘못 이을 자리 자체가 없다.
+   */
+  snapshot: { sourceName: string; fallbackFrom: string | null } | null
   displayClose: number | null
   displayIsManual: boolean
 }): string | null {
-  if (row.snapshotSource === null) return null
-  if (row.snapshotFallbackFrom === null) return null
+  if (row.snapshot === null) return null
+  if (row.snapshot.fallbackFrom === null) return null
   if (row.displayClose === null) return null
   if (row.displayIsManual) return null
-  return row.snapshotSource
+  return row.snapshot.sourceName
 }
 
 function toNum(v: Prisma.Decimal | number | null | undefined): number | null {
@@ -582,8 +587,7 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
         errorMessage: q?.errorMessage ?? null,
       }),
       quoteFallbackSource: quoteFallbackSourceUsed({
-        snapshotSource: q?.sourceName ?? null,
-        snapshotFallbackFrom: q?.fallbackFrom ?? null,
+        snapshot: q ?? null,
         displayClose: display.close,
         displayIsManual: display.isManual,
       }),

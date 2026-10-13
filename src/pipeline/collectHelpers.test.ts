@@ -6,6 +6,7 @@ import { charLength } from '@/domain/text'
 import type { QuoteHit } from '@/providers/quote'
 import {
   buildQuoteSnapshotData,
+  buildQuoteMismatchSnapshotData,
   resolveAliases,
   wantsMarketWrapNews,
   MARKET_WRAP_ROWS,
@@ -203,13 +204,29 @@ describe('buildQuoteSnapshotData', () => {
     expect(buildQuoteSnapshotData({ ...base, q: hit({ asOf: '' }) }).asOf).toBeNull()
   })
 
-  it('collect.ts 는 값을 얻은 행을 이 빌더로 저장하고, 통화 불일치 행에도 fallbackFrom 을 남긴다', () => {
+  it('통화 불일치로 값을 버린 행도 그 값을 준 소스와 폴백 여부를 저장한다', () => {
+    const d = buildQuoteMismatchSnapshotData({
+      runId: 'run-1', instrumentId: 'inst-san', q: hit(), errorMessage: '통화 불일치: 기대 EUR, 응답 USD',
+    })
+    expect(d).toEqual({
+      runId: 'run-1', instrumentId: 'inst-san', sourceName: 'marketstack', fallbackFrom: 'ft',
+      errorMessage: '통화 불일치: 기대 EUR, 응답 USD',
+    })
+    // 숫자는 싣지 않는다 — 실린 순간 화면이 그 숫자를 보여 주고 「시세 실패」가 사라진다.
+    expect(d).not.toHaveProperty('close')
+    const primary = buildQuoteMismatchSnapshotData({
+      runId: 'r', instrumentId: 'i', q: hit({ sourceName: 'ft', fallbackFrom: null }), errorMessage: 'x',
+    })
+    expect(primary).toHaveProperty('fallbackFrom', null)
+  })
+
+  it('collect.ts 는 값을 얻은 행과 통화 불일치 행을 각자의 빌더로 저장한다', () => {
     // collect.ts 는 Prisma 에 묶여 실행해 볼 수 없어 소스를 직접 본다(newsShare.test.ts 와
     // 같은 방식). 빌더를 거치지 않고 레코드를 손으로 다시 적으면 fallbackFrom 이 빠져도
-    // 타입 검사가 통과한다(선택 칼럼이다) — 배지가 조용히 사라지는 자리다.
+    // 타입 검사가 통과한다(선택 칼럼이다). 레코드 모양 자체는 위 단위 테스트가 지킨다.
     const src = readFileSync(join(__dirname, 'collect.ts'), 'utf8')
     expect(src.match(/data: buildQuoteSnapshotData\(/g)).toHaveLength(1)
-    expect(src).toContain('fallbackFrom: q.fallbackFrom,')
+    expect(src.match(/data: buildQuoteMismatchSnapshotData\(/g)).toHaveLength(1)
   })
 })
 
