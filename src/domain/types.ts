@@ -5,13 +5,14 @@ export type QuoteSource =
   | 'naver-world-stock'
   | 'naver-index'
   | 'krx-index'
-  /** 런던증권거래소 공식 엔드포인트. 키 없음. 연초 기준가는 여전히 marketstack. */
+  /** 런던증권거래소 공식 엔드포인트. 키 없음. 지금은 GSK 의 2차(Task 43). */
   | 'lse'
-  /** SIX Swiss Exchange 공식 엔드포인트. 키 없음. 연초 기준가는 여전히 marketstack. */
+  /** SIX Swiss Exchange 공식 엔드포인트. 키 없음. 지금은 Lonza 의 2차(Task 43). */
   | 'six'
   /**
-   * FT(markets.ft.com) HTML 스크래핑. **2차(폴백) 전용이다** — 비미국 4종목의
-   * 1차가 실패한 날에만 부른다. 1차로 쓰지 마라(src/providers/quote/ft.ts).
+   * FT(markets.ft.com) HTML 스크래핑. 유럽 3종목(GSK·Sanofi·Lonza)의 1차이고
+   * Wuxi 의 2차다(Task 43 — 「2차 전용」 결정을 뒤집었다. 근거는 src/providers/quote/ft.ts).
+   * 연초 기준가는 FT 에 없어서 marketstack 이 준다(ytdBase.ts).
    */
   | 'ft'
   | 'twelvedata'

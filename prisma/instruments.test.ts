@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { INSTRUMENTS } from './instruments'
 import { KRX_IDX_NM_KOSPI200_HEALTHCARE } from '@/providers/quote/krx'
 import { MARKET_WRAP_ROWS } from '@/pipeline/collectHelpers'
+import { FALLBACK_FETCHERS } from '@/providers/quote/index'
 
 describe('INSTRUMENTS', () => {
   it('23행이다', () => {
@@ -44,12 +45,14 @@ describe('INSTRUMENTS', () => {
     expect(INSTRUMENTS.filter(i => i.quoteSource === 'manual')).toEqual([])
   })
 
-  it('marketstack 에 남은 종목은 MIC 접미사를 쓰지 않는다', () => {
+  it('marketstack 을 1차로 쓰는 종목은 없고, 2차로 쓰는 사노피도 MIC 접미사를 쓰지 않는다', () => {
     // MIC 접미사(GSK.XLON)는 뉴욕 ADR 값이 온다. 거래소 약칭(SAN.PA)을 쓴다.
-    const ms = INSTRUMENTS.filter(i => i.quoteSource === 'marketstack')
-    expect(ms.map(i => i.name)).toEqual(['Sanofi']) // 나머지 셋은 Task 31 로 옮겼다
+    // Task 43 에서 사노피의 1차가 FT 로 옮겨 갔다 — 1차가 하루 늦은 값을 성공으로 줬다.
+    expect(INSTRUMENTS.filter(i => i.quoteSource === 'marketstack')).toEqual([])
+    const ms = INSTRUMENTS.filter(i => i.quoteFallbackSource === 'marketstack')
+    expect(ms.map(i => i.name)).toEqual(['Sanofi'])
     for (const i of ms) {
-      expect(i.quoteSymbol).not.toMatch(/\.X[A-Z]{3}$/)
+      expect(i.quoteFallbackSymbol).not.toMatch(/\.X[A-Z]{3}$/)
     }
   })
 
@@ -60,36 +63,49 @@ describe('INSTRUMENTS', () => {
   // 네 종목 모두 여전히 marketstack 이다. 「왜 이렇게 복잡하지」 하고 한 소스로
   // 되돌리면 한도가 곧바로 돌아온다 — 그래서 구성을 여기서 고정한다.
 
-  it('비미국 4종목의 소스와 심볼이 소스별 표기와 맞는다', () => {
+  // ── Task 43: 유럽 3종목의 1차를 FT 로 통일했다 ──
+  //
+  // 사노피의 1차(marketstack)가 **실패가 아니라 하루 늦은 값을 성공으로** 돌려줘서
+  // 폴백이 돌지도 않고 매일 하루 늦은 숫자가 나갔다. GSK·Lonza 는 같은 시점 FT 와 값이
+  // 완전히 같았다(2026-10-13 실측, ft.ts 머리 주석). 원래 1차는 각자의 2차로 내려왔다.
+  // 「marketstack 으로 되돌리지 마라」(Task 31, 한도)는 여전히 유효하다.
+
+  it('비미국 4종목의 1차·2차 소스와 심볼이 결정표와 같다', () => {
     const by = (name: string) => INSTRUMENTS.find(i => i.name === name)!
-    expect([by('GSK').quoteSource, by('GSK').quoteSymbol]).toEqual(['lse', 'GSK'])
-    expect([by('Lonza').quoteSource, by('Lonza').quoteSymbol]).toEqual(['six', 'LONN'])
-    expect([by('Wuxi').quoteSource, by('Wuxi').quoteSymbol]).toEqual(['naver-world-stock', '2269.HK'])
-    expect([by('Sanofi').quoteSource, by('Sanofi').quoteSymbol]).toEqual(['marketstack', 'SAN.PA'])
+    const row = (name: string) => {
+      const i = by(name)
+      return [i.quoteSource, i.quoteSymbol, i.quoteFallbackSource, i.quoteFallbackSymbol]
+    }
+    expect(row('GSK')).toEqual(['ft', 'GSK:LSE', 'lse', 'GSK'])
+    expect(row('Sanofi')).toEqual(['ft', 'SAN:PAR', 'marketstack', 'SAN.PA'])
+    expect(row('Lonza')).toEqual(['ft', 'LONN:SWX', 'six', 'LONN'])
+    // Wuxi 는 옮기지 않는다 — FT 는 「지금 값」이라 홍콩 장중(10:30 KST~)에 숫자가 바뀐다.
+    expect(row('Wuxi')).toEqual(['naver-world-stock', '2269.HK', 'ft', '2269:HKG'])
   })
 
-  it('옮긴 세 종목은 marketstack 표기(접미사)를 그대로 쓰지 않는다', () => {
+  it('2차로 내려온 lse·six 는 marketstack 표기(접미사)를 쓰지 않는다', () => {
     // GSK.L / LONN.SW 를 LSE·SIX 에 그대로 넘기면 종목을 못 찾는다(HTTP 404 / totalRows 0).
-    expect(INSTRUMENTS.find(i => i.name === 'GSK')!.quoteSymbol).not.toBe('GSK.L')
-    expect(INSTRUMENTS.find(i => i.name === 'Lonza')!.quoteSymbol).not.toBe('LONN.SW')
+    expect(INSTRUMENTS.find(i => i.name === 'GSK')!.quoteFallbackSymbol).not.toBe('GSK.L')
+    expect(INSTRUMENTS.find(i => i.name === 'Lonza')!.quoteFallbackSymbol).not.toBe('LONN.SW')
   })
 
-  it('사노피의 1차는 여전히 marketstack 이다 — 유로넥스트에 쓸 만한 무료 소스가 없다', () => {
-    // ajax 응답이 암호화된 블롭(`ct:`)이라 직접 쓸 수 없다. Task 32 에서 붙인 것은
-    // **2차**(FT)이고 1차는 그대로다 — 1차를 FT 로 바꾸면 매일 HTML 스크래핑에
-    // 의존하게 된다(아래 폴백 절 참고).
-    expect(INSTRUMENTS.find(i => i.name === 'Sanofi')!.quoteSource).toBe('marketstack')
+  it('시드가 가리키는 2차 소스는 전부 폴백 단계가 아는 이름이다', () => {
+    // **배선 고정.** 시드에 `lse` 를 적어 놓고 FALLBACK_FETCHERS 에서 빠지면, 평소에는
+    // 아무 증상이 없다가 FT 가 죽는 날 「알 수 없는 폴백 소스」로 세 행이 함께 빈다.
+    for (const i of INSTRUMENTS) {
+      if (i.quoteFallbackSource === undefined) continue
+      expect(Object.keys(FALLBACK_FETCHERS), i.name).toContain(i.quoteFallbackSource)
+    }
   })
 
-  // ── Task 32: 비미국 4종목에 2차 소스(FT)를 붙였다 ──
+  // ── Task 32: 비미국 4종목에 2차 소스를 붙였다 ──
   //
   // 한 소스가 죽어도 그 행이 빈 채로 하루를 나지 않게 한다. **실패를 없애는 장치가
   // 아니다** — 둘 다 죽으면 그 행은 지금처럼 「시세 실패」로 뜬다.
 
-  it('비미국 4종목만 2차 소스를 갖고, 넷 다 ft 다', () => {
+  it('비미국 4종목만 2차 소스를 갖는다', () => {
     const withFallback = INSTRUMENTS.filter(i => i.quoteFallbackSource !== undefined)
     expect(withFallback.map(i => i.name)).toEqual(['GSK', 'Sanofi', 'Lonza', 'Wuxi'])
-    for (const i of withFallback) expect(i.quoteFallbackSource, i.name).toBe('ft')
   })
 
   it('국내 10종목·미국 5종목·지수 4행에는 2차 소스를 붙이지 않았다', () => {
@@ -102,19 +118,18 @@ describe('INSTRUMENTS', () => {
     }
   })
 
-  it('2차 심볼은 FT 표기({티커}:{거래소})이고 1차 심볼과 다르다', () => {
-    // 1차 심볼을 그대로 넘기면 FT 는 오류가 아니라 검색 페이지로 302 를 준다 —
-    // 폴백이 있으나 마나가 된다. `LONN:VTX` 도 302 다(실측). SWX 를 쓴다.
+  it('FT 심볼은 FT 표기({티커}:{거래소})이고, 1차와 2차 심볼은 서로 다르다', () => {
+    // 다른 표기를 넘기면 FT 는 오류가 아니라 검색 페이지로 302 를 준다.
+    // `LONN:VTX` 도 302 다(실측). SWX 를 쓴다.
     const by = (name: string) => INSTRUMENTS.find(i => i.name === name)!
-    expect(by('GSK').quoteFallbackSymbol).toBe('GSK:LSE')
-    expect(by('Sanofi').quoteFallbackSymbol).toBe('SAN:PAR')
-    expect(by('Lonza').quoteFallbackSymbol).toBe('LONN:SWX')
-    expect(by('Wuxi').quoteFallbackSymbol).toBe('2269:HKG')
+    for (const i of INSTRUMENTS) {
+      if (i.quoteSource === 'ft') expect(i.quoteSymbol, i.name).toMatch(/^[A-Z0-9]+:[A-Z]{3}$/)
+      if (i.quoteFallbackSource === 'ft') expect(i.quoteFallbackSymbol, i.name).toMatch(/^[A-Z0-9]+:[A-Z]{3}$/)
+    }
     for (const name of ['GSK', 'Sanofi', 'Lonza', 'Wuxi']) {
       expect(by(name).quoteFallbackSymbol, name).not.toBe(by(name).quoteSymbol)
-      expect(by(name).quoteFallbackSymbol, name).toMatch(/^[A-Z0-9]+:[A-Z]{3}$/)
     }
-    expect(by('Lonza').quoteFallbackSymbol).not.toBe('LONN:VTX')
+    expect(by('Lonza').quoteSymbol).not.toBe('LONN:VTX')
   })
 
   it('2차가 1차와 같은 소스인 종목은 없다 — 그러면 이중화가 아니다', () => {
@@ -124,20 +139,12 @@ describe('INSTRUMENTS', () => {
     }
   })
 
-  it('GSK 는 폴백 경로에서도 펜스 보정(100)을 그대로 쓴다', () => {
-    // FT 도 GBX(펜스)로 준다 — 소스가 무엇이든 단위가 같으므로 보정값도 같아야 한다.
-    // 이 값이 소스별로 갈리기 시작하면 폴백이 도는 날만 시총이 100배가 된다.
-    const gsk = INSTRUMENTS.find(i => i.name === 'GSK')!
-    expect(gsk.quoteFallbackSource).toBe('ft')
-    expect(gsk.priceDivisorForMarketCap).toBe(100)
-    expect(gsk.currency).toBe('GBP')
-  })
-
-  it('GSK 는 소스가 바뀌어도 펜스 보정(100)을 유지한다', () => {
-    // LSE 는 통화를 GBX 로 알려 주지만 가격 단위는 marketstack 때와 같은 펜스다.
+  it('GSK 는 1차(FT)·2차(LSE) 어느 경로에서도 펜스 보정(100)을 그대로 쓴다', () => {
+    // FT·LSE 둘 다 GBX(펜스)로 준다 — 소스가 무엇이든 단위가 같으므로 보정값도 같아야
+    // 한다. 이 값이 소스별로 갈리기 시작하면 폴백이 도는 날만 시총이 100배가 된다.
     // 이 값이 사라지면 시가총액이 100배가 된다(스펙 §3.2 주의 1, §13 리스크 3).
     const gsk = INSTRUMENTS.find(i => i.name === 'GSK')!
-    expect(gsk.quoteSource).toBe('lse')
+    expect([gsk.quoteSource, gsk.quoteFallbackSource]).toEqual(['ft', 'lse'])
     expect(gsk.priceDivisorForMarketCap).toBe(100)
     expect(gsk.currency).toBe('GBP')
   })

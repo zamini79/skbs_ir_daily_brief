@@ -227,8 +227,9 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
   const targets: QuoteTarget[] = instruments.map(i => ({
     id: i.id, quoteSource: i.quoteSource, quoteSymbol: i.quoteSymbol,
     // 2차 소스는 1차가 실패한 날에만 쓰인다(providers/quote/index.ts 의 폴백 단계).
-    // 연초 기준가는 여기와 무관하게 여전히 1차 경로(marketstack)로 간다 — ytdBase.ts 는
-    // quoteSource 로만 라우팅하므로 이 두 필드가 그 배선을 건드리지 않는다.
+    // 연초 기준가는 여기와 무관하게 quoteSource 로만 라우팅한다(ytdBase.ts — 비미국
+    // 4종목은 1차 심볼을 marketstack 표기로 바꿔 marketstack 에 묻는다). 이 두 필드는
+    // 그 배선을 건드리지 않는다.
     quoteFallbackSource: i.quoteFallbackSource,
     quoteFallbackSymbol: i.quoteFallbackSymbol,
   }))
@@ -325,7 +326,7 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
    *
    * 그렇다고 조용히 넘어가면 안 된다 — 1차가 몇 주째 죽어 있어도 아무도 모르는
    * 것이 이 장치의 가장 큰 위험이다. 그래서 **세 군데에 남긴다**:
-   *   1) 행마다 화면에 「ft 대체」 배지 (db/repo.ts 의 quoteFallbackSourceUsed)
+   *   1) 행마다 화면에 「{2차 소스} 대체」 배지 (db/repo.ts 의 quoteFallbackSourceUsed)
    *   2) `[quote] … 1차(…) 실패로 2차(…)를 썼다` 로그 (providers/quote/index.ts)
    *   3) 이 카운터 — 크론 응답 JSON 에 실려 나간다
    * 셋 중 어느 것도 배너를 흔들지 않지만, 셋 다 매일 보인다.

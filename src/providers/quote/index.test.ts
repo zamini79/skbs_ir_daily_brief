@@ -32,6 +32,7 @@ vi.mock('./marketstack', () => ({
 }))
 
 import { fetchAllQuotes } from './index'
+import { INSTRUMENTS } from '../../../prisma/instruments'
 import {
   fetchNaverStock,
   fetchNaverDomesticIndex,
@@ -106,9 +107,10 @@ describe('fetchAllQuotes', () => {
     expect(fetchNaverWorldIndex).not.toHaveBeenCalled()
   })
 
-  it('사노피는 여전히 marketstack 이고, 옮긴 세 종목이 실패해도 서로 영향이 없다', async () => {
+  it('marketstack 1차 종목이 한도 소진으로 실패해도 lse·six·naver 종목은 영향이 없다', async () => {
     // 소스를 넷으로 쪼갠 이유가 이것이다 — 한 소스의 한도 소진이 네 행을 통째로
-    // 비우지 않는다. marketstack 소진 시 사노피만 실패하는 것이 정상이다.
+    // 비우지 않는다. (Task 43 이후 사노피의 1차는 FT 다. 이 테스트는 소스 단위 격리를
+    // 지키는 것이고, 시드 구성은 아래 Task 43 절이 지킨다.)
     vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(
       new Error('marketstack HTTP 429 (usage_limit_reached: Your monthly usage limit has been reached.)'),
     )
@@ -160,6 +162,9 @@ describe('fetchAllQuotes', () => {
   // 폴백은 실패 **확률을 낮추는** 장치다. 실패를 없애지 않는다 — 둘 다 죽으면
   // 그 행은 여전히 실패이고, 그때 두 사유가 모두 남아야 원인 추적이 끊기지 않는다.
 
+  // Task 43 이전의 사노피 구성(1차 marketstack, 2차 ft)이다. 지금 시드와는 다르지만
+  // **배치 소스의 실패가 폴백을 받는가**를 지키는 유일한 자리라 남긴다(index.ts 의
+  // 두 단계 구조 주석). 지금 시드 구성은 아래 Task 43 절이 지킨다.
   const SANOFI = {
     id: 'san',
     quoteSource: 'marketstack',
@@ -285,6 +290,113 @@ describe('fetchAllQuotes', () => {
     // 1차가 살아 있는 두 종목 때문에 FT 를 부르지는 않는다.
     expect(fetchFtQuote).toHaveBeenCalledTimes(1)
     expect(fetchFtQuote).toHaveBeenCalledWith('SAN:PAR')
+  })
+
+  // ── Task 43: 유럽 3종목의 1차가 FT 다. 2차는 각자 원래 쓰던 소스 ──
+  //
+  // 대상을 **시드에서 그대로** 만든다. 손으로 적은 대상으로 테스트하면 시드와 배선이
+  // 서로 어긋나도(시드는 `lse` 를 가리키는데 폴백 표에 없다 등) 둘 다 초록으로 남는다.
+
+  const EU = ['GSK', 'Sanofi', 'Lonza'].map(name => {
+    const i = INSTRUMENTS.find(x => x.name === name)!
+    return {
+      id: name,
+      quoteSource: i.quoteSource,
+      quoteSymbol: i.quoteSymbol,
+      quoteFallbackSource: i.quoteFallbackSource ?? null,
+      quoteFallbackSymbol: i.quoteFallbackSymbol ?? null,
+    }
+  })
+
+  /**
+   * FT 가 HTML 구조 변경으로 죽은 날. 재시도해도 소용없는 실패라 세 종목에 한 번씩
+   * 불린다. `…Once` 로 건다 — clearAllMocks 는 구현을 되돌리지 않으므로 영구 구현을
+   * 걸면 뒤 테스트로 샌다.
+   */
+  const ftBroken = () => {
+    for (let n = 0; n < 3; n++) {
+      vi.mocked(fetchFtQuote).mockImplementationOnce(async (code: string) => {
+        throw new Error(`[${code}] FT: Price 라벨을 찾지 못함`)
+      })
+    }
+  }
+
+  it('유럽 3종목은 FT 1차로 디스패치되고, 1차가 성공하면 2차를 부르지 않는다', async () => {
+    const r = await fetchAllQuotes(EU)
+    expect(vi.mocked(fetchFtQuote).mock.calls.map(c => c[0]).sort()).toEqual(['GSK:LSE', 'LONN:SWX', 'SAN:PAR'])
+    for (const id of ['GSK', 'Sanofi', 'Lonza']) {
+      const hit = r.get(id) as any
+      expect(hit, id).not.toBeInstanceOf(Error)
+      expect(hit.sourceName, id).toBe('ft')
+      expect(hit.fallbackFrom, id).toBeNull()
+    }
+    expect(fetchLseQuote).not.toHaveBeenCalled()
+    expect(fetchSixQuote).not.toHaveBeenCalled()
+    expect(fetchMarketstackQuotes).not.toHaveBeenCalled()
+  })
+
+  it('FT 가 죽으면 세 종목이 각자의 2차(lse·marketstack·six)로 채워지고 배지·로그용 표시가 정확하다', async () => {
+    ftBroken()
+    vi.mocked(fetchMarketstackQuotes).mockResolvedValueOnce(
+      new Map([['SAN.PA', { close: 71.52, prevClose: 70.93, currency: 'EUR', asOf: '2026-10-09' }]]),
+    )
+    const r = await fetchAllQuotes(EU, { sleep: async () => {} })
+
+    const gsk = r.get('GSK') as any
+    expect(gsk.close).toBe(1852) // lse mock 값
+    expect([gsk.sourceName, gsk.fallbackFrom]).toEqual(['lse', 'ft'])
+    expect(fetchLseQuote).toHaveBeenCalledWith('GSK')
+
+    const lonn = r.get('Lonza') as any
+    expect(lonn.close).toBeCloseTo(588.4, 4) // six mock 값
+    expect([lonn.sourceName, lonn.fallbackFrom]).toEqual(['six', 'ft'])
+    expect(fetchSixQuote).toHaveBeenCalledWith('LONN')
+
+    const san = r.get('Sanofi') as any
+    expect(san.close).toBeCloseTo(71.52, 4)
+    // 2차 marketstack 은 하루 늦을 수 있다 — 기준일을 그대로 실어야 화면이 드러낸다.
+    expect(san.asOf).toBe('2026-10-09')
+    expect([san.sourceName, san.fallbackFrom]).toEqual(['marketstack', 'ft'])
+    // 배치 API 지만 2차로는 그 종목 한 심볼만 부른다(한도는 심볼 수로 센다).
+    expect(fetchMarketstackQuotes).toHaveBeenCalledTimes(1)
+    expect(fetchMarketstackQuotes).toHaveBeenCalledWith(['SAN.PA'])
+  })
+
+  it('2차 marketstack 응답에 그 심볼이 없으면 지어내지 않고 두 사유를 남긴다', async () => {
+    ftBroken()
+    vi.mocked(fetchMarketstackQuotes).mockResolvedValueOnce(new Map())
+    const r = await fetchAllQuotes(EU, { sleep: async () => {} })
+    const err = r.get('Sanofi') as Error
+    expect(err).toBeInstanceOf(Error)
+    expect(err.message).toContain('[SAN:PAR] FT: Price 라벨을 찾지 못함')
+    expect(err.message).toContain('폴백(marketstack) 실패: marketstack: SAN.PA 응답 없음')
+  })
+
+  it('FT 와 2차가 함께 죽으면 세 종목 모두 두 사유가 남는다', async () => {
+    ftBroken()
+    vi.mocked(fetchLseQuote).mockRejectedValueOnce(new Error('[GSK] LSE HTTP 404'))
+    vi.mocked(fetchSixQuote).mockRejectedValueOnce(new Error('[LONN] SIX HTTP 404'))
+    vi.mocked(fetchMarketstackQuotes).mockRejectedValueOnce(
+      new Error('marketstack HTTP 429 (usage_limit_reached: Your monthly usage limit has been reached.)'),
+    )
+    const r = await fetchAllQuotes(EU, { sleep: async () => {} })
+    const msg = (id: string) => (r.get(id) as Error).message
+    expect(msg('GSK')).toContain('[GSK:LSE] FT: Price 라벨을 찾지 못함')
+    expect(msg('GSK')).toContain('폴백(lse) 실패: [GSK] LSE HTTP 404')
+    expect(msg('Lonza')).toContain('[LONN:SWX] FT: Price 라벨을 찾지 못함')
+    expect(msg('Lonza')).toContain('폴백(six) 실패: [LONN] SIX HTTP 404')
+    expect(msg('Sanofi')).toContain('[SAN:PAR] FT: Price 라벨을 찾지 못함')
+    expect(msg('Sanofi')).toContain('폴백(marketstack) 실패: marketstack HTTP 429 (usage_limit_reached')
+  })
+
+  it('Wuxi 는 그대로 네이버 1차이고 FT 를 부르지 않는다', async () => {
+    const w = INSTRUMENTS.find(x => x.name === 'Wuxi')!
+    const r = await fetchAllQuotes([
+      { id: 'wuxi', quoteSource: w.quoteSource, quoteSymbol: w.quoteSymbol, quoteFallbackSource: w.quoteFallbackSource, quoteFallbackSymbol: w.quoteFallbackSymbol },
+    ])
+    expect((r.get('wuxi') as any).sourceName).toBe('naver-world-stock')
+    expect(fetchNaverWorldStock).toHaveBeenCalledWith('2269.HK')
+    expect(fetchFtQuote).not.toHaveBeenCalled()
   })
 
   it('manual 소스는 결과에 넣지 않는다', async () => {

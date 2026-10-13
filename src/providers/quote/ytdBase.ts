@@ -49,6 +49,10 @@ const realSleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, 
  * 빈다. 여기서 거래소 약칭 접미사를 되붙여 원래 표기로 돌려놓는다.
  * (`2269.HK` 는 네이버와 marketstack 표기가 같아서 붙일 것이 없다.)
  *
+ * Task 43 에서 GSK·Lonza(와 Sanofi)의 1차가 다시 FT 로 옮겨 갔다. 그래서 지금 이 표의
+ * `lse`·`six` 를 1차로 쓰는 종목은 없다 — 두 소스는 2차로 남았고, 1차로 되돌릴 수 있게
+ * 표도 남긴다. FT 심볼은 아래 FT_EXCHANGE_MARKETSTACK_SUFFIX 가 바꾼다.
+ *
  * 이 표에 없고 `quoteSource` 도 `'marketstack'` 이 아니면 marketstack 경로로 가지
  * 않는다. 새 소스를 추가할 때 기준가를 어디서 받을지 함께 정하지 않으면 아래
  * `known` 목록에서 걸려 **실패로 남는다** — 조용한 공란이 되지 않는다.
@@ -60,11 +64,38 @@ const MARKETSTACK_YTD_SUFFIX: Record<string, string> = {
 }
 
 /**
+ * FT 표기(`{티커}:{거래소}`)의 거래소 코드 → marketstack 거래소 약칭 접미사.
+ *
+ * Task 43 에서 유럽 3종목(GSK·Sanofi·Lonza)의 1차를 FT 로 올렸다. FT 에는 과거
+ * 데이터가 없으므로 기준가는 여전히 marketstack 인데, `quoteSymbol` 이 이제
+ * `GSK:LSE`·`SAN:PAR`·`LONN:SWX` 다. 그대로 넘기면 marketstack 은 오류가 아니라
+ * **빈 응답**을 주고 **연초대비 칸만** 조용히 빈다(위 MARKETSTACK_YTD_SUFFIX 와 같은 함정).
+ *
+ * **여기 없는 거래소 코드는 실패로 남긴다** — 접미사 없이 티커만 넘기면 미국 ADR
+ * 같은 엉뚱한 종목이 걸릴 수 있다(`GSK`·`SAN` 은 미국 ADR 이다, instruments.ts 주석).
+ * FT 로 1차를 옮기는 종목이 늘면 여기에 거래소를 함께 더한다.
+ */
+const FT_EXCHANGE_MARKETSTACK_SUFFIX: Record<string, string> = {
+  LSE: '.L',
+  PAR: '.PA',
+  SWX: '.SW',
+}
+
+/**
  * 이 종목의 연초 기준가를 marketstack 에서 받아야 하면 marketstack 표기 심볼을,
- * 아니면 null 을 준다.
+ * 아니면 null 을 준다. FT 심볼을 바꿀 수 없으면(모르는 거래소 코드) **던진다** —
+ * null 을 주면 「marketstack 경로가 아님」과 구분되지 않는다.
  */
 function marketstackYtdSymbol(t: QuoteTarget): string | null {
   if (t.quoteSource === 'marketstack') return t.quoteSymbol
+  if (t.quoteSource === 'ft') {
+    const m = /^([A-Z0-9]+):([A-Z]+)$/.exec(t.quoteSymbol)
+    const suffix = m ? FT_EXCHANGE_MARKETSTACK_SUFFIX[m[2]] : undefined
+    if (!m || suffix === undefined) {
+      throw new Error(`FT 심볼(${t.quoteSymbol})을 marketstack 표기로 바꿀 수 없음 — 모르는 거래소 코드`)
+    }
+    return `${m[1]}${suffix}`
+  }
   const suffix = MARKETSTACK_YTD_SUFFIX[t.quoteSource]
   return suffix === undefined ? null : `${t.quoteSymbol}${suffix}`
 }
@@ -260,24 +291,35 @@ export async function fetchYtdBase(
   const prices = new Map<string, number>()
   const failures: YtdBaseFailure[] = []
 
-  // 일별 시세를 옮긴 3종목도 **기준가는 marketstack** 이다(MARKETSTACK_YTD_SUFFIX 참고).
-  // 심볼이 소스마다 다르므로 marketstack 표기를 함께 들고 다닌다.
-  const ms = targets
-    .map(t => ({ t, symbol: marketstackYtdSymbol(t) }))
-    .filter((x): x is { t: QuoteTarget; symbol: string } => x.symbol !== null)
+  // 일별 시세를 옮긴 종목도 **기준가는 marketstack** 이다(MARKETSTACK_YTD_SUFFIX,
+  // FT_EXCHANGE_MARKETSTACK_SUFFIX 참고). 심볼이 소스마다 다르므로 marketstack 표기를
+  // 함께 들고 다닌다. 바꿀 수 없는 심볼은 그 종목만 실패로 남긴다.
+  const ms: Array<{ t: QuoteTarget; symbol: string }> = []
+  const unconvertible = new Set<string>()
+  for (const t of targets) {
+    try {
+      const symbol = marketstackYtdSymbol(t)
+      if (symbol !== null) ms.push({ t, symbol })
+    } catch (e) {
+      unconvertible.add(t.id)
+      failures.push({ id: t.id, symbol: t.quoteSymbol, reason: e instanceof Error ? e.message : String(e) })
+    }
+  }
   const td = targets.filter(t => t.quoteSource === 'twelvedata')
   const naver = targets.filter(t => t.quoteSource === 'naver-stock' || t.quoteSource === 'naver-index')
   const krx = targets.filter(t => t.quoteSource === 'krx-index')
 
-  // manual 은 의도적으로 건너뛴다(수기 입력 대상). 그 외 모르는 소스는 설정 오류이므로
-  // 조용히 사라지지 않도록 실패로 남긴다.
+  // manual 은 의도적으로 건너뛴다(수기 입력 대상). 그 외 **어느 경로에도 들지 않은**
+  // 종목은 설정 오류이므로 조용히 사라지지 않도록 실패로 남긴다.
+  //
+  // marketstack 경로는 이름 목록이 아니라 **실제로 ms 에 들어갔는지**로 판정한다.
+  // 이름 목록으로 따로 두면 「목록에는 있는데 marketstackYtdSymbol 이 null 을 준다」는
+  // 어긋남이 생길 수 있고, 그러면 그 종목은 아무 경로도 타지 않고 실패도 남지 않는다 —
+  // 연초대비 칸만 조용히 빈다(Task 43 에서 ft 를 더하며 막은 자리다).
+  const routed = new Set([...ms.map(x => x.t.id), ...unconvertible])
   for (const t of targets) {
-    const known = [
-      'marketstack', 'twelvedata', 'naver-stock', 'naver-index', 'krx-index', 'manual',
-      // 시세만 옮긴 소스들. 기준가는 marketstack 경로로 간다.
-      ...Object.keys(MARKETSTACK_YTD_SUFFIX),
-    ]
-    if (!known.includes(t.quoteSource)) {
+    const known = ['twelvedata', 'naver-stock', 'naver-index', 'krx-index', 'manual']
+    if (!routed.has(t.id) && !known.includes(t.quoteSource)) {
       failures.push({ id: t.id, symbol: t.quoteSymbol, reason: `알 수 없는 quoteSource: ${t.quoteSource}` })
     }
   }

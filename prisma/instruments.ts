@@ -5,15 +5,16 @@ export type InstrumentSeed = {
   currency: string
   quoteSource:
     | 'naver-stock' | 'naver-world-stock' | 'naver-index' | 'krx-index'
-    | 'lse' | 'six' | 'twelvedata' | 'marketstack' | 'manual'
+    | 'lse' | 'six' | 'ft' | 'twelvedata' | 'marketstack' | 'manual'
   quoteSymbol: string
   /**
    * 1차(quoteSource)가 **실패했을 때만** 부르는 2차 소스. 없으면 폴백하지 않는다.
-   * 지금은 비미국 4종목의 `'ft'` 하나뿐이다 — FT 는 HTML 스크래핑이라 가장 취약한
-   * 의존이므로 2차에만 둔다(스펙 §3.2, src/providers/quote/ft.ts).
+   * 비미국 4종목만 갖는다. 유럽 3종목은 1차가 FT 이고 2차가 원래 쓰던 소스
+   * (lse·marketstack·six), Wuxi 는 1차가 네이버이고 2차가 FT 다(Task 43, 스펙 §3.2).
+   * 여기 적는 이름은 src/providers/quote/index.ts 의 FALLBACK_FETCHERS 에 있어야 한다.
    */
-  quoteFallbackSource?: 'ft'
-  /** 2차 소스의 심볼 표기. 1차와 다르다(`SAN.PA` ↔ `SAN:PAR`). */
+  quoteFallbackSource?: 'ft' | 'lse' | 'six' | 'marketstack'
+  /** 2차 소스의 심볼 표기. 1차와 다르다(`SAN:PAR` ↔ `SAN.PA`). */
   quoteFallbackSymbol?: string
   newsQuery: string
   /** 관련성 필터용 콤마 구분 별칭 목록. 비우면 파이프라인이 name 하나로 폴백한다. */
@@ -51,7 +52,26 @@ export const INSTRUMENTS: InstrumentSeed[] = [
   { category: '해외사', displayOrder: 14, name: 'Vaxcyte',  currency: 'USD', quoteSource: 'twelvedata', quoteSymbol: 'PCVX', newsQuery: 'Vaxcyte', newsAliases: 'Vaxcyte', sharesOutstanding: BigInt(148_610_000) },
   { category: '해외사', displayOrder: 15, name: 'Moderna',  currency: 'USD', quoteSource: 'twelvedata', quoteSymbol: 'MRNA', newsQuery: '모더나', newsAliases: '모더나,Moderna', sharesOutstanding: BigInt(398_840_000) },
 
-  // 해외사 — 비미국 4종목. **소스가 넷으로 쪼개져 있다. 되돌리지 마라.**
+  // 해외사 — 비미국 4종목.
+  //
+  // ── 지금 구성 (Task 43, 2026-10-13) ──
+  // 유럽 3종목(GSK·Sanofi·Lonza)의 **1차는 FT** 이고, 원래 1차였던 소스가 각자의 2차다.
+  // Wuxi 는 그대로(1차 네이버, 2차 FT). 근거 — 같은 시점에 나란히 부른 실측
+  // (2026-10-13 10:52 KST 화요일):
+  //     GSK    LSE 1771/1750 기준 10-12  = FT GSK:LSE  1771/1750 기준 10-12  (완전히 같다)
+  //     Lonza  SIX 574/572.2 기준 10-12  = FT LONN:SWX 574/572.2 기준 10-12  (완전히 같다)
+  //     Sanofi marketstack 71.52/70.93 기준 10-09 ↔ FT SAN:PAR 71.6/71.52 기준 10-12
+  // 사노피의 1차(marketstack)는 **실패가 아니라 하루 늦은 값을 성공으로** 돌려줬다.
+  // 그래서 2차로 넘어가지도 않고 매일 하루 늦은 숫자가 나갔다(10-02 화면에서도 기준 09-29).
+  // FT 로 올리면 세 종목이 한 소스·같은 기준일로 맞춰진다. 대가: HTML 스크래핑이라 FT
+  // 화면 구조가 바뀌면 **세 종목 1차가 함께 실패한다** — 그래도 2차가 각자 있어 값은
+  // 채워지고 「… 대체」 배지가 뜬다.
+  // Wuxi 를 옮기지 않은 이유: FT 는 「지금 값」을 준다. 홍콩은 한국 시간 오전에 장이
+  // 열려 실행 시각에 따라 숫자가 바뀐다(스펙 §3.0). 네이버 일별 시세 + 오늘 행 버리기가 맞다.
+  // 유럽도 **KST 16시(서머타임 해제 뒤 17시) 이후 수집하면 장중 값**이다(정기 06:30 KST 는 장 마감 후라 무관).
+  //
+  // ── 이전 구성의 기록 (Task 31·32) ── 아래 「되돌리지 마라」는 marketstack 한도 얘기다.
+  // 지금도 유효하다 — 유럽 3종목을 marketstack 1차로 되돌리면 한도가 곧바로 돌아온다.
   //
   // 전부 marketstack 이었다. marketstack 무료 플랜은 호출 수가 아니라 **심볼 수**로
   // 세기 때문에(4심볼을 한 요청에 묶어도 4회) 4종목 × 22거래일 = 월 88회였고 한도가
@@ -60,23 +80,27 @@ export const INSTRUMENTS: InstrumentSeed[] = [
   // 연 1회짜리 연초 기준가는 네 종목 모두 여전히 marketstack 이다
   // (src/providers/quote/ytdBase.ts 의 MARKETSTACK_YTD_SUFFIX 가 심볼을 되돌려 준다).
   //
-  // 사노피의 **1차**가 marketstack 인 이유: 유로넥스트의 ajax 응답이 암호화된
+  // 사노피의 1차가 marketstack 이었던 이유: 유로넥스트의 ajax 응답이 암호화된
   // 블롭(`ct:`)이라 쓸 수 없다. 그래서 1차는 그대로 두고 **2차만** 붙였다(Task 32).
   //
-  // **네 종목 모두 2차가 FT(`markets.ft.com`) 하나다.** 1차가 실패한 날에만 부른다.
-  // FT 는 JSON 이 아니라 사람이 보는 HTML 을 긁으므로 지금 쓰는 어떤 소스보다
-  // 취약하다 — 그래서 **1차로 올리지 마라.** 심볼 표기가 또 달라서(`{티커}:{거래소}`)
-  // quoteFallbackSymbol 에 따로 적는다. `LONN:VTX` 는 빈 결과다(302). `SWX` 를 쓴다.
+  // [폐기된 결론 — Task 43 에서 뒤집음] 「네 종목 모두 2차가 FT 하나다. FT 는 HTML 을
+  // 긁으므로 지금 쓰는 어떤 소스보다 취약하다 — 그래서 **1차로 올리지 마라.**」
+  // 취약하다는 판단은 여전히 맞다. 뒤집은 이유는 위 실측이다 — 사노피 1차가 매일 하루
+  // 늦은 값을 성공으로 반환했고, GSK·Lonza 는 FT 와 값이 완전히 같았다.
+  //
+  // FT 심볼 표기는 `{티커}:{거래소}` 다. `LONN:VTX` 는 빈 결과다(302). `SWX` 를 쓴다.
   //
   // 폴백은 실패 **확률을 낮추는** 장치이지 실패를 없애는 장치가 아니다. 1차와 2차가
   // 함께 죽으면 그 행은 지금처럼 「시세 실패」로 뜬다 — 값을 지어내지 않는다.
   //
-  // **quoteSymbol 표기가 소스마다 다르다.** marketstack 은 거래소 약칭 접미사를 쓰지만
+  // **심볼 표기가 소스마다 다르다.** marketstack 은 거래소 약칭 접미사를 쓰지만
   // (MIC 접미사 `GSK.XLON` 은 뉴욕 ADR 값이 온다) LSE 는 티커 그대로(`GSK`), SIX 는
-  // ValorSymbol(`LONN`) 이다. 네이버 홍콩은 marketstack 과 같은 `2269.HK` 다.
-  { category: '해외사', displayOrder: 16, name: 'GSK',    currency: 'GBP', quoteSource: 'lse',               quoteSymbol: 'GSK',     quoteFallbackSource: 'ft', quoteFallbackSymbol: 'GSK:LSE',  newsQuery: 'GSK', newsAliases: 'GSK,지에스케이', priceDivisorForMarketCap: 100, sharesOutstanding: BigInt(4_046_530_000) },
-  { category: '해외사', displayOrder: 17, name: 'Sanofi', currency: 'EUR', quoteSource: 'marketstack',       quoteSymbol: 'SAN.PA',  quoteFallbackSource: 'ft', quoteFallbackSymbol: 'SAN:PAR',  newsQuery: '사노피', newsAliases: '사노피,Sanofi', sharesOutstanding: BigInt(1_191_860_000) },
-  { category: '해외사', displayOrder: 18, name: 'Lonza',  currency: 'CHF', quoteSource: 'six',               quoteSymbol: 'LONN',    quoteFallbackSource: 'ft', quoteFallbackSymbol: 'LONN:SWX', newsQuery: '론자', newsAliases: '론자,Lonza', sharesOutstanding: BigInt(70_340_000) },
+  // ValorSymbol(`LONN`), FT 는 `{티커}:{거래소}` 다. 네이버 홍콩은 marketstack 과 같은
+  // `2269.HK` 다. 연초 기준가는 네 종목 모두 marketstack 이므로 ytdBase.ts 가 FT 심볼을
+  // marketstack 표기로 바꾼다(FT_EXCHANGE_MARKETSTACK_SUFFIX).
+  { category: '해외사', displayOrder: 16, name: 'GSK',    currency: 'GBP', quoteSource: 'ft',                quoteSymbol: 'GSK:LSE', quoteFallbackSource: 'lse',         quoteFallbackSymbol: 'GSK',     newsQuery: 'GSK', newsAliases: 'GSK,지에스케이', priceDivisorForMarketCap: 100, sharesOutstanding: BigInt(4_046_530_000) },
+  { category: '해외사', displayOrder: 17, name: 'Sanofi', currency: 'EUR', quoteSource: 'ft',                quoteSymbol: 'SAN:PAR', quoteFallbackSource: 'marketstack', quoteFallbackSymbol: 'SAN.PA',  newsQuery: '사노피', newsAliases: '사노피,Sanofi', sharesOutstanding: BigInt(1_191_860_000) },
+  { category: '해외사', displayOrder: 18, name: 'Lonza',  currency: 'CHF', quoteSource: 'ft',                quoteSymbol: 'LONN:SWX', quoteFallbackSource: 'six',        quoteFallbackSymbol: 'LONN',    newsQuery: '론자', newsAliases: '론자,Lonza', sharesOutstanding: BigInt(70_340_000) },
   // 네이버 홍콩은 `2269.HK` 다. 접미사 없는 `GSK`·`SAN` 은 미국 ADR 이라 값이 다르고,
   // `GSK.L`·`SAN.PA`·`LONN.SW` 는 네이버에 아예 없다(실측: HTTP 409 Not Exist Master).
   { category: '해외사', displayOrder: 19, name: 'Wuxi',   currency: 'HKD', quoteSource: 'naver-world-stock', quoteSymbol: '2269.HK', quoteFallbackSource: 'ft', quoteFallbackSymbol: '2269:HKG', newsQuery: '우시바이오로직스', newsAliases: '우시바이오로직스,우시바이오,WuXi', sharesOutstanding: BigInt(4_140_750_000) },

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { parseNaverSiseJson, fetchYtdBase } from './ytdBase'
+import { INSTRUMENTS } from '../../../prisma/instruments'
 
 // 스펙 §3.5: YTD 기준가 = **전년도 마지막 거래일의 종가**.
 // 이 파일의 모든 기대값은 그 정의에서 나온다. 픽스처를 "통과하게" 맞추지 말 것.
@@ -498,6 +499,62 @@ describe('fetchYtdBase — 시세 소스를 옮긴 종목의 기준가 라우팅
     expect(r.failures).toHaveLength(1)
     expect(r.failures[0].symbol).toBe('GSK')
     expect(r.failures[0].reason).toContain('GSK.L')
+  })
+
+  // ── Task 43: 유럽 3종목의 1차가 FT 다. 기준가는 여전히 marketstack ──
+  //
+  // quoteSymbol 이 `GSK:LSE` 처럼 FT 표기가 됐다. 그대로 넘기면 marketstack 은 오류가
+  // 아니라 빈 응답을 주고 **연초대비 칸만** 조용히 빈다. 대상은 **시드에서 그대로**
+  // 만든다 — 시드의 심볼이 바뀌면 여기서 같이 깨져야 한다.
+
+  const seedTargets = (names: string[]) =>
+    names.map(name => {
+      const i = INSTRUMENTS.find(x => x.name === name)!
+      return { id: name, quoteSource: i.quoteSource, quoteSymbol: i.quoteSymbol }
+    })
+
+  it('시드의 비미국 4종목은 FT 심볼이 marketstack 표기로 바뀌어 한 요청으로 나간다', async () => {
+    const urls = stubMarketstack({ 'GSK.L': DEC, 'SAN.PA': DEC, 'LONN.SW': DEC, '2269.HK': DEC })
+    const r = await fetchYtdBase(seedTargets(['GSK', 'Sanofi', 'Lonza', 'Wuxi']), 2026)
+
+    expect(r.failures).toEqual([])
+    for (const id of ['GSK', 'Sanofi', 'Lonza', 'Wuxi']) expect(r.prices.get(id), id).toBe(222)
+    expect(urls).toHaveLength(1)
+    const symbols = new URL(urls[0]).searchParams.get('symbols')!.split(',')
+    expect(symbols.sort()).toEqual(['2269.HK', 'GSK.L', 'LONN.SW', 'SAN.PA'])
+  })
+
+  it('FT 심볼의 거래소 코드를 접미사로 바꾼다 — LSE→.L, PAR→.PA, SWX→.SW', async () => {
+    const urls = stubMarketstack({ 'GSK.L': DEC, 'SAN.PA': DEC, 'LONN.SW': DEC })
+    await fetchYtdBase(
+      [
+        { id: 'g', quoteSource: 'ft', quoteSymbol: 'GSK:LSE' },
+        { id: 's', quoteSource: 'ft', quoteSymbol: 'SAN:PAR' },
+        { id: 'l', quoteSource: 'ft', quoteSymbol: 'LONN:SWX' },
+      ],
+      2026,
+    )
+    expect(new URL(urls[0]).searchParams.get('symbols')).toBe('GSK.L,SAN.PA,LONN.SW')
+  })
+
+  it('모르는 거래소 코드면 조용한 공란이 아니라 사유와 함께 실패로 남고, 그 심볼로는 묻지 않는다', async () => {
+    // 접미사 없이 티커만 넘기면 미국 ADR 같은 엉뚱한 종목이 걸릴 수 있다.
+    const urls = stubMarketstack({ 'GSK.L': DEC })
+    const r = await fetchYtdBase(
+      [
+        { id: 'hk', quoteSource: 'ft', quoteSymbol: '2269:HKG' },
+        { id: 'bare', quoteSource: 'ft', quoteSymbol: 'GSK' },
+        { id: 'g', quoteSource: 'ft', quoteSymbol: 'GSK:LSE' },
+      ],
+      2026,
+    )
+    expect(r.prices.get('g')).toBe(222)
+    expect(r.failures.map(f => f.id).sort()).toEqual(['bare', 'hk'])
+    for (const f of r.failures) expect(f.reason).toContain('모르는 거래소 코드')
+    expect(r.failures.find(f => f.id === 'hk')!.symbol).toBe('2269:HKG')
+    // 바꿀 수 없는 종목 때문에 "알 수 없는 quoteSource" 가 겹쳐 남지 않는다(한 종목 한 사유).
+    expect(r.failures).toHaveLength(2)
+    expect(new URL(urls[0]).searchParams.get('symbols')).toBe('GSK.L')
   })
 
   it('marketstack 월 한도 소진이면 네 종목의 기준가만 실패하고 사유가 그대로 남는다', async () => {

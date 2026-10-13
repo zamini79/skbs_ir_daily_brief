@@ -13,9 +13,9 @@ model Instrument {
   displayOrder  Int
   name          String
   currency      String
-  quoteSource   String  // naver-stock | naver-world-stock | naver-index | krx-index | lse | six | twelvedata | marketstack | manual
+  quoteSource   String  // naver-stock | naver-world-stock | naver-index | krx-index | lse | six | ft | twelvedata | marketstack | manual
   quoteSymbol   String
-  /// 1차(quoteSource)가 실패했을 때만 부르는 2차 소스. 지금은 'ft' 뿐이고, null 이면 폴백하지 않는다.
+  /// 1차(quoteSource)가 실패했을 때만 부르는 2차 소스. 'ft'·'lse'·'six'·'marketstack' 중 하나이고, null 이면 폴백하지 않는다.
   quoteFallbackSource String?
   /// 2차 소스의 심볼 표기. 1차와 다르다(SAN.PA ↔ SAN:PAR).
   quoteFallbackSymbol String?

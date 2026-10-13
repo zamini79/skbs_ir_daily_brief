@@ -604,6 +604,13 @@ describe('quoteFallbackSourceUsed', () => {
     expect(quoteFallbackSourceUsed(fellBack)).toBe('ft')
   })
 
+  it('Task 43 이후 방향(1차 ft → 2차 lse·six·marketstack)에서도 2차 이름을 그대로 준다', () => {
+    // 배지 문구가 이 값이다(「marketstack 대체」). 소스 이름을 바꿔 적지 않는다.
+    for (const src of ['lse', 'six', 'marketstack']) {
+      expect(quoteFallbackSourceUsed({ ...fellBack, quoteSource: 'ft', snapshotSource: src })).toBe(src)
+    }
+  })
+
   it('1차가 채운 평소의 행에는 아무 말도 하지 않는다', () => {
     expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: 'marketstack' })).toBeNull()
     expect(quoteFallbackSourceUsed({

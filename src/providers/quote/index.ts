@@ -19,10 +19,11 @@ export type QuoteTarget = {
   quoteSymbol: string
   /**
    * 1차가 실패했을 때**만** 부르는 2차 소스. 없으면 폴백하지 않는다.
-   * 지금은 `'ft'` 하나뿐이다(비미국 4종목). 시드에서 온다.
+   * 비미국 4종목만 갖는다 — 유럽 3종목은 `lse`·`marketstack`·`six`, Wuxi 는 `ft`
+   * (Task 43). 시드에서 온다.
    */
   quoteFallbackSource?: string | null
-  /** 2차 소스의 심볼 표기. 1차와 다르다(`SAN.PA` ↔ `SAN:PAR`). */
+  /** 2차 소스의 심볼 표기. 1차와 다르다(`SAN:PAR` ↔ `SAN.PA`). */
   quoteFallbackSymbol?: string | null
 }
 
@@ -41,9 +42,26 @@ export type QuoteHit = RawQuote & {
   fallbackFrom: string | null
 }
 
-/** 폴백 단계가 아는 2차 소스. 여기 없는 이름은 조용히 건너뛰지 않고 실패로 남긴다. */
-const FALLBACK_FETCHERS: Record<string, (symbol: string) => Promise<RawQuote>> = {
+/**
+ * 폴백 단계가 아는 2차 소스. 여기 없는 이름은 조용히 건너뛰지 않고 실패로 남긴다.
+ *
+ * 유럽 3종목의 1차를 FT 로 올리면서(Task 43) 원래 1차였던 세 소스가 2차로 내려왔다.
+ * 시드의 `quoteFallbackSource` 가 가리키는 이름이 **여기 하나라도 빠지면** 그 종목은
+ * 1차(FT)가 죽는 날 「알 수 없는 폴백 소스」로 실패한다 — FT 는 HTML 이라 세 종목이
+ * 함께 죽기 쉬운데, 그날 세 행이 통째로 빈다. instruments.test.ts 가 시드의 2차 소스가
+ * 전부 이 표에 있는지 지킨다.
+ */
+export const FALLBACK_FETCHERS: Record<string, (symbol: string) => Promise<RawQuote>> = {
   ft: fetchFtQuote,
+  lse: fetchLseQuote,
+  six: fetchSixQuote,
+  // marketstack 은 배치 API 다. 2차로는 그 종목 하나만 부르므로 한 심볼짜리 배치로
+  // 감싼다. 심볼 수로 세는 한도(월 100)에 1회씩 들어가지만 FT 가 죽은 날에만 돈다.
+  marketstack: async symbol => {
+    const q = (await fetchMarketstackQuotes([symbol])).get(symbol)
+    if (!q) throw new Error(`marketstack: ${symbol} 응답 없음`)
+    return q
+  },
 }
 
 /**
@@ -58,8 +76,10 @@ const FALLBACK_FETCHERS: Record<string, (symbol: string) => Promise<RawQuote>> =
  * news/naver.searchNaverNews 와 같은 방식).
  *
  * **1차가 끝난 뒤 폴백 단계가 따로 돈다**(아래 참고). 두 단계로 나눈 이유는 배치
- * 소스 때문이다 — 사노피의 1차는 marketstack 이고 그 실패는 배치 전체가 끝나야
- * 확정된다. 개별 호출 안에서 폴백하면 배치 실패는 폴백을 못 받는다.
+ * 소스 때문이다 — 배치 소스(twelvedata/marketstack)의 실패는 배치 전체가 끝나야
+ * 확정된다. 개별 호출 안에서 폴백하면 배치 실패는 폴백을 못 받는다. (사노피의 1차가
+ * marketstack 이던 시절 생긴 구조다. 지금 1차가 배치인 비미국 종목은 없지만, 이 구조는
+ * 어느 소스가 1차든 그대로 맞으므로 되돌리지 않는다.)
  */
 export async function fetchAllQuotes(
   instruments: QuoteTarget[],
@@ -77,9 +97,10 @@ export async function fetchAllQuotes(
   })
 
   // lse·six·naver-world-stock 은 marketstack 에서 옮겨 온 세 종목이다(Task 31).
+  // ft 는 유럽 3종목(GSK·Sanofi·Lonza)의 1차다(Task 43, ft.ts 머리 주석).
   // 전부 키가 없고 심볼당 한 번 부르므로 배치로 묶을 이유가 없다 — 개별 호출 쪽에 든다.
   const perItem = instruments.filter(i =>
-    ['naver-stock', 'naver-index', 'naver-world-stock', 'krx-index', 'lse', 'six'].includes(
+    ['naver-stock', 'naver-index', 'naver-world-stock', 'krx-index', 'lse', 'six', 'ft'].includes(
       i.quoteSource,
     ),
   )
@@ -93,7 +114,7 @@ export async function fetchAllQuotes(
   // 그래도 경로는 남겨 둔다 — 다른 종목이 나중에 쓸 수 있고, 지우면 되돌리기가 번거롭다.
   const known = [
     'naver-stock', 'naver-index', 'naver-world-stock', 'krx-index',
-    'lse', 'six', 'twelvedata', 'marketstack', 'manual',
+    'lse', 'six', 'ft', 'twelvedata', 'marketstack', 'manual',
   ]
   for (const i of instruments) {
     if (!known.includes(i.quoteSource)) {
@@ -107,6 +128,7 @@ export async function fetchAllQuotes(
       try {
         const q = await retry(i.quoteSymbol, () => {
           if (i.quoteSource === 'krx-index') return fetchKrxIndexQuote(i.quoteSymbol)
+          if (i.quoteSource === 'ft') return fetchFtQuote(i.quoteSymbol)
           if (i.quoteSource === 'lse') return fetchLseQuote(i.quoteSymbol)
           if (i.quoteSource === 'six') return fetchSixQuote(i.quoteSymbol)
           if (i.quoteSource === 'naver-world-stock') return fetchNaverWorldStock(i.quoteSymbol)
@@ -169,9 +191,13 @@ export async function fetchAllQuotes(
 /**
  * 2차 소스 단계. **1차가 실패한 종목만** 부른다.
  *
- * 두 소스를 동시에 부르지 않는 것이 중요하다 — 평소(1차가 멀쩡한 날)에도 FT 를
- * 부르면 우리가 아무것도 얻지 못하면서 남의 부하만 두 배로 만든다. HTML 스크래핑
- * 의존을 2차에만 두기로 한 판단(ft.ts 주석)과도 어긋난다.
+ * 두 소스를 동시에 부르지 않는 것이 중요하다 — 평소(1차가 멀쩡한 날)에도 2차를
+ * 부르면 우리가 아무것도 얻지 못하면서 남의 부하만 두 배로 만든다. 2차가 marketstack 인
+ * 사노피는 그만큼 월 한도(심볼 수로 센다)도 갉아먹는다.
+ *
+ * (폐기된 설명: 「HTML 스크래핑 의존을 2차에만 둔다」. Task 43 에서 유럽 3종목의 1차를
+ * FT 로 올리면서 뒤집혔다 — 근거는 ft.ts 머리 주석. 이제 FT 는 유럽 3종목의 1차이고
+ * Wuxi 의 2차다.)
  *
  * **폴백이 실패하면 두 사유를 모두 남긴다.** 한쪽만 남기면 "1차가 왜 죽었는지"가
  * 사라져 원인 추적이 거기서 끊긴다 — 운영자가 보는 것은 이 문장 하나뿐이다.
