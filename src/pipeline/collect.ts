@@ -1,6 +1,5 @@
 import { prisma } from '@/db/client'
 import { kstDateString } from '@/domain/date'
-import { changePct, ytdPct } from '@/domain/calc'
 import { fetchFxToKrw } from '@/providers/fx/frankfurter'
 import { fetchAllQuotes, type QuoteTarget } from '@/providers/quote'
 import { fetchYtdBase } from '@/providers/quote/ytdBase'
@@ -18,7 +17,6 @@ import {
   missingFxCurrencies,
   resolveFxRate,
   currencyMismatchReason,
-  normalizeAsOf,
   resolveMarketCap,
   computeSameEventAsRank,
   createQuotaGuard,
@@ -30,6 +28,7 @@ import {
   needsPendingRevert,
   buildFallbackSummaries,
   briefRunStartData,
+  buildQuoteSnapshotData,
 } from './collectHelpers'
 import { createProgressReporter } from './progressReporter'
 import { SUMMARY_DEADLINE_MS } from '@/domain/runProgress'
@@ -366,6 +365,7 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
             // 값을 버리더라도 **그 값을 준 소스**를 남긴다. 폴백이 돌았는데 2차가
             // 다른 통화를 준 경우, 여기에 1차 이름이 남으면 조사가 엉뚱한 데서 시작된다.
             runId: run.id, instrumentId: inst.id, sourceName: q.sourceName,
+            fallbackFrom: q.fallbackFrom,
             errorMessage: mismatch,
           },
         })
@@ -385,22 +385,11 @@ async function collect(now: Date, opts: CollectionOptions = {}): Promise<Collect
         priceDivisor: inst.priceDivisorForMarketCap,
       })
 
+      // 레코드 모양(특히 sourceName·fallbackFrom)은 collectHelpers 에서 테스트로 고정한다.
       await prisma.quoteSnapshot.create({
-        data: {
-          runId: run.id,
-          instrumentId: inst.id,
-          close: q.close,
-          prevClose: q.prevClose,
-          changePct: changePct(q.close, q.prevClose),
-          ytdPct: ytdBase ? ytdPct(q.close, ytdBase) : null,
-          marketCapKrwTrillion: cap,
-          fxRate: rate,
-          asOf: normalizeAsOf(q.asOf),
-          // **실제로 값을 가져온 소스**다. 설정값(inst.quoteSource)이 아니다 —
-          // 폴백이 돌면 둘이 달라지고, 설정값을 넣으면 이 칸이 거짓말을 한다.
-          // 화면의 「대체」 배지도 이 값과 설정값의 차이로 판정한다(db/repo.ts).
-          sourceName: q.sourceName,
-        },
+        data: buildQuoteSnapshotData({
+          runId: run.id, instrumentId: inst.id, q, ytdBase, marketCapKrwTrillion: cap, fxRate: rate,
+        }),
       })
       // 폴백으로 채운 행. 값이 있으니 실패는 아니지만 1차가 죽었다는 사실은 남긴다.
       if (q.fallbackFrom !== null) quoteFallbackUsed++

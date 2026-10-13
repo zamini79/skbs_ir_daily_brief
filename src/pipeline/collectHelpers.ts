@@ -1,4 +1,5 @@
-import { marketCapKrwTrillion } from '@/domain/calc'
+import { marketCapKrwTrillion, changePct, ytdPct } from '@/domain/calc'
+import type { QuoteHit } from '@/providers/quote'
 import { charLength, truncateAtSentence } from '@/domain/text'
 import { finalizeSummary } from '@/domain/summaryFormat'
 import { tokenize, jaccard } from './cluster'
@@ -155,6 +156,43 @@ export function resolveMarketCap(args: {
     fxToKrw: args.fxRate,
     priceDivisor: args.priceDivisor,
   })
+}
+
+/**
+ * 값을 얻은 종목의 QuoteSnapshot 레코드. collect.ts 는 이것을 그대로 `create` 한다.
+ *
+ * Prisma 밖으로 뺀 이유는 **`fallbackFrom` 한 줄을 테스트로 고정하기 위해서다.**
+ * 화면의 「… 대체」 배지는 이 저장값만 본다(db/repo.ts 의 quoteFallbackSourceUsed).
+ * 이 줄이 빠지면 폴백이 돈 날에도 배지가 뜨지 않는다 — 값은 다 차 있고 배너도
+ * 초록이라, 1차가 몇 주째 죽어 있어도 아무도 모르는 상태로 돌아간다.
+ * collect.ts 는 Prisma 에 묶여 테스트할 수 없으므로 그 결함은 여기서만 잡힌다.
+ */
+export function buildQuoteSnapshotData(args: {
+  runId: string
+  instrumentId: string
+  q: QuoteHit
+  ytdBase: number | undefined
+  marketCapKrwTrillion: number | null
+  fxRate: number | null
+}) {
+  const { q } = args
+  return {
+    runId: args.runId,
+    instrumentId: args.instrumentId,
+    close: q.close,
+    prevClose: q.prevClose,
+    changePct: changePct(q.close, q.prevClose),
+    ytdPct: args.ytdBase ? ytdPct(q.close, args.ytdBase) : null,
+    marketCapKrwTrillion: args.marketCapKrwTrillion,
+    fxRate: args.fxRate,
+    asOf: normalizeAsOf(q.asOf),
+    // **실제로 값을 가져온 소스**다. 설정값(inst.quoteSource)이 아니다 —
+    // 폴백이 돌면 둘이 달라지고, 설정값을 넣으면 이 칸이 거짓말을 한다.
+    sourceName: q.sourceName,
+    // 수집 **당시**의 폴백 여부. 화면 배지가 이것만 본다 — 시드가 나중에 바뀌어도
+    // 과거 날짜의 판정이 흔들리지 않는다(schema.prisma 의 fallbackFrom 주석).
+    fallbackFrom: q.fallbackFrom,
+  }
 }
 
 /** 같은 사건 판정에 쓰는 임계값. 클러스터링 임계값(0.5)보다 낮다 —

@@ -63,6 +63,7 @@ function row(over: Partial<ClientRow> = {}): ClientRow {
       asOf: '2026-08-27',
       errorMessage: null,
       sourceName: 'naver-stock',
+      fallbackFrom: null,
     },
     candidates: [candidate()],
     selection: {

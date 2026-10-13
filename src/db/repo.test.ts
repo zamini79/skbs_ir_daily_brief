@@ -593,29 +593,33 @@ describe('quoteFailureReason', () => {
 describe('quoteFallbackSourceUsed', () => {
   // 폴백은 값을 채우기 때문에 **실패처럼 보이지 않는다.** 배너는 초록색이고 다섯 칸이
   // 다 차 있다. 이 판정이 없으면 1차 소스가 몇 주째 죽어 있어도 아무도 모른다.
+  //
+  // 판정은 **스냅샷에 수집 당시 저장한 fallbackFrom** 만 본다. 지금 시드의 quoteSource 는
+  // 인자에조차 없다 — 시드가 바뀌어도(Task 43) 과거 날짜의 판정이 흔들리면 안 된다.
   const fellBack = {
-    quoteSource: 'marketstack',
-    snapshotSource: 'ft',
-    displayClose: 77.28,
+    snapshotSource: 'marketstack',
+    snapshotFallbackFrom: 'ft',
+    displayClose: 71.52,
     displayIsManual: false,
   }
 
-  it('실제로 값을 가져온 소스가 설정된 1차와 다르면 그 이름을 준다', () => {
-    expect(quoteFallbackSourceUsed(fellBack)).toBe('ft')
-  })
-
-  it('Task 43 이후 방향(1차 ft → 2차 lse·six·marketstack)에서도 2차 이름을 그대로 준다', () => {
-    // 배지 문구가 이 값이다(「marketstack 대체」). 소스 이름을 바꿔 적지 않는다.
-    for (const src of ['lse', 'six', 'marketstack']) {
-      expect(quoteFallbackSourceUsed({ ...fellBack, quoteSource: 'ft', snapshotSource: src })).toBe(src)
+  it('수집 당시 폴백이었으면 값을 채운 2차 소스 이름을 준다 — 배지 문구가 이것이다', () => {
+    expect(quoteFallbackSourceUsed(fellBack)).toBe('marketstack')
+    for (const src of ['lse', 'six', 'ft']) {
+      expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: src })).toBe(src)
     }
   })
 
-  it('1차가 채운 평소의 행에는 아무 말도 하지 않는다', () => {
-    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: 'marketstack' })).toBeNull()
-    expect(quoteFallbackSourceUsed({
-      quoteSource: 'lse', snapshotSource: 'lse', displayClose: 1852, displayIsManual: false,
-    })).toBeNull()
+  it('수집 당시 폴백이 아니었으면 소스가 무엇이든 아무 말도 하지 않는다', () => {
+    // Task 43 전의 평범한 행(GSK 가 lse 1차로 채운 날)이다. 지금 시드의 1차가 ft 라도
+    // 그날은 폴백이 아니었다 — 예전 판정은 여기에 「lse 대체」를 붙였다.
+    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: 'lse', snapshotFallbackFrom: null })).toBeNull()
+    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: 'ft', snapshotFallbackFrom: null })).toBeNull()
+  })
+
+  it('Task 43 전 사노피의 진짜 폴백(1차 marketstack → 2차 ft)은 지금 시드와 무관하게 배지가 남는다', () => {
+    // 지금 시드의 사노피 1차가 ft 라서, 예전 판정은 이 날의 배지를 지워 버렸다.
+    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: 'ft', snapshotFallbackFrom: 'marketstack' })).toBe('ft')
   })
 
   it('표시할 값이 없으면 폴백이 아니다 — 그 행은 이미 「시세 실패」로 뜬다', () => {
@@ -628,7 +632,7 @@ describe('quoteFallbackSourceUsed', () => {
   })
 
   it('스냅샷이 아예 없으면 아무 말도 하지 않는다', () => {
-    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: null })).toBeNull()
+    expect(quoteFallbackSourceUsed({ ...fellBack, snapshotSource: null, snapshotFallbackFrom: null })).toBeNull()
   })
 })
 

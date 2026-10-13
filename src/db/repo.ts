@@ -349,9 +349,15 @@ export function quoteFailureReason(row: {
  * 배너는 초록색이고 다섯 칸이 다 차 있다. 표시가 없으면 1차 소스가 몇 주째 죽어
  * 있어도 아무도 모르고, 그러면 이 장치는 "이중화"가 아니라 "장애 은폐"가 된다.
  *
- * 판정 근거는 `QuoteSnapshot.sourceName`(**실제로 값을 가져온 소스**)과 시드의
- * `Instrument.quoteSource`(설정된 1차)의 차이 하나뿐이다 — 별도 플래그를 저장하지
- * 않는다. 두 곳에 같은 사실을 적으면 언젠가 어긋난다.
+ * 판정 근거는 **스냅샷에 수집 당시 저장한 `QuoteSnapshot.fallbackFrom`** 하나뿐이다.
+ * 지금 시드(`Instrument.quoteSource`)는 보지 않는다.
+ *
+ * [폐기된 판정] 예전에는 `sourceName` 과 **지금** 시드의 `quoteSource` 의 차이로 판정했다
+ * (「두 곳에 같은 사실을 적으면 언젠가 어긋난다」). 그런데 시드는 바뀐다 — Task 43 에서
+ * 유럽 3종목의 1차를 FT 로 옮기자 과거 날짜의 평범한 행 52건에 거짓 「… 대체」가 붙고,
+ * 진짜 폴백이었던 사노피 6건의 배지는 사라졌다. 「수집 당시 무엇이 1차였나」는 수집 때만
+ * 알 수 있는 사실이라 그때 적어 둬야 한다. 같은 사실을 두 곳에 적는 게 아니다 — 시드는
+ * 지금의 설정이고, 이 칸은 그날의 기록이다.
  *
  * 두 경우는 폴백이 아니므로 제외한다:
  *  - **표시할 값이 없는 행** — 폴백까지 실패했거나 통화 불일치로 값을 버린 행이다.
@@ -359,17 +365,17 @@ export function quoteFailureReason(row: {
  *  - **수기 입력값으로 채워진 행** — 자동 수집의 산물이 아니다. '(수기)' 로 이미 구분된다.
  */
 export function quoteFallbackSourceUsed(row: {
-  /** Instrument.quoteSource — 설정된 1차 소스. */
-  quoteSource: string
-  /** QuoteSnapshot.sourceName — 실제로 값을 가져온 소스. 스냅샷이 없으면 null. */
+  /** QuoteSnapshot.sourceName — 실제로 값을 가져온 소스(배지 문구). 스냅샷이 없으면 null. */
   snapshotSource: string | null
+  /** QuoteSnapshot.fallbackFrom — 수집 당시 실패한 1차. 폴백이 아니었으면 null. */
+  snapshotFallbackFrom: string | null
   displayClose: number | null
   displayIsManual: boolean
 }): string | null {
   if (row.snapshotSource === null) return null
+  if (row.snapshotFallbackFrom === null) return null
   if (row.displayClose === null) return null
   if (row.displayIsManual) return null
-  if (row.snapshotSource === row.quoteSource) return null
   return row.snapshotSource
 }
 
@@ -418,6 +424,8 @@ export type ClientQuote = {
   errorMessage: string | null
   /** 실제로 값을 가져온 소스(QuoteSnapshot.sourceName). 설정된 1차와 다를 수 있다. */
   sourceName: string
+  /** 수집 당시 2차로 채웠으면 실패한 1차 소스(QuoteSnapshot.fallbackFrom), 아니면 null. */
+  fallbackFrom: string | null
 } | null
 
 export type ClientInstrument = {
@@ -529,6 +537,7 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
             asOf: q.asOf,
             errorMessage: q.errorMessage,
             sourceName: q.sourceName,
+            fallbackFrom: q.fallbackFrom,
           }
         : null,
       candidates: mine.map(c => ({
@@ -573,8 +582,8 @@ export async function getBriefRows(runDate: string): Promise<{ run: ClientRun; r
         errorMessage: q?.errorMessage ?? null,
       }),
       quoteFallbackSource: quoteFallbackSourceUsed({
-        quoteSource: inst.quoteSource,
         snapshotSource: q?.sourceName ?? null,
+        snapshotFallbackFrom: q?.fallbackFrom ?? null,
         displayClose: display.close,
         displayIsManual: display.isManual,
       }),

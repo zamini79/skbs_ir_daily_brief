@@ -367,7 +367,8 @@ marketstack 에 남긴다**(연 1회 조회 후 `YtdBasePrice` 캐시).
 
 **폴백이 돌면 그 사실이 드러나야 한다.** 값이 채워지므로 실패처럼 보이지 않는 것이 이
 장치의 가장 큰 위험이다 — 표시가 없으면 1차가 몇 주째 죽어 있어도 아무도 모른다. 세 군데에
-남긴다: ① 그 행의 「ft 대체」 배지(주가 칸), ② `[quote] … 1차(…) 실패로 2차(…)를 썼다` 로그,
+남긴다: ① 그 행의 「{2차 소스} 대체」 배지(주가 칸. 판정은 스냅샷에 저장한 `fallbackFrom` 만 본다 —
+Task 43 후속), ② `[quote] … 1차(…) 실패로 2차(…)를 썼다` 로그,
 ③ 크론 응답의 `quoteFallbackUsed` 카운터. **배너(`BriefRun.status`)는 흔들지 않는다** —
 값을 얻은 실행이므로 PARTIAL 이 아니다(그렇게 하면 배너가 뜻을 잃는다).
 
@@ -575,7 +576,9 @@ marketstack `/eod`(§3.2). 모두 전년 12월 하순 창을 조회해 마지막
 
     QuoteSnapshot       종목별 시세
       runId, instrumentId, price, prevDiff, changePct, ytdPct,
-      marketCapKrwTrillion?, fxRate?, sourceName, fetchedAt
+      marketCapKrwTrillion?, fxRate?, sourceName, fallbackFrom?, fetchedAt
+      (fallbackFrom: 수집 당시 2차로 채웠으면 실패한 1차 소스 이름. 「… 대체」 배지는 이것만 본다 —
+       지금 시드와 비교하면 시드가 바뀐 날 과거 화면이 거짓말을 한다. 2026-10-13 Task 43 후속)
 
     NewsCandidate       뉴스 후보 (종목당 최대 3)
       runId, instrumentId, rank(1..3), title, url, publisher,

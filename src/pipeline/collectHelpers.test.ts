@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { formatSummary } from '@/domain/summaryFormat'
 import { charLength } from '@/domain/text'
+import type { QuoteHit } from '@/providers/quote'
 import {
+  buildQuoteSnapshotData,
   resolveAliases,
   wantsMarketWrapNews,
   MARKET_WRAP_ROWS,
@@ -157,6 +161,55 @@ describe('normalizeAsOf', () => {
     expect(normalizeAsOf('')).toBeNull()
     expect(normalizeAsOf('   ')).toBeNull()
     expect(normalizeAsOf(undefined)).toBeNull()
+  })
+})
+
+describe('buildQuoteSnapshotData', () => {
+  // collect.ts 가 이 레코드를 그대로 저장한다. 화면의 「… 대체」 배지는 저장된
+  // fallbackFrom 만 보므로, 여기서 그 칸이 빠지면 폴백이 돈 날에도 배지가 뜨지 않는다.
+  const base = {
+    runId: 'run-1',
+    instrumentId: 'inst-san',
+    ytdBase: 80,
+    marketCapKrwTrillion: 125.3,
+    fxRate: 1612.5,
+  }
+  const hit = (over: Partial<QuoteHit> = {}): QuoteHit => ({
+    close: 71.52, prevClose: 70.93, currency: 'EUR', asOf: '2026-10-09',
+    sourceName: 'marketstack', fallbackFrom: 'ft', ...over,
+  })
+
+  it('폴백으로 채운 값이면 실제 소스와 실패한 1차를 함께 저장한다', () => {
+    const d = buildQuoteSnapshotData({ ...base, q: hit() })
+    expect(d.sourceName).toBe('marketstack')
+    expect(d.fallbackFrom).toBe('ft')
+  })
+
+  it('1차가 채운 값이면 fallbackFrom 은 null 로 저장한다 — 칸이 빠진 것과 구분된다', () => {
+    const d = buildQuoteSnapshotData({ ...base, q: hit({ sourceName: 'ft', fallbackFrom: null }) })
+    expect(d).toHaveProperty('fallbackFrom', null)
+    expect(d.sourceName).toBe('ft')
+  })
+
+  it('나머지 칸은 기존 계산 그대로다', () => {
+    const d = buildQuoteSnapshotData({ ...base, q: hit() })
+    expect(d).toMatchObject({
+      runId: 'run-1', instrumentId: 'inst-san', close: 71.52, prevClose: 70.93,
+      marketCapKrwTrillion: 125.3, fxRate: 1612.5, asOf: '2026-10-09',
+    })
+    expect(d.changePct).toBeCloseTo(71.52 / 70.93 - 1, 10)
+    expect(d.ytdPct).toBeCloseTo(71.52 / 80 - 1, 10)
+    expect(buildQuoteSnapshotData({ ...base, ytdBase: undefined, q: hit() }).ytdPct).toBeNull()
+    expect(buildQuoteSnapshotData({ ...base, q: hit({ asOf: '' }) }).asOf).toBeNull()
+  })
+
+  it('collect.ts 는 값을 얻은 행을 이 빌더로 저장하고, 통화 불일치 행에도 fallbackFrom 을 남긴다', () => {
+    // collect.ts 는 Prisma 에 묶여 실행해 볼 수 없어 소스를 직접 본다(newsShare.test.ts 와
+    // 같은 방식). 빌더를 거치지 않고 레코드를 손으로 다시 적으면 fallbackFrom 이 빠져도
+    // 타입 검사가 통과한다(선택 칼럼이다) — 배지가 조용히 사라지는 자리다.
+    const src = readFileSync(join(__dirname, 'collect.ts'), 'utf8')
+    expect(src.match(/data: buildQuoteSnapshotData\(/g)).toHaveLength(1)
+    expect(src).toContain('fallbackFrom: q.fallbackFrom,')
   })
 })
 
